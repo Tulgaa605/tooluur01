@@ -1,0 +1,91 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  email     String   @unique
+  password  String
+  name      String
+  phone     String?
+  role      String   @default("USER")
+  organizationId String? @db.ObjectId
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  year      Int      @default(2026)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Organization {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  name            String   @unique
+  code            String?
+  address         String?
+  phone           String?
+  email           String?
+  connectionNumber String?
+  year            Int      @default(2026)
+  users           User[]
+  meters          Meter[]
+  readings        MeterReading[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("organizations")
+}
+
+model Meter {
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  meterNumber    String        @unique
+  organizationId String        @db.ObjectId
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  year           Int           @default(2026)
+  readings       MeterReading[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@map("meters")
+}
+
+model MeterReading {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  meterId        String       @db.ObjectId
+  meter          Meter        @relation(fields: [meterId], references: [id])
+  organizationId String       @db.ObjectId
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  month          Int
+  year           Int
+  startValue     Float
+  endValue       Float
+  usage          Float
+  baseClean      Float        @default(0)
+  baseDirty      Float        @default(0)
+  cleanPerM3     Float        @default(0)
+  dirtyPerM3     Float        @default(0)
+  cleanAmount    Float        @default(0)
+  dirtyAmount    Float        @default(0)
+  subtotal       Float        @default(0)
+  vat            Float        @default(0)
+  total          Float        @default(0)
+  approved       Boolean      @default(false)
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([meterId, month, year])
+  @@index([organizationId, year, month])
+  @@map("meter_readings")
+}
+
