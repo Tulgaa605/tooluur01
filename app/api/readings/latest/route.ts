@@ -7,6 +7,10 @@ export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
 
+    if (!user) {
+      throw new Error('Unauthorized')
+    }
+
     const where: any = {}
 
     // USER can only see their own organization

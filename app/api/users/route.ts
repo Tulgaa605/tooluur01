@@ -101,6 +101,9 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) {
+      throw new Error('Unauthorized')
+    }
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
