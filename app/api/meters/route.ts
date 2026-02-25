@@ -27,10 +27,13 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         meterNumber: true,
+        organizationId: true,
         // year: true, // Temporarily commented out until Prisma client is regenerated
         organization: {
           select: {
+            id: true,
             name: true,
+            code: true,
           },
         },
       },

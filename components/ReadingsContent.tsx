@@ -19,6 +19,11 @@ interface Meter {
   id: string
   meterNumber: string
   organizationId: string
+  organization?: {
+    name: string
+    code?: string | null
+    id?: string
+  }
 }
 
 interface ReadingForm {
@@ -42,6 +47,8 @@ interface Reading {
   usage: number
   baseClean: number
   baseDirty: number
+  cleanPerM3?: number
+  dirtyPerM3?: number
   cleanAmount: number
   dirtyAmount: number
   subtotal: number
@@ -73,6 +80,7 @@ export default function ReadingsContent() {
   const [filterYear, setFilterYear] = useState<number | ''>('')
   const [filterOrgId, setFilterOrgId] = useState<string>('')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [latestMeterReadings, setLatestMeterReadings] = useState<Reading[]>([])
   const [newReadings, setNewReadings] = useState<Reading[]>([])
   const gridRef = useRef<AgGridReact>(null)
   const modalGridRef = useRef<AgGridReact>(null)
@@ -284,43 +292,95 @@ export default function ReadingsContent() {
     }
   }
 
-  const addNewRow = useCallback(() => {
-    const newReading: Reading = {
-      _isNew: true,
-      month: new Date().getMonth() + 1,
-      year: new Date().getFullYear(),
-      startValue: 0,
-      endValue: 0,
-      usage: 0,
-      baseClean: 0,
-      baseDirty: 0,
-      cleanAmount: 0,
-      dirtyAmount: 0,
-      subtotal: 0,
-      vat: 0,
-      total: 0,
-    }
-    setNewReadings(prev => [newReading, ...prev])
-    
-    // Wait for React to update and grid to render
-    setTimeout(() => {
-      if (modalGridRef.current?.api) {
-        // Scroll to top to show the new row
-        modalGridRef.current.api.ensureIndexVisible(0, 'top')
-        
-        // Set focus and start editing
-        modalGridRef.current.api.setFocusedCell(0, 'meterId')
-        modalGridRef.current.api.startEditingCell({
-          rowIndex: 0,
-          colKey: 'meterId',
-        })
-      }
-    }, 200)
-  }, [])
-
-  const handleOpenAddModal = () => {
-    setNewReadings([])
+  const handleOpenAddModal = async () => {
     setShowAddModal(true)
+    setMessage(null)
+    setLoading(true)
+    setNewReadings([])
+    try {
+      // Бүх заалтыг авч, хамгийн сүүлийн заалтыг тоолуур бүрээр нь олно
+      const res = await fetch('/api/readings')
+      const data = await res.json()
+
+      let latest: Reading[] = []
+      if (res.ok && Array.isArray(data)) {
+        latest = data
+        setLatestMeterReadings(data)
+      } else {
+        setLatestMeterReadings([])
+      }
+
+      // Эхлээд бүх тоолуурын мөрийг үүсгэнэ (хамгийн сүүлийн заалт байвал түүн дээр суурилна)
+      let rows: Reading[] = allMeters.map(meter => {
+        const org = organizations.find(o => o.id === meter.organizationId)
+        // /api/readings нь year desc, month desc эрэмбэлэгддэг тул
+        // тухайн тоолуурын эхний олдсон заалт нь хамгийн сүүлийн заалт байна
+        const latestForMeter = latest.find(r => r.meterId === meter.id)
+
+        let month = new Date().getMonth() + 1
+        let year = new Date().getFullYear()
+        let startValue = 0
+        let baseClean = 0
+        let baseDirty = 0
+
+        if (latestForMeter) {
+          const lastMonth = latestForMeter.month
+          const lastYear = latestForMeter.year
+          if (lastMonth && lastYear) {
+            if (lastMonth === 12) {
+              month = 1
+              year = lastYear + 1
+            } else {
+              month = lastMonth + 1
+              year = lastYear
+            }
+          }
+          // Эхний заалт = хамгийн сүүлийн заалтын эцсийн заалт
+          startValue = latestForMeter.endValue ?? 0
+          baseClean = latestForMeter.baseClean ?? 0
+          baseDirty = latestForMeter.baseDirty ?? 0
+        }
+
+        return {
+          _isNew: true,
+          organizationId: meter.organizationId,
+          organization: meter.organizationId
+            ? {
+                id: meter.organizationId,
+                name:
+                  meter.organization?.name ||
+                  org?.name ||
+                  '-',
+                code:
+                  meter.organization?.code ??
+                  (org as any)?.code ??
+                  null,
+              }
+            : undefined,
+          meterId: meter.id,
+          meter: { meterNumber: meter.meterNumber },
+          month,
+          year,
+          startValue,
+          endValue: 0,
+          usage: 0,
+          baseClean,
+          baseDirty,
+          cleanAmount: 0,
+          dirtyAmount: 0,
+          subtotal: 0,
+          vat: 0,
+          total: 0,
+        }
+      })
+
+      setNewReadings(rows)
+    } catch (error) {
+      setLatestMeterReadings([])
+      setNewReadings([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleCloseAddModal = () => {
@@ -441,7 +501,6 @@ export default function ReadingsContent() {
       width: 100,
       editable: false,
       valueGetter: (params: any) => {
-        if (params.data?._isNew) return 'Шинэ'
         if (params.data?.organization?.code) {
           return params.data.organization.code
         }
@@ -496,25 +555,15 @@ export default function ReadingsContent() {
       valueGetter: (params: any) => params.data?.organization?.name || '-',
     },
     {
-      headerName: 'Он',
-      width: 100,
-      field: 'year',
-      editable: true,
-      cellEditor: 'agNumberCellEditor',
-      cellEditorParams: {
-        min: 2000,
-        max: 2100,
-      },
-    },
-    {
-      headerName: 'Сар',
-      width: 100,
-      field: 'month',
-      editable: true,
-      cellEditor: 'agNumberCellEditor',
-      cellEditorParams: {
-        min: 1,
-        max: 12,
+      headerName: 'Огноо',
+      width: 140,
+      editable: false,
+      valueGetter: (params: any) => {
+        const year = params.data?.year
+        const month = params.data?.month
+        if (!year || !month) return '-'
+        const monthStr = String(month).padStart(2, '0')
+        return `${year}-${monthStr}`
       },
     },
     {
@@ -714,13 +763,6 @@ export default function ReadingsContent() {
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-2xl font-semibold text-gray-900">Шинэ заалт оруулах</h3>
                   <div className="flex gap-2">
-                    <button
-                      onClick={addNewRow}
-                      className="px-3 py-1 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm flex items-center gap-1"
-                    >
-                      <PlusIcon className="h-4 w-4" />
-                      Мөр нэмэх
-                    </button>
                     <button
                       onClick={handleCloseAddModal}
                       className="text-gray-400 hover:text-gray-500 focus:outline-none"
