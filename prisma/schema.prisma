@@ -34,14 +34,34 @@ model Organization {
   phone           String?
   email           String?
   connectionNumber String?
+  baseCleanFee    Float    @default(0)
+  baseDirtyFee    Float    @default(0)
   year            Int      @default(2026)
   users           User[]
   meters          Meter[]
   readings        MeterReading[]
+  tariffs         OrganizationTariff[]
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@map("organizations")
+}
+
+model OrganizationTariff {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId String       @db.ObjectId
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  year           Int
+  month          Int
+  baseCleanFee   Float        @default(0)
+  baseDirtyFee   Float        @default(0)
+  cleanPerM3     Float        @default(0)
+  dirtyPerM3     Float        @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, year, month])
+  @@map("organization_tariffs")
 }
 
 model Meter {

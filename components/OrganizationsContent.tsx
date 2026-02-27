@@ -11,6 +11,8 @@ interface Organization {
   phone: string | null
   email: string | null
   connectionNumber: string | null
+  baseCleanFee: number
+  baseDirtyFee: number
   year: number
 }
 
@@ -26,6 +28,8 @@ export default function OrganizationsContent() {
     phone: '',
     email: '',
     connectionNumber: '',
+    baseCleanFee: 0,
+    baseDirtyFee: 0,
     year: new Date().getFullYear(),
   })
 
@@ -80,7 +84,17 @@ export default function OrganizationsContent() {
 
       setShowForm(false)
       setEditingId(null)
-      setForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear() })
+      setForm({
+        name: '',
+        code: '',
+        address: '',
+        phone: '',
+        email: '',
+        connectionNumber: '',
+        baseCleanFee: 0,
+        baseDirtyFee: 0,
+        year: new Date().getFullYear(),
+      })
       loadOrganizations()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -96,6 +110,8 @@ export default function OrganizationsContent() {
       phone: org.phone || '',
       email: org.email || '',
       connectionNumber: org.connectionNumber || '',
+      baseCleanFee: org.baseCleanFee ?? 0,
+      baseDirtyFee: org.baseDirtyFee ?? 0,
       year: org.year,
     })
     setShowForm(true)
@@ -135,7 +151,17 @@ export default function OrganizationsContent() {
           onClick={() => {
             setShowForm(!showForm)
             setEditingId(null)
-            setForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear() })
+            setForm({
+              name: '',
+              code: '',
+              address: '',
+              phone: '',
+              email: '',
+              connectionNumber: '',
+              baseCleanFee: 0,
+              baseDirtyFee: 0,
+              year: new Date().getFullYear(),
+            })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -219,6 +245,44 @@ export default function OrganizationsContent() {
                 />
               </div>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Цэвэр усны суурь хураамж
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={form.baseCleanFee}
+                  onChange={(e) =>
+                    setForm(prev => ({
+                      ...prev,
+                      baseCleanFee: parseFloat(e.target.value) || 0,
+                    }))
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Бохир усны суурь хураамж
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={form.baseDirtyFee}
+                  onChange={(e) =>
+                    setForm(prev => ({
+                      ...prev,
+                      baseDirtyFee: parseFloat(e.target.value) || 0,
+                    }))
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                />
+              </div>
+            </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Он
@@ -266,6 +330,12 @@ export default function OrganizationsContent() {
                 Шугамын хоолой
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Ц суурь
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Б суурь
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Он
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -291,6 +361,12 @@ export default function OrganizationsContent() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {org.connectionNumber || '-'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {(org.baseCleanFee ?? 0).toFixed(2)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {(org.baseDirtyFee ?? 0).toFixed(2)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {org.year || '-'}

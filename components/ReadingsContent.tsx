@@ -13,6 +13,19 @@ ModuleRegistry.registerModules([AllCommunityModule])
 interface Organization {
   id: string
   name: string
+  baseCleanFee?: number
+  baseDirtyFee?: number
+}
+
+interface OrganizationTariff {
+  id: string
+  organizationId: string
+  year: number
+  month: number
+  baseCleanFee: number
+  baseDirtyFee: number
+  cleanPerM3: number
+  dirtyPerM3: number
 }
 
 interface Meter {
@@ -72,6 +85,7 @@ export default function ReadingsContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [meters, setMeters] = useState<Meter[]>([])
   const [allMeters, setAllMeters] = useState<Meter[]>([])
+  const [tariffs, setTariffs] = useState<OrganizationTariff[]>([])
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [readings, setReadings] = useState<Reading[]>([])
@@ -103,6 +117,19 @@ export default function ReadingsContent() {
         }
       })
       .catch(() => setOrganizations([]))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/tariffs')
+      .then(res => {
+        if (!res.ok) return res.json().then(() => [])
+        return res.json()
+      })
+      .then(data => {
+        if (Array.isArray(data)) setTariffs(data)
+        else setTariffs([])
+      })
+      .catch(() => setTariffs([]))
   }, [])
 
   useEffect(() => {
@@ -322,6 +349,8 @@ export default function ReadingsContent() {
         let startValue = 0
         let baseClean = 0
         let baseDirty = 0
+        let cleanPerM3 = 0
+        let dirtyPerM3 = 0
 
         if (latestForMeter) {
           const lastMonth = latestForMeter.month
@@ -337,8 +366,25 @@ export default function ReadingsContent() {
           }
           // Эхний заалт = хамгийн сүүлийн заалтын эцсийн заалт
           startValue = latestForMeter.endValue ?? 0
-          baseClean = latestForMeter.baseClean ?? 0
-          baseDirty = latestForMeter.baseDirty ?? 0
+        }
+
+        // Суурь/тариф нь хугацаанаас хамаарч өөрчлөгддөг тул тухайн (year, month)-ын тарифаас авна.
+        const tariffForPeriod = tariffs.find(
+          (t) =>
+            t.organizationId === meter.organizationId &&
+            t.year === year &&
+            t.month === month
+        )
+
+        if (tariffForPeriod) {
+          baseClean = tariffForPeriod.baseCleanFee ?? 0
+          baseDirty = tariffForPeriod.baseDirtyFee ?? 0
+          cleanPerM3 = tariffForPeriod.cleanPerM3 ?? 0
+          dirtyPerM3 = tariffForPeriod.dirtyPerM3 ?? 0
+        } else if (org) {
+          // Fallback: organization defaults (no tariff row for that month)
+          baseClean = org.baseCleanFee ?? 0
+          baseDirty = org.baseDirtyFee ?? 0
         }
 
         return {
@@ -366,6 +412,8 @@ export default function ReadingsContent() {
           usage: 0,
           baseClean,
           baseDirty,
+          cleanPerM3,
+          dirtyPerM3,
           cleanAmount: 0,
           dirtyAmount: 0,
           subtotal: 0,
@@ -415,8 +463,8 @@ export default function ReadingsContent() {
             endValue: reading.endValue,
             baseClean: reading.baseClean || 0,
             baseDirty: reading.baseDirty || 0,
-            cleanPerM3: 0,
-            dirtyPerM3: 0,
+            cleanPerM3: reading.cleanPerM3 || 0,
+            dirtyPerM3: reading.dirtyPerM3 || 0,
           }),
         })
 
@@ -747,7 +795,6 @@ export default function ReadingsContent() {
         </div>
       )}
 
-      {/* Add New Readings Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">

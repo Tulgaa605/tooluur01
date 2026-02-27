@@ -36,6 +36,26 @@ export async function POST(request: NextRequest) {
     }
 
     const currentYear = new Date().getFullYear()
+    const baseCleanFee =
+      typeof data.baseCleanFee === 'number'
+        ? data.baseCleanFee
+        : Number.isFinite(parseFloat(String(data.baseCleanFee)))
+          ? parseFloat(String(data.baseCleanFee))
+          : 0
+    const baseDirtyFee =
+      typeof data.baseDirtyFee === 'number'
+        ? data.baseDirtyFee
+        : Number.isFinite(parseFloat(String(data.baseDirtyFee)))
+          ? parseFloat(String(data.baseDirtyFee))
+          : 0
+
+    if (baseCleanFee < 0 || baseDirtyFee < 0) {
+      return NextResponse.json(
+        { error: 'Суурь хураамж сөрөг утгатай байж болохгүй' },
+        { status: 400 }
+      )
+    }
+
     const organization = await prisma.organization.create({
       data: {
         name: data.name.trim(),
@@ -44,6 +64,8 @@ export async function POST(request: NextRequest) {
         phone: data.phone?.trim() || null,
         email: data.email?.trim() || null,
         connectionNumber: data.connectionNumber?.trim() || null,
+        baseCleanFee,
+        baseDirtyFee,
         year: data.year || currentYear,
       },
     })
@@ -88,6 +110,39 @@ export async function PUT(request: NextRequest) {
     }
 
     const currentYear = new Date().getFullYear()
+    const baseCleanFeeRaw =
+      typeof data.baseCleanFee === 'number'
+        ? data.baseCleanFee
+        : data.baseCleanFee != null && data.baseCleanFee !== ''
+          ? parseFloat(String(data.baseCleanFee))
+          : undefined
+    const baseDirtyFeeRaw =
+      typeof data.baseDirtyFee === 'number'
+        ? data.baseDirtyFee
+        : data.baseDirtyFee != null && data.baseDirtyFee !== ''
+          ? parseFloat(String(data.baseDirtyFee))
+          : undefined
+
+    if (
+      (typeof baseCleanFeeRaw === 'number' && !Number.isFinite(baseCleanFeeRaw)) ||
+      (typeof baseDirtyFeeRaw === 'number' && !Number.isFinite(baseDirtyFeeRaw))
+    ) {
+      return NextResponse.json(
+        { error: 'Суурь хураамж тоон утга байх ёстой' },
+        { status: 400 }
+      )
+    }
+
+    if (
+      (typeof baseCleanFeeRaw === 'number' && baseCleanFeeRaw < 0) ||
+      (typeof baseDirtyFeeRaw === 'number' && baseDirtyFeeRaw < 0)
+    ) {
+      return NextResponse.json(
+        { error: 'Суурь хураамж сөрөг утгатай байж болохгүй' },
+        { status: 400 }
+      )
+    }
+
     const organization = await prisma.organization.update({
       where: { id: data.id },
       data: {
@@ -97,6 +152,8 @@ export async function PUT(request: NextRequest) {
         phone: data.phone?.trim() || null,
         email: data.email?.trim() || null,
         connectionNumber: data.connectionNumber?.trim() || null,
+        ...(typeof baseCleanFeeRaw === 'number' ? { baseCleanFee: baseCleanFeeRaw } : {}),
+        ...(typeof baseDirtyFeeRaw === 'number' ? { baseDirtyFee: baseDirtyFeeRaw } : {}),
         year: data.year || currentYear,
       },
     })
