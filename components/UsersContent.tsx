@@ -7,6 +7,7 @@ interface User {
   id: string
   email: string
   name: string
+  code: string | null
   role: string
   year: number
   phone: string | null
@@ -15,6 +16,13 @@ interface User {
     name: string
   } | null
 }
+
+type OrganizationCategory =
+  | 'ORGANIZATION'       // Байгууллага
+  | 'BUSINESS'           // Аж ахуйн нэгж
+  | 'TRANSPORT_DISPOSAL' // Зөөврөөр татан зайлуулах
+  | 'TRANSPORT_RECEPTION'// Зөөврүүд хүлээн авах
+  | 'WATER_POINT'        // Ус түгээх байр
 
 interface Organization {
   id: string
@@ -25,6 +33,7 @@ interface Organization {
   email: string | null
   connectionNumber: string | null
   year: number
+  category?: OrganizationCategory
 }
 
 export default function UsersContent() {
@@ -38,6 +47,7 @@ export default function UsersContent() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
   const [userForm, setUserForm] = useState({
     name: '',
+    code: '',
     email: '',
     phone: '',
     role: 'USER',
@@ -58,6 +68,7 @@ export default function UsersContent() {
     email: '',
     connectionNumber: '',
     year: new Date().getFullYear(),
+    category: 'HOUSEHOLD' as OrganizationCategory,
   })
 
   useEffect(() => {
@@ -131,6 +142,7 @@ export default function UsersContent() {
     setEditingUserId(user.id)
     setUserForm({
       name: user.name,
+      code: user.code || '',
       email: user.email,
       phone: user.phone || '',
       role: user.role,
@@ -163,7 +175,9 @@ export default function UsersContent() {
     e.preventDefault()
     try {
       const method = editingUserId ? 'PUT' : 'POST'
-      const body = editingUserId ? { ...userForm, id: editingUserId } : userForm
+      const body = editingUserId
+        ? { ...userForm, id: editingUserId }
+        : userForm
 
       const res = await fetch(editingUserId ? '/api/users' : '/api/auth/register', {
         method,
@@ -195,6 +209,7 @@ export default function UsersContent() {
       email: org.email || '',
       connectionNumber: org.connectionNumber || '',
       year: org.year,
+      category: (org.category || 'HOUSEHOLD') as OrganizationCategory,
     })
     setShowOrgForm(true)
   }
@@ -285,7 +300,7 @@ export default function UsersContent() {
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              Байгууллагууд
+              Бусад
             </button>
           </nav>
         </div>
@@ -296,9 +311,11 @@ export default function UsersContent() {
           <div className="mb-6 flex justify-end">
             <button
               onClick={() => {
+                if (!showUserForm) {
+                  setEditingUserId(null)
+                  setUserForm({ name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '' })
+                }
                 setShowUserForm(!showUserForm)
-                setEditingUserId(null)
-                setUserForm({ name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '' })
               }}
               className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
             >
@@ -307,101 +324,134 @@ export default function UsersContent() {
           </div>
 
           {showUserForm && (
-            <div className="mb-6 bg-white p-6 rounded-lg border border-gray-200">
-              <form onSubmit={handleSubmitUser} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Нэр
-                    </label>
-                    <input
-                      type="text"
-                      value={userForm.name}
-                      onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Имэйл
-                    </label>
-                    <input
-                      type="email"
-                      value={userForm.email}
-                      onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required
-                      disabled={!!editingUserId}
-                    />
+            <div className="fixed inset-0 z-50 overflow-y-auto">
+              <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+                <div
+                  className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+                  onClick={() => setShowUserForm(false)}
+                />
+
+                <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
+                  <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-xl font-semibold text-gray-900">
+                        {editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хэрэглэгч нэмэх'}
+                      </h3>
+                      <button
+                        onClick={() => setShowUserForm(false)}
+                        className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                      >
+                        <span className="sr-only">Хаах</span>
+                        <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSubmitUser} className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Нэр
+                          </label>
+                          <input
+                            type="text"
+                            value={userForm.name}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Имэйл
+                          </label>
+                          <input
+                            type="email"
+                            value={userForm.email}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            required
+                            disabled={!!editingUserId}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Утас
+                          </label>
+                          <input
+                            type="text"
+                            value={userForm.phone}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, phone: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Эрх
+                          </label>
+                          <select
+                            value={userForm.role}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, role: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            required
+                          >
+                            <option value="USER">Хэрэглэгч</option>
+                            <option value="ACCOUNTANT">Нягтлан</option>
+                            <option value="MANAGER">Захирал</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Байгууллага
+                        </label>
+                        <select
+                          value={userForm.organizationId}
+                          onChange={(e) => setUserForm(prev => ({ ...prev, organizationId: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        >
+                          <option value="">Сонгох</option>
+                          {organizations.map(org => (
+                            <option key={org.id} value={org.id}>{org.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {!editingUserId && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Нууц үг
+                          </label>
+                          <input
+                            type="password"
+                            value={userForm.password}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            required={!editingUserId}
+                          />
+                        </div>
+                      )}
+                      <div className="mt-4 flex justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowUserForm(false)}
+                          className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                        >
+                          Цуцлах
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                        >
+                          {editingUserId ? 'Шинэчлэх' : 'Хадгалах'}
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Утас
-                    </label>
-                    <input
-                      type="text"
-                      value={userForm.phone}
-                      onChange={(e) => setUserForm(prev => ({ ...prev, phone: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Эрх
-                    </label>
-                    <select
-                      value={userForm.role}
-                      onChange={(e) => setUserForm(prev => ({ ...prev, role: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required
-                    >
-                      <option value="USER">Хэрэглэгч</option>
-                      <option value="ACCOUNTANT">Нягтлан</option>
-                      <option value="MANAGER">Захирал</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Байгууллага
-                  </label>
-                  <select
-                    value={userForm.organizationId}
-                    onChange={(e) => setUserForm(prev => ({ ...prev, organizationId: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  >
-                    <option value="">Сонгох</option>
-                    {organizations.map(org => (
-                      <option key={org.id} value={org.id}>{org.name}</option>
-                    ))}
-                  </select>
-                </div>
-                {!editingUserId && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Нууц үг
-                    </label>
-                    <input
-                      type="password"
-                      value={userForm.password}
-                      onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required={!editingUserId}
-                    />
-                  </div>
-                )}
-                <div className="flex justify-end">
-                  <button
-                    type="submit"
-                    className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-                  >
-                    {editingUserId ? 'Шинэчлэх' : 'Хадгалах'}
-                  </button>
-                </div>
-              </form>
+              </div>
             </div>
           )}
 
@@ -490,9 +540,11 @@ export default function UsersContent() {
           <div className="mb-6 flex justify-end">
             <button
               onClick={() => {
+                if (!showOrgForm) {
+                  setEditingOrgId(null)
+                  setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear(), category: 'HOUSEHOLD' as OrganizationCategory })
+                }
                 setShowOrgForm(!showOrgForm)
-                setEditingOrgId(null)
-                setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear() })
               }}
               className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
             >
@@ -501,102 +553,151 @@ export default function UsersContent() {
           </div>
 
           {showOrgForm && (
-            <div className="mb-6 bg-white p-6 rounded-lg border border-gray-200">
-              <form onSubmit={handleSubmitOrg} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Нэр
-                    </label>
-                    <input
-                      type="text"
-                      value={orgForm.name}
-                      onChange={(e) => setOrgForm(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Код
-                    </label>
-                    <input
-                      type="text"
-                      value={orgForm.code}
-                      onChange={(e) => setOrgForm(prev => ({ ...prev, code: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    />
+            <div className="fixed inset-0 z-50 overflow-y-auto">
+              <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+                <div
+                  className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+                  onClick={() => setShowOrgForm(false)}
+                />
+
+                <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
+                  <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-xl font-semibold text-gray-900">
+                        {editingOrgId ? 'Байгууллага засах' : 'Шинэ байгууллага нэмэх'}
+                      </h3>
+                      <button
+                        onClick={() => setShowOrgForm(false)}
+                        className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                      >
+                        <span className="sr-only">Хаах</span>
+                        <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSubmitOrg} className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Нэр
+                          </label>
+                          <input
+                            type="text"
+                            value={orgForm.name}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, name: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Код
+                          </label>
+                          <input
+                            type="text"
+                            value={orgForm.code}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, code: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Хаяг
+                          </label>
+                          <input
+                            type="text"
+                            value={orgForm.address}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, address: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Утас
+                          </label>
+                          <input
+                            type="text"
+                            value={orgForm.phone}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, phone: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Имэйл
+                          </label>
+                          <input
+                            type="email"
+                            value={orgForm.email}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, email: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Шугамын хоолой
+                          </label>
+                          <input
+                            type="text"
+                            value={orgForm.connectionNumber}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Хэрэглэгчийн төрөл
+                        </label>
+                        <select
+                          value={orgForm.category}
+                          onChange={(e) => setOrgForm(prev => ({ ...prev, category: e.target.value as OrganizationCategory }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        >
+                          <option value="ORGANIZATION">Байгууллага</option>
+                          <option value="BUSINESS">Аж ахуйн нэгж</option>
+                          <option value="TRANSPORT_DISPOSAL">Зөөврөөр татан зайлуулах</option>
+                          <option value="TRANSPORT_RECEPTION">Зөөврүүд хүлээн авах</option>
+                          <option value="WATER_POINT">Ус түгээх байр</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Он
+                        </label>
+                        <input
+                          type="number"
+                          value={orgForm.year}
+                          onChange={(e) => setOrgForm(prev => ({ ...prev, year: parseInt(e.target.value) || new Date().getFullYear() }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          required
+                        />
+                      </div>
+                      <div className="mt-4 flex justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowOrgForm(false)}
+                          className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                        >
+                          Цуцлах
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                        >
+                          Хадгалах
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Хаяг
-                    </label>
-                    <input
-                      type="text"
-                      value={orgForm.address}
-                      onChange={(e) => setOrgForm(prev => ({ ...prev, address: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Утас
-                    </label>
-                    <input
-                      type="text"
-                      value={orgForm.phone}
-                      onChange={(e) => setOrgForm(prev => ({ ...prev, phone: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Имэйл
-                    </label>
-                    <input
-                      type="email"
-                      value={orgForm.email}
-                      onChange={(e) => setOrgForm(prev => ({ ...prev, email: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Шугамын хоолой
-                    </label>
-                    <input
-                      type="text"
-                      value={orgForm.connectionNumber}
-                      onChange={(e) => setOrgForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Он
-                  </label>
-                  <input
-                    type="number"
-                    value={orgForm.year}
-                    onChange={(e) => setOrgForm(prev => ({ ...prev, year: parseInt(e.target.value) || new Date().getFullYear() }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    required
-                  />
-                </div>
-                <div className="flex justify-end">
-                  <button
-                    type="submit"
-                    className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-                  >
-                    Хадгалах
-                  </button>
-                </div>
-              </form>
+              </div>
             </div>
           )}
 

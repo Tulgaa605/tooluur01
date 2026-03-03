@@ -15,6 +15,7 @@ model User {
   email     String   @unique
   password  String
   name      String
+  code      String?
   phone     String?
   role      String   @default("USER")
   organizationId String? @db.ObjectId
@@ -34,6 +35,8 @@ model Organization {
   phone           String?
   email           String?
   connectionNumber String?
+  /// Хэрэглэгчийн төрөл (жишээ: Хувь хүн, Байгууллага, ААН, Зөөврөөр татан зайлуулах, Зөөврүүд хүлээн авах, Ус түгээх байр)
+  category        String   @default("HOUSEHOLD")
   baseCleanFee    Float    @default(0)
   baseDirtyFee    Float    @default(0)
   year            Int      @default(2026)
@@ -107,5 +110,17 @@ model MeterReading {
   @@unique([meterId, month, year])
   @@index([organizationId, year, month])
   @@map("meter_readings")
+}
+
+model PipeFee {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  diameterMm   Int
+  baseCleanFee Float    @default(0)
+  baseDirtyFee Float    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([diameterMm])
+  @@map("pipe_fees")
 }
 

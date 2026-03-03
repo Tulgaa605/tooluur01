@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         organization: {
-          select: { id: true, name: true, code: true },
+          select: { id: true, name: true, code: true, connectionNumber: true, category: true },
         },
       },
       orderBy: [{ year: 'desc' }, { month: 'desc' }, { updatedAt: 'desc' }],
@@ -58,13 +58,11 @@ export async function POST(request: NextRequest) {
 
     const data = await request.json()
 
-    const organizationId = data.organizationId as string
+    const organizationId = data.organizationId as string | undefined
+    const category = data.category as string | undefined
     const month = parseInt(String(data.month), 10)
     const year = parseInt(String(data.year), 10)
     const validationError = validateMonthYear(month, year)
-    if (!organizationId) {
-      return NextResponse.json({ error: 'Байгууллага шаардлагатай' }, { status: 400 })
-    }
     if (validationError) {
       return NextResponse.json({ error: validationError }, { status: 400 })
     }
@@ -81,22 +79,75 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const tariff = await prisma.organizationTariff.create({
-      data: {
-        organizationId,
-        month,
-        year,
-        baseCleanFee,
-        baseDirtyFee,
-        cleanPerM3,
-        dirtyPerM3,
-      },
-      include: {
-        organization: { select: { id: true, name: true, code: true } },
-      },
+    // Хэрэв байгууллага сонгосон бол нэг байгууллагад тариф үүсгэнэ (хуучин зан төлөвийг хадгална)
+    if (organizationId) {
+      const tariff = await prisma.organizationTariff.create({
+        data: {
+          organizationId,
+          month,
+          year,
+          baseCleanFee,
+          baseDirtyFee,
+          cleanPerM3,
+          dirtyPerM3,
+        },
+        include: {
+          organization: { select: { id: true, name: true, code: true, connectionNumber: true, category: true } },
+        },
+      })
+      return NextResponse.json(tariff)
+    }
+
+    // Харин байгууллага сонгохгүй, зөвхөн хэрэглэгчийн төрөл (category) сонгосон тохиолдолд
+    if (!category) {
+      return NextResponse.json(
+        { error: 'Хэрэглэгчийн төрөл эсвэл байгууллага заавал сонгоно уу' },
+        { status: 400 }
+      )
+    }
+
+    const orgs = await prisma.organization.findMany({
+      where: { category },
+      select: { id: true, name: true },
     })
 
-    return NextResponse.json(tariff)
+    if (orgs.length === 0) {
+      return NextResponse.json(
+        { error: 'Энэ төрөлтэй байгууллага олдсонгүй' },
+        { status: 400 }
+      )
+    }
+
+    const created: any[] = []
+    for (const org of orgs) {
+      try {
+        const t = await prisma.organizationTariff.create({
+          data: {
+            organizationId: org.id,
+            month,
+            year,
+            baseCleanFee,
+            baseDirtyFee,
+            cleanPerM3,
+            dirtyPerM3,
+          },
+          include: {
+            organization: { select: { id: true, name: true, code: true, connectionNumber: true, category: true } },
+          },
+        })
+        created.push(t)
+      } catch (error: any) {
+        // Аль хэдийн тарифтай байгууллага байвал алдааг үл тоонo (unique constraint)
+        if (error.code !== 'P2002') {
+          throw error
+        }
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      count: created.length,
+    })
   } catch (error: any) {
     if (error.code === 'P2002') {
       return NextResponse.json(
@@ -144,7 +195,7 @@ export async function PUT(request: NextRequest) {
       where: { id: data.id },
       data: patch,
       include: {
-        organization: { select: { id: true, name: true, code: true } },
+        organization: { select: { id: true, name: true, code: true, connectionNumber: true, category: true } },
       },
     })
 

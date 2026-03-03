@@ -36,6 +36,20 @@ export async function POST(request: NextRequest) {
     }
 
     const currentYear = new Date().getFullYear()
+
+    // Customer category (organization type)
+    const allowedCategories = [
+      'HOUSEHOLD',          // Хувь хүн
+      'ORGANIZATION',       // Байгууллага
+      'BUSINESS',           // Аж ахуйн нэгж
+      'TRANSPORT_DISPOSAL', // Зөөврөөр татан зайлуулах
+      'TRANSPORT_RECEPTION',// Зөөврүүд хүлээн авах
+      'WATER_POINT',        // Ус түгээх байр
+    ] as const
+    const category =
+      typeof data.category === 'string' && allowedCategories.includes(data.category)
+        ? data.category
+        : 'HOUSEHOLD'
     const baseCleanFee =
       typeof data.baseCleanFee === 'number'
         ? data.baseCleanFee
@@ -64,6 +78,7 @@ export async function POST(request: NextRequest) {
         phone: data.phone?.trim() || null,
         email: data.email?.trim() || null,
         connectionNumber: data.connectionNumber?.trim() || null,
+        category,
         baseCleanFee,
         baseDirtyFee,
         year: data.year || currentYear,
@@ -110,6 +125,19 @@ export async function PUT(request: NextRequest) {
     }
 
     const currentYear = new Date().getFullYear()
+
+    const allowedCategories = [
+      'HOUSEHOLD',
+      'ORGANIZATION',
+      'BUSINESS',
+      'TRANSPORT_DISPOSAL',
+      'TRANSPORT_RECEPTION',
+      'WATER_POINT',
+    ] as const
+    const categoryValue =
+      typeof data.category === 'string' && allowedCategories.includes(data.category)
+        ? data.category
+        : undefined
     const baseCleanFeeRaw =
       typeof data.baseCleanFee === 'number'
         ? data.baseCleanFee
@@ -152,6 +180,7 @@ export async function PUT(request: NextRequest) {
         phone: data.phone?.trim() || null,
         email: data.email?.trim() || null,
         connectionNumber: data.connectionNumber?.trim() || null,
+        ...(categoryValue ? { category: categoryValue } : {}),
         ...(typeof baseCleanFeeRaw === 'number' ? { baseCleanFee: baseCleanFeeRaw } : {}),
         ...(typeof baseDirtyFeeRaw === 'number' ? { baseDirtyFee: baseDirtyFeeRaw } : {}),
         year: data.year || currentYear,

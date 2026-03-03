@@ -14,6 +14,7 @@ interface Organization {
   baseCleanFee: number
   baseDirtyFee: number
   year: number
+  category?: string
 }
 
 export default function OrganizationsContent() {
@@ -31,6 +32,7 @@ export default function OrganizationsContent() {
     baseCleanFee: 0,
     baseDirtyFee: 0,
     year: new Date().getFullYear(),
+    category: 'HOUSEHOLD',
   })
 
   useEffect(() => {
@@ -113,6 +115,7 @@ export default function OrganizationsContent() {
       baseCleanFee: org.baseCleanFee ?? 0,
       baseDirtyFee: org.baseDirtyFee ?? 0,
       year: org.year,
+      category: org.category || 'HOUSEHOLD',
     })
     setShowForm(true)
   }
@@ -149,19 +152,22 @@ export default function OrganizationsContent() {
         <h2 className="text-2xl font-semibold text-gray-900">Байгууллагууд</h2>
         <button
           onClick={() => {
+            if (!showForm) {
+              setEditingId(null)
+              setForm({
+                name: '',
+                code: '',
+                address: '',
+                phone: '',
+                email: '',
+                connectionNumber: '',
+                baseCleanFee: 0,
+                baseDirtyFee: 0,
+                year: new Date().getFullYear(),
+                category: 'HOUSEHOLD',
+              })
+            }
             setShowForm(!showForm)
-            setEditingId(null)
-            setForm({
-              name: '',
-              code: '',
-              address: '',
-              phone: '',
-              email: '',
-              connectionNumber: '',
-              baseCleanFee: 0,
-              baseDirtyFee: 0,
-              year: new Date().getFullYear(),
-            })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -170,140 +176,195 @@ export default function OrganizationsContent() {
       </div>
 
       {showForm && (
-        <div className="mb-6 bg-white p-6 rounded-lg border border-gray-200">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Нэр
-                </label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Код
-                </label>
-                <input
-                  type="text"
-                  value={form.code}
-                  onChange={(e) => setForm(prev => ({ ...prev, code: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setShowForm(false)}
+            />
+
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-semibold text-gray-900">
+                    {editingId ? 'Байгууллага засах' : 'Шинэ байгууллага нэмэх'}
+                  </h3>
+                  <button
+                    onClick={() => setShowForm(false)}
+                    className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                  >
+                    <span className="sr-only">Хаах</span>
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Нэр
+                      </label>
+                      <input
+                        type="text"
+                        value={form.name}
+                        onChange={(e) => setForm(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Код
+                      </label>
+                      <input
+                        type="text"
+                        value={form.code}
+                        onChange={(e) => setForm(prev => ({ ...prev, code: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Хаяг
+                      </label>
+                      <input
+                        type="text"
+                        value={form.address}
+                        onChange={(e) => setForm(prev => ({ ...prev, address: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Утас
+                      </label>
+                      <input
+                        type="text"
+                        value={form.phone}
+                        onChange={(e) => setForm(prev => ({ ...prev, phone: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Имэйл
+                      </label>
+                      <input
+                        type="email"
+                        value={form.email}
+                        onChange={(e) => setForm(prev => ({ ...prev, email: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Шугамын хоолой
+                      </label>
+                      <input
+                        type="text"
+                        value={form.connectionNumber}
+                        onChange={(e) => setForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                  </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Хэрэглэгчийн төрөл
+                  </label>
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm(prev => ({ ...prev, category: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  >
+                    <option value="HOUSEHOLD">Хувь хүн</option>
+                    <option value="ORGANIZATION">Байгууллага</option>
+                    <option value="BUSINESS">Аж ахуйн нэгж</option>
+                    <option value="TRANSPORT_DISPOSAL">Зөөврөөр татан зайлуулах</option>
+                    <option value="TRANSPORT_RECEPTION">Зөөврүүд хүлээн авах</option>
+                    <option value="WATER_POINT">Ус түгээх байр</option>
+                  </select>
+                </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Цэвэр усны суурь хураамж
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={form.baseCleanFee}
+                        onChange={(e) =>
+                          setForm(prev => ({
+                            ...prev,
+                            baseCleanFee: parseFloat(e.target.value) || 0,
+                          }))
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Бохир усны суурь хураамж
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={form.baseDirtyFee}
+                        onChange={(e) =>
+                          setForm(prev => ({
+                            ...prev,
+                            baseDirtyFee: parseFloat(e.target.value) || 0,
+                          }))
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Он
+                    </label>
+                    <input
+                      type="number"
+                      value={form.year}
+                      onChange={(e) =>
+                        setForm(prev => ({
+                          ...prev,
+                          year: parseInt(e.target.value) || new Date().getFullYear(),
+                        }))
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div className="mt-4 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowForm(false)}
+                      className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                    >
+                      Цуцлах
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                    >
+                      Хадгалах
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Хаяг
-                </label>
-                <input
-                  type="text"
-                  value={form.address}
-                  onChange={(e) => setForm(prev => ({ ...prev, address: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Утас
-                </label>
-                <input
-                  type="text"
-                  value={form.phone}
-                  onChange={(e) => setForm(prev => ({ ...prev, phone: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Имэйл
-                </label>
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => setForm(prev => ({ ...prev, email: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Шугамын хоолой
-                </label>
-                <input
-                  type="text"
-                  value={form.connectionNumber}
-                  onChange={(e) => setForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Цэвэр усны суурь хураамж
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={form.baseCleanFee}
-                  onChange={(e) =>
-                    setForm(prev => ({
-                      ...prev,
-                      baseCleanFee: parseFloat(e.target.value) || 0,
-                    }))
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Бохир усны суурь хураамж
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={form.baseDirtyFee}
-                  onChange={(e) =>
-                    setForm(prev => ({
-                      ...prev,
-                      baseDirtyFee: parseFloat(e.target.value) || 0,
-                    }))
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Он
-              </label>
-              <input
-                type="number"
-                value={form.year}
-                onChange={(e) => setForm(prev => ({ ...prev, year: parseInt(e.target.value) || new Date().getFullYear() }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                required
-              />
-            </div>
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-              >
-                Хадгалах
-              </button>
-            </div>
-          </form>
+          </div>
         </div>
       )}
 

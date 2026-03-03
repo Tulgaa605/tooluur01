@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         email: true,
+        code: true,
         name: true,
         role: true,
         year: true,
@@ -58,6 +59,7 @@ export async function PUT(request: NextRequest) {
 
     const updateData: any = {
       name: data.name.trim(),
+      code: data.code?.trim() || null,
       phone: data.phone?.trim() || null,
       organizationId: data.organizationId || null,
     }

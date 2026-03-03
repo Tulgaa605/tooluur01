@@ -2,10 +2,29 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
+type OrganizationCategory =
+  | 'HOUSEHOLD'
+  | 'ORGANIZATION'
+  | 'BUSINESS'
+  | 'TRANSPORT_DISPOSAL'
+  | 'TRANSPORT_RECEPTION'
+  | 'WATER_POINT'
+
+const CATEGORY_LABELS: Record<OrganizationCategory, string> = {
+  HOUSEHOLD: 'Хувь хүн',
+  ORGANIZATION: 'Байгууллага',
+  BUSINESS: 'Аж ахуйн нэгж',
+  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
+  TRANSPORT_RECEPTION: 'Зөөврөөр хүлээн авах',
+  WATER_POINT: 'Ус түгээх байр',
+}
+
 interface Organization {
   id: string
   name: string
   code?: string | null
+  category?: OrganizationCategory
+  connectionNumber?: string | null
 }
 
 interface Tariff {
@@ -20,12 +39,27 @@ interface Tariff {
   dirtyPerM3: number
 }
 
+interface PipeFee {
+  id: string
+  diameterMm: number
+  baseCleanFee: number
+  baseDirtyFee: number
+}
+
 export default function TariffsContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [tariffs, setTariffs] = useState<Tariff[]>([])
+  const [pipeFees, setPipeFees] = useState<PipeFee[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [selectedCategory, setSelectedCategory] = useState<OrganizationCategory | ''>('')
+  const [pipeForm, setPipeForm] = useState({
+    id: '',
+    diameterMm: 0,
+    baseCleanFee: 0,
+    baseDirtyFee: 0,
+  })
 
   const current = useMemo(() => {
     const d = new Date()
@@ -46,16 +80,19 @@ export default function TariffsContent() {
     setLoading(true)
     setMessage(null)
     try {
-      const [orgRes, tariffRes] = await Promise.all([
+      const [orgRes, tariffRes, pipeRes] = await Promise.all([
         fetch('/api/organizations'),
         fetch('/api/tariffs'),
+        fetch('/api/pipe-fees'),
       ])
 
       const orgData = await orgRes.json()
       const tariffData = await tariffRes.json()
+      const pipeData = await pipeRes.json()
 
       setOrganizations(Array.isArray(orgData) ? orgData : [])
       setTariffs(Array.isArray(tariffData) ? tariffData : [])
+      setPipeFees(Array.isArray(pipeData) ? pipeData : [])
     } catch (e: any) {
       setOrganizations([])
       setTariffs([])
@@ -72,6 +109,10 @@ export default function TariffsContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!selectedCategory) {
+      setMessage({ type: 'error', text: 'Хэрэглэгчийн төрлийг эхлээд сонгоно уу' })
+      return
+    }
     setSaving(true)
     setMessage(null)
     try {
@@ -79,7 +120,7 @@ export default function TariffsContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...form,
+          category: selectedCategory,
           year: Number(form.year),
           month: Number(form.month),
           baseCleanFee: Number(form.baseCleanFee),
@@ -106,6 +147,61 @@ export default function TariffsContent() {
     setMessage(null)
     try {
       const res = await fetch(`/api/tariffs?id=${id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
+      await loadAll()
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handlePipeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    setMessage(null)
+    try {
+      const method = pipeForm.id ? 'PUT' : 'POST'
+      const url = pipeForm.id ? '/api/pipe-fees' : '/api/pipe-fees'
+      const body = pipeForm.id ? pipeForm : {
+        diameterMm: Number(pipeForm.diameterMm),
+        baseCleanFee: Number(pipeForm.baseCleanFee),
+        baseDirtyFee: Number(pipeForm.baseDirtyFee),
+      }
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
+
+      setPipeForm({ id: '', diameterMm: 0, baseCleanFee: 0, baseDirtyFee: 0 })
+      await loadAll()
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handlePipeEdit = (fee: PipeFee) => {
+    setPipeForm({
+      id: fee.id,
+      diameterMm: fee.diameterMm,
+      baseCleanFee: fee.baseCleanFee,
+      baseDirtyFee: fee.baseDirtyFee,
+    })
+  }
+
+  const handlePipeDelete = async (id: string) => {
+    if (!confirm('Энэ шугамын голчийн суурь хураамжийг устгах уу?')) return
+    setSaving(true)
+    setMessage(null)
+    try {
+      const res = await fetch(`/api/pipe-fees?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
       await loadAll()
@@ -146,20 +242,21 @@ export default function TariffsContent() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Байгууллага
+                Хэрэглэгчийн төрөл
               </label>
               <select
-                value={form.organizationId}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, organizationId: e.target.value }))
-                }
+                value={selectedCategory}
+                onChange={(e) => {
+                  const value = e.target.value as OrganizationCategory | ''
+                  setSelectedCategory(value)
+                }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md"
                 required
               >
                 <option value="">Сонгох...</option>
-                {organizations.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
+                {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
                   </option>
                 ))}
               </select>
@@ -284,7 +381,10 @@ export default function TariffsContent() {
                 Он-Сар
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Байгууллага
+                Байгууллага / төрөл
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Шугамын хоолой
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Ц суурь
@@ -310,7 +410,11 @@ export default function TariffsContent() {
                   {t.year}-{String(t.month).padStart(2, '0')}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.organization?.name || t.organizationId}
+                  {t.organization?.name}
+                  {t.organization?.code ? ` (${t.organization.code})` : ''}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {t.organization?.connectionNumber || '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {(t.baseCleanFee ?? 0).toFixed(2)}
@@ -342,6 +446,130 @@ export default function TariffsContent() {
             Тариф олдсонгүй
           </div>
         )}
+      </div>
+
+      {/* Pipe fees by inlet diameter */}
+      <div className="mt-8 bg-white p-6 rounded-lg border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">
+          Оролтын шугамын голчийн суурь хураамж
+        </h3>
+        <p className="mb-4 text-sm text-gray-600">
+          Шугамын голч (мм)-оор цэвэр/бохир усны суурь хураамжийг тохируулна.
+        </p>
+
+        <form onSubmit={handlePipeSubmit} className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Шугамын голч (мм)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={pipeForm.diameterMm}
+              onChange={(e) =>
+                setPipeForm((p) => ({ ...p, diameterMm: parseInt(e.target.value) || 0 }))
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Цэвэр усны суурь (₮/сар)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={pipeForm.baseCleanFee}
+              onChange={(e) =>
+                setPipeForm((p) => ({ ...p, baseCleanFee: parseFloat(e.target.value) || 0 }))
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Бохир усны суурь (₮/сар)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={pipeForm.baseDirtyFee}
+              onChange={(e) =>
+                setPipeForm((p) => ({ ...p, baseDirtyFee: parseFloat(e.target.value) || 0 }))
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            />
+          </div>
+          <div className="flex items-end justify-end">
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+            >
+              {pipeForm.id ? 'Шинэчлэх' : 'Нэмэх'}
+            </button>
+          </div>
+        </form>
+
+        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  Шугамын голч (мм)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  Цэвэр усны суурь (₮/сар)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  Бохир усны суурь (₮/сар)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  Үйлдэл
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {pipeFees.map((fee) => (
+                <tr key={fee.id}>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {fee.diameterMm}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {(fee.baseCleanFee ?? 0).toFixed(2)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {(fee.baseDirtyFee ?? 0).toFixed(2)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <button
+                      type="button"
+                      onClick={() => handlePipeEdit(fee)}
+                      className="mr-3 text-blue-600 hover:text-blue-900"
+                    >
+                      Засах
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePipeDelete(fee.id)}
+                      className="text-red-600 hover:text-red-900"
+                    >
+                      Устгах
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {pipeFees.length === 0 && (
+            <div className="text-center py-8 text-sm text-gray-500">
+              Шугамын голчийн суурь хураамж бүртгэгдээгүй байна.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
