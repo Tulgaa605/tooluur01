@@ -7,7 +7,6 @@ interface User {
   id: string
   email: string
   name: string
-  code: string | null
   role: string
   year: number
   phone: string | null
@@ -47,7 +46,6 @@ export default function UsersContent() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
   const [userForm, setUserForm] = useState({
     name: '',
-    code: '',
     email: '',
     phone: '',
     role: 'USER',
@@ -142,7 +140,6 @@ export default function UsersContent() {
     setEditingUserId(user.id)
     setUserForm({
       name: user.name,
-      code: user.code || '',
       email: user.email,
       phone: user.phone || '',
       role: user.role,
@@ -175,9 +172,7 @@ export default function UsersContent() {
     e.preventDefault()
     try {
       const method = editingUserId ? 'PUT' : 'POST'
-      const body = editingUserId
-        ? { ...userForm, id: editingUserId }
-        : userForm
+      const body = editingUserId ? { ...userForm, id: editingUserId } : userForm
 
       const res = await fetch(editingUserId ? '/api/users' : '/api/auth/register', {
         method,
@@ -258,7 +253,7 @@ export default function UsersContent() {
 
       setShowOrgForm(false)
       setEditingOrgId(null)
-      setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear() })
+      setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear(), category: 'HOUSEHOLD' as OrganizationCategory })
       loadOrganizations()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')

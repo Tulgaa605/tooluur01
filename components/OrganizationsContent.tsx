@@ -96,6 +96,7 @@ export default function OrganizationsContent() {
         baseCleanFee: 0,
         baseDirtyFee: 0,
         year: new Date().getFullYear(),
+        category: 'HOUSEHOLD',
       })
       loadOrganizations()
     } catch (err: any) {
