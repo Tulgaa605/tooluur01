@@ -15,6 +15,7 @@ interface Organization {
   name: string
   baseCleanFee?: number
   baseDirtyFee?: number
+  category?: string
 }
 
 interface OrganizationTariff {
@@ -26,6 +27,10 @@ interface OrganizationTariff {
   baseDirtyFee: number
   cleanPerM3: number
   dirtyPerM3: number
+  organization?: {
+    id: string
+    category?: string
+  }
 }
 
 interface Meter {
@@ -72,6 +77,9 @@ interface Reading {
     id?: string
     meterNumber: string
   }
+  // For organizations without an existing meter: allow entering a new meter number in the modal,
+  // then auto-create the meter on save.
+  meterNumberInput?: string
   organizationId?: string
   organization?: {
     name: string
@@ -325,24 +333,41 @@ export default function ReadingsContent() {
     setLoading(true)
     setNewReadings([])
     try {
-      // Бүх заалтыг авч, хамгийн сүүлийн заалтыг тоолуур бүрээр нь олно
-      const res = await fetch('/api/readings')
-      const data = await res.json()
+      // Хамгийн сүүлийн өгөгдөл авахын өмнө байгууллага, тоолуурын жагсаалтыг шинэчилнэ
+      const [orgRes, meterRes, readingsRes] = await Promise.all([
+        fetch('/api/organizations'),
+        fetch('/api/meters'),
+        fetch('/api/readings'),
+      ])
+
+      const orgData = await orgRes.json()
+      if (orgRes.ok && Array.isArray(orgData)) {
+        setOrganizations(orgData)
+      }
+
+      const meterData = await meterRes.json()
+      if (meterRes.ok && Array.isArray(meterData)) {
+        setAllMeters(meterData)
+      }
+
+      const readingsData = await readingsRes.json()
 
       let latest: Reading[] = []
-      if (res.ok && Array.isArray(data)) {
-        latest = data
-        setLatestMeterReadings(data)
+      if (readingsRes.ok && Array.isArray(readingsData)) {
+        latest = readingsData
+        setLatestMeterReadings(readingsData)
       } else {
         setLatestMeterReadings([])
       }
 
-      // Эхлээд бүх тоолуурын мөрийг үүсгэнэ (хамгийн сүүлийн заалт байвал түүн дээр суурилна)
-      let rows: Reading[] = allMeters.map(meter => {
-        const org = organizations.find(o => o.id === meter.organizationId)
-        // /api/readings нь year desc, month desc эрэмбэлэгддэг тул
-        // тухайн тоолуурын эхний олдсон заалт нь хамгийн сүүлийн заалт байна
-        const latestForMeter = latest.find(r => r.meterId === meter.id)
+      const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
+      const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
+
+      // Хэрэглэгч (байгууллага) бүрээр 1 мөр үүсгэнэ.
+      // Хэрэв тоолуур байвал эхний тоолуурыг автоматаар сонгоно, байхгүй бол meterNumberInput-оор шинээр үүсгэнэ.
+      let rows: Reading[] = orgList.map((org) => {
+        const meter = metersList.find((m) => m.organizationId === org.id)
+        const latestForMeter = meter ? latest.find((r) => r.meterId === meter.id) : undefined
 
         let month = new Date().getMonth() + 1
         let year = new Date().getFullYear()
@@ -368,13 +393,23 @@ export default function ReadingsContent() {
           startValue = latestForMeter.endValue ?? 0
         }
 
-        // Суурь/тариф нь хугацаанаас хамаарч өөрчлөгддөг тул тухайн (year, month)-ын тарифаас авна.
-        const tariffForPeriod = tariffs.find(
+        // Суурь/тариф нь хугацаа болон хэрэглэгчийн төрлөөс хамаарч өөрчлөгддөг тул тухайн (year, month)-ын
+        // тарифаас авна. Эхлээд байгууллага дээрх тарифыг, байхгүй бол ижил төрлийн (category) тарифыг ашиглана.
+        let tariffForPeriod = tariffs.find(
           (t) =>
-            t.organizationId === meter.organizationId &&
+            t.organizationId === org.id &&
             t.year === year &&
             t.month === month
         )
+
+        if (!tariffForPeriod && org?.category) {
+          tariffForPeriod = tariffs.find(
+            (t) =>
+              t.organization?.category === org.category &&
+              t.year === year &&
+              t.month === month
+          )
+        }
 
         if (tariffForPeriod) {
           baseClean = tariffForPeriod.baseCleanFee ?? 0
@@ -389,22 +424,15 @@ export default function ReadingsContent() {
 
         return {
           _isNew: true,
-          organizationId: meter.organizationId,
-          organization: meter.organizationId
-            ? {
-                id: meter.organizationId,
-                name:
-                  meter.organization?.name ||
-                  org?.name ||
-                  '-',
-                code:
-                  meter.organization?.code ??
-                  (org as any)?.code ??
-                  null,
-              }
-            : undefined,
-          meterId: meter.id,
-          meter: { meterNumber: meter.meterNumber },
+          organizationId: org.id,
+          organization: {
+            id: org.id,
+            name: org.name || '-',
+            code: (org as any)?.code ?? null,
+          },
+          meterId: meter?.id,
+          meter: meter ? { meterNumber: meter.meterNumber } : undefined,
+          meterNumberInput: '',
           month,
           year,
           startValue,
@@ -438,10 +466,16 @@ export default function ReadingsContent() {
   }
 
   const handleSaveNewReadings = async () => {
-    // Save all new readings
-    const unsavedReadings = newReadings.filter(r => r._isNew && r.meterId)
-    
-    if (unsavedReadings.length === 0) {
+    // Save all new readings:
+    // - if meterId exists -> save directly
+    // - if meterId missing but meterNumberInput exists -> create meter then save
+    const rowsToSave = newReadings.filter((r) => {
+      if (!r._isNew) return false
+      if (r.meterId) return true
+      return !!r.organizationId && (r.meterNumberInput || '').trim() !== ''
+    })
+
+    if (rowsToSave.length === 0) {
       setMessage({ type: 'error', text: 'Хадгалах заалт олдсонгүй' })
       setTimeout(() => setMessage(null), 3000)
       return
@@ -451,12 +485,32 @@ export default function ReadingsContent() {
     setMessage(null)
 
     try {
-      for (const reading of unsavedReadings) {
+      for (const reading of rowsToSave) {
+        let meterId = reading.meterId
+        if (!meterId) {
+          const meterNumber = (reading.meterNumberInput || '').trim()
+          if (!reading.organizationId || meterNumber === '') continue
+
+          const mRes = await fetch('/api/meters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              meterNumber,
+              organizationId: reading.organizationId,
+            }),
+          })
+          const mData = await mRes.json()
+          if (!mRes.ok) {
+            throw new Error(mData?.error || 'Тоолуур үүсгэхэд алдаа гарлаа')
+          }
+          meterId = mData.id
+        }
+
         const res = await fetch('/api/readings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            meterId: reading.meterId,
+            meterId,
             month: reading.month,
             year: reading.year,
             startValue: reading.startValue,
@@ -659,7 +713,143 @@ export default function ReadingsContent() {
         return Number(params.value).toFixed(2)
       },
     },
+    {
+      headerName: 'Б/Суурь хураамж',
+      width: 150,
+      field: 'baseDirty',
+      editable: true,
+      cellEditor: 'agNumberCellEditor',
+      cellEditorParams: {
+        min: 0,
+        precision: 2,
+      },
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Ц/Суурь хураамж',
+      width: 150,
+      field: 'baseClean',
+      editable: true,
+      cellEditor: 'agNumberCellEditor',
+      cellEditorParams: {
+        min: 0,
+        precision: 2,
+      },
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Бохир',
+      width: 120,
+      field: 'dirtyAmount',
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Цэвэр',
+      width: 120,
+      field: 'cleanAmount',
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Нийт',
+      width: 120,
+      field: 'subtotal',
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'НӨАТ',
+      width: 120,
+      field: 'vat',
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Нийт',
+      width: 120,
+      field: 'total',
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Үйлдэл',
+      width: 100,
+      editable: false,
+      cellRenderer: (params: any) => {
+        if (params.data?._isNew) {
+          return (
+            <button
+              onClick={() => {
+                // Remove from newReadings if in modal, otherwise from readings
+                if (showAddModal) {
+                  setNewReadings(prev => prev.filter(r => r !== params.data))
+                } else {
+                  setReadings(prev => prev.filter(r => r !== params.data))
+                }
+              }}
+              className="text-gray-600 hover:text-gray-900 p-1 rounded hover:bg-gray-50 transition-colors"
+              title="Цуцлах"
+            >
+              <span className="text-xs">Цуцлах</span>
+            </button>
+          )
+        }
+        return (
+          <button
+            onClick={() => handleDeleteReading(params.data.id)}
+            className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
+            title="Устгах"
+          >
+            <TrashIcon className="h-5 w-5" />
+          </button>
+        )
+      },
+    },
   ], [allMeters, organizations, MeterCellEditor, showAddModal])
+
+  const modalColumnDefs: ColDef<Reading>[] = useMemo(
+    () => {
+      const base = columnDefs.filter(col =>
+        !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ', 'Үйлдэл'].includes(
+          (col.headerName as string) || ''
+        )
+      )
+
+      const meterInputCol: ColDef<Reading> = {
+        headerName: 'Шинэ тоолуур',
+        width: 160,
+        field: 'meterNumberInput',
+        editable: (params: any) => params.data?._isNew === true && !params.data?.meterId,
+        cellEditor: 'agTextCellEditor',
+        valueGetter: (params: any) => params.data?.meterNumberInput || '',
+      }
+
+      // Insert right after meter selector column
+      const idx = base.findIndex((c) => c.field === 'meterId')
+      if (idx >= 0) {
+        return [...base.slice(0, idx + 1), meterInputCol, ...base.slice(idx + 1)]
+      }
+      return [meterInputCol, ...base]
+    },
+    [columnDefs]
+  )
 
   return (
     <div className="px-4 sm:px-0">
@@ -731,7 +921,7 @@ export default function ReadingsContent() {
                     <AgGridReact
                       ref={modalGridRef}
                       rowData={newReadings}
-                      columnDefs={columnDefs}
+                      columnDefs={modalColumnDefs}
                       defaultColDef={{
                         sortable: true,
                         filter: false,
@@ -760,7 +950,14 @@ export default function ReadingsContent() {
                   <button
                     type="button"
                     onClick={handleSaveNewReadings}
-                    disabled={loading || newReadings.filter(r => r._isNew && r.meterId).length === 0}
+                    disabled={
+                      loading ||
+                      newReadings.filter(
+                        (r) =>
+                          r._isNew &&
+                          (r.meterId || (!!r.organizationId && (r.meterNumberInput || '').trim() !== ''))
+                      ).length === 0
+                    }
                     className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
                   >
                     {loading ? 'Хадгалж байна...' : 'Хадгалах'}
@@ -847,6 +1044,7 @@ export default function ReadingsContent() {
                   sortable: true,
                   filter: true,
                   resizable: true,
+                  flex: 1,
                 }}
                 onCellValueChanged={handleCellValueChanged}
                 pagination={true}

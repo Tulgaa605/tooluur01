@@ -54,6 +54,8 @@ export default function TariffsContent() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [selectedCategory, setSelectedCategory] = useState<OrganizationCategory | ''>('')
+  const [showTariffModal, setShowTariffModal] = useState(false)
+  const [showPipeModal, setShowPipeModal] = useState(false)
   const [pipeForm, setPipeForm] = useState({
     id: '',
     diameterMm: 0,
@@ -194,6 +196,7 @@ export default function TariffsContent() {
       baseCleanFee: fee.baseCleanFee,
       baseDirtyFee: fee.baseDirtyFee,
     })
+    setShowPipeModal(true)
   }
 
   const handlePipeDelete = async (id: string) => {
@@ -237,140 +240,26 @@ export default function TariffsContent() {
         </div>
       )}
 
-      <div className="mb-8 bg-white p-6 rounded-lg border border-gray-200">
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Хэрэглэгчийн төрөл
-              </label>
-              <select
-                value={selectedCategory}
-                onChange={(e) => {
-                  const value = e.target.value as OrganizationCategory | ''
-                  setSelectedCategory(value)
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                required
-              >
-                <option value="">Сонгох...</option>
-                {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Он
-                </label>
-                <input
-                  type="number"
-                  value={form.year}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, year: parseInt(e.target.value) || current.year }))
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Сар
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={12}
-                  value={form.month}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, month: parseInt(e.target.value) || current.month }))
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  required
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Цэвэр усны суурь хураамж
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                value={form.baseCleanFee}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, baseCleanFee: parseFloat(e.target.value) || 0 }))
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Бохир усны суурь хураамж
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                value={form.baseDirtyFee}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, baseDirtyFee: parseFloat(e.target.value) || 0 }))
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Цэвэр ус (₮/м³)
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                value={form.cleanPerM3}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, cleanPerM3: parseFloat(e.target.value) || 0 }))
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Бохир ус (₮/м³)
-              </label>
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                value={form.dirtyPerM3}
-                onChange={(e) =>
-                  setForm((p) => ({ ...p, dirtyPerM3: parseFloat(e.target.value) || 0 }))
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
-            >
-              {saving ? 'Хадгалж байна...' : 'Хадгалах'}
-            </button>
-          </div>
-        </form>
+      <div className="mb-8 flex justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            setForm({
+              organizationId: '',
+              year: current.year,
+              month: current.month,
+              baseCleanFee: 0,
+              baseDirtyFee: 0,
+              cleanPerM3: 0,
+              dirtyPerM3: 0,
+            })
+            setSelectedCategory('')
+            setShowTariffModal(true)
+          }}
+          className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+        >
+          Шинэ тариф нэмэх
+        </button>
       </div>
 
       <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
@@ -450,69 +339,26 @@ export default function TariffsContent() {
 
       {/* Pipe fees by inlet diameter */}
       <div className="mt-8 bg-white p-6 rounded-lg border border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">
-          Оролтын шугамын голчийн суурь хураамж
-        </h3>
-        <p className="mb-4 text-sm text-gray-600">
-          Шугамын голч (мм)-оор цэвэр/бохир усны суурь хураамжийг тохируулна.
-        </p>
-
-        <form onSubmit={handlePipeSubmit} className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="flex items-center justify-between mb-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Шугамын голч (мм)
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={pipeForm.diameterMm}
-              onChange={(e) =>
-                setPipeForm((p) => ({ ...p, diameterMm: parseInt(e.target.value) || 0 }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              required
-            />
+            <h3 className="text-lg font-semibold text-gray-900">
+              Оролтын шугамын голчийн суурь хураамж
+            </h3>
+            <p className="mt-1 text-sm text-gray-600">
+              Шугамын голч (мм)-оор цэвэр/бохир усны суурь хураамжийг тохируулна.
+            </p>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Цэвэр усны суурь (₮/сар)
-            </label>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={pipeForm.baseCleanFee}
-              onChange={(e) =>
-                setPipeForm((p) => ({ ...p, baseCleanFee: parseFloat(e.target.value) || 0 }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Бохир усны суурь (₮/сар)
-            </label>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={pipeForm.baseDirtyFee}
-              onChange={(e) =>
-                setPipeForm((p) => ({ ...p, baseDirtyFee: parseFloat(e.target.value) || 0 }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-            />
-          </div>
-          <div className="flex items-end justify-end">
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
-            >
-              {pipeForm.id ? 'Шинэчлэх' : 'Нэмэх'}
-            </button>
-          </div>
-        </form>
+          <button
+            type="button"
+            onClick={() => {
+              setPipeForm({ id: '', diameterMm: 0, baseCleanFee: 0, baseDirtyFee: 0 })
+              setShowPipeModal(true)
+            }}
+            className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+          >
+            Шугамын голч нэмэх
+          </button>
+        </div>
 
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
@@ -571,7 +417,232 @@ export default function TariffsContent() {
           )}
         </div>
       </div>
+
+      {/* Tariff modal */}
+      {showTariffModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div
+            className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+            onClick={() => setShowTariffModal(false)}
+          />
+          <div className="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all max-w-3xl w-full">
+            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-semibold text-gray-900">Шинэ тариф нэмэх</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowTariffModal(false)}
+                  className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                >
+                  <span className="sr-only">Хаах</span>
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Хэрэглэгчийн төрөл
+                    </label>
+                    <select
+                      value={selectedCategory}
+                      onChange={(e) => {
+                        const value = e.target.value as OrganizationCategory | ''
+                        setSelectedCategory(value)
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      required
+                    >
+                      <option value="">Сонгох...</option>
+                      {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Он</label>
+                      <input
+                        type="number"
+                        value={form.year}
+                        onChange={(e) =>
+                          setForm((p) => ({ ...p, year: parseInt(e.target.value) || current.year }))
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Сар</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={12}
+                        value={form.month}
+                        onChange={(e) =>
+                          setForm((p) => ({ ...p, month: parseInt(e.target.value) || current.month }))
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Цэвэр ус (₮/м³)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.cleanPerM3}
+                      onChange={(e) =>
+                        setForm((p) => ({ ...p, cleanPerM3: parseFloat(e.target.value) || 0 }))
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Бохир ус (₮/м³)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.dirtyPerM3}
+                      onChange={(e) =>
+                        setForm((p) => ({ ...p, dirtyPerM3: parseFloat(e.target.value) || 0 }))
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-4 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTariffModal(false)}
+                    className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                  >
+                    Цуцлах
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {saving ? 'Хадгалж байна...' : 'Хадгалах'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pipe fee modal */}
+      {showPipeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div
+            className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+            onClick={() => setShowPipeModal(false)}
+          />
+
+          <div className="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all max-w-xl w-full">
+            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-semibold text-gray-900">
+                  Шугамын голчийн суурь хураамж {pipeForm.id ? 'засах' : 'нэмэх'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowPipeModal(false)}
+                  className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                >
+                  <span className="sr-only">Хаах</span>
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <form onSubmit={handlePipeSubmit} className="grid grid-cols-1 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Шугамын голч (мм)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={pipeForm.diameterMm}
+                    onChange={(e) =>
+                      setPipeForm((p) => ({ ...p, diameterMm: parseInt(e.target.value) || 0 }))
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Цэвэр усны суурь (₮/сар)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={pipeForm.baseCleanFee}
+                    onChange={(e) =>
+                      setPipeForm((p) => ({ ...p, baseCleanFee: parseFloat(e.target.value) || 0 }))
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Бохир усны суурь (₮/сар)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={pipeForm.baseDirtyFee}
+                    onChange={(e) =>
+                      setPipeForm((p) => ({ ...p, baseDirtyFee: parseFloat(e.target.value) || 0 }))
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 mt-4 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowPipeModal(false)}
+                    className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                  >
+                    Цуцлах
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {pipeForm.id ? 'Шинэчлэх' : 'Нэмэх'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
-
