@@ -135,7 +135,6 @@ export default function UsersContent() {
       })
   }
 
-  // User handlers
   const handleEditUser = (user: User) => {
     setEditingUserId(user.id)
     setUserForm({
@@ -187,13 +186,12 @@ export default function UsersContent() {
       setEditingUserId(null)
       setUserForm({ name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '' })
       loadUsers()
-      loadOrganizations() // Refresh organizations list for dropdown
+      loadOrganizations()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     }
   }
 
-  // Organization handlers
   const handleEditOrg = (org: Organization) => {
     setEditingOrgId(org.id)
     setOrgForm({
