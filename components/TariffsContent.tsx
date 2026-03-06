@@ -29,8 +29,10 @@ interface Organization {
 
 interface Tariff {
   id: string
-  organizationId: string
+  organizationId?: string
   organization?: Organization
+  kind?: 'org' | 'category'
+  category?: OrganizationCategory
   year: number
   month: number
   baseCleanFee: number
@@ -134,8 +136,8 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
 
-      setMessage({ type: 'success', text: 'Тариф амжилттай хадгаллаа' })
       await loadAll()
+      setMessage({ type: 'success', text: data.message || 'Тариф амжилттай хадгаллаа' })
     } catch (e: any) {
       setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
     } finally {
@@ -148,7 +150,12 @@ export default function TariffsContent() {
     setSaving(true)
     setMessage(null)
     try {
-      const res = await fetch(`/api/tariffs?id=${id}`, { method: 'DELETE' })
+      const t = tariffs.find((x) => x.id === id)
+      const url =
+        t?.kind === 'category' && t.category
+          ? `/api/tariffs?kind=category&category=${encodeURIComponent(t.category)}&year=${t.year}&month=${t.month}`
+          : `/api/tariffs?id=${id}`
+      const res = await fetch(url, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
       await loadAll()
@@ -270,7 +277,7 @@ export default function TariffsContent() {
                 Он-Сар
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Байгууллага / төрөл
+                Хэрэглэгчийн төрөл
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Шугамын хоолой
@@ -299,11 +306,14 @@ export default function TariffsContent() {
                   {t.year}-{String(t.month).padStart(2, '0')}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.organization?.name}
-                  {t.organization?.code ? ` (${t.organization.code})` : ''}
+                  {t.kind === 'category'
+                    ? (t.category ? CATEGORY_LABELS[t.category] ?? t.category : '-')
+                    : t.organization?.category
+                      ? (CATEGORY_LABELS[t.organization.category as OrganizationCategory] ?? t.organization.category)
+                      : '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.organization?.connectionNumber || '-'}
+                  {t.kind === 'category' ? '-' : t.organization?.connectionNumber || '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {(t.baseCleanFee ?? 0).toFixed(2)}
@@ -449,10 +459,7 @@ export default function TariffsContent() {
                     </label>
                     <select
                       value={selectedCategory}
-                      onChange={(e) => {
-                        const value = e.target.value as OrganizationCategory | ''
-                        setSelectedCategory(value)
-                      }}
+                      onChange={(e) => setSelectedCategory(e.target.value as OrganizationCategory | '')}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md"
                       required
                     >

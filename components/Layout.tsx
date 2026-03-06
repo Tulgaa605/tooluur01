@@ -13,7 +13,7 @@ const menuItems = [
   { path: '/dashboard', label: 'Хяналтын самбар', roles: ['ACCOUNTANT', 'MANAGER', 'USER'] },
   { path: '/meters', label: 'Тоолуурууд', roles: ['ACCOUNTANT', 'MANAGER'] },
   { path: '/readings', label: 'Сарын заалт', roles: ['ACCOUNTANT'] },
-  { path: '/tariffs', label: 'Тариф', roles: ['ACCOUNTANT'] },
+  { path: '/tariffs', label: 'Тариф', roles: ['ACCOUNTANT', 'MANAGER'] },
   { path: '/billing', label: 'Төлбөр', roles: ['ACCOUNTANT', 'USER'] },
   { path: '/reports', label: 'Тайлан', roles: ['MANAGER'] },
   { path: '/users', label: 'Хэрэглэгчид', roles: ['ACCOUNTANT'] },

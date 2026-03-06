@@ -16,6 +16,58 @@ function validateMonthYear(month: number, year: number) {
   return null
 }
 
+type CategoryTariffDoc = {
+  _id: any
+  category: string
+  year: number
+  month: number
+  baseCleanFee: number
+  baseDirtyFee: number
+  cleanPerM3: number
+  dirtyPerM3: number
+  createdAt?: Date
+  updatedAt?: Date
+}
+
+function extractMongoBatch(result: any): any[] {
+  if (!result) return []
+  const cursor = result.cursor
+  if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) return cursor.firstBatch
+  if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) return cursor.nextBatch
+  return []
+}
+
+async function upsertCategoryTariff(params: {
+  category: string
+  year: number
+  month: number
+  baseCleanFee: number
+  baseDirtyFee: number
+  cleanPerM3: number
+  dirtyPerM3: number
+}) {
+  const now = new Date()
+  await prisma.$runCommandRaw({
+    update: 'category_tariffs',
+    updates: [
+      {
+        q: { category: params.category, year: params.year, month: params.month },
+        u: {
+          $set: {
+            baseCleanFee: params.baseCleanFee,
+            baseDirtyFee: params.baseDirtyFee,
+            cleanPerM3: params.cleanPerM3,
+            dirtyPerM3: params.dirtyPerM3,
+            updatedAt: now,
+          },
+          $setOnInsert: { createdAt: now },
+        },
+        upsert: true,
+      },
+    ],
+  } as any)
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
@@ -39,10 +91,38 @@ export async function GET(request: NextRequest) {
       orderBy: [{ year: 'desc' }, { month: 'desc' }, { updatedAt: 'desc' }],
     })
 
-    return NextResponse.json(tariffs)
+    const includeCategory = searchParams.get('includeCategory') === '1'
+    if (!includeCategory) return NextResponse.json(tariffs)
+
+    const catFilter: any = {}
+    if (year) catFilter.year = year
+    const catFind = await prisma.$runCommandRaw({
+      find: 'category_tariffs',
+      filter: catFilter,
+      sort: { year: -1, month: -1, updatedAt: -1 },
+      limit: 500,
+    } as any)
+    const catDocs = extractMongoBatch(catFind) as CategoryTariffDoc[]
+    const categoryTariffs = catDocs.map((d: any) => ({
+      id: `category:${d.category}:${d.year}:${d.month}`,
+      kind: 'category',
+      category: d.category,
+      year: d.year,
+      month: d.month,
+      baseCleanFee: d.baseCleanFee ?? 0,
+      baseDirtyFee: d.baseDirtyFee ?? 0,
+      cleanPerM3: d.cleanPerM3 ?? 0,
+      dirtyPerM3: d.dirtyPerM3 ?? 0,
+      updatedAt: d.updatedAt,
+    }))
+
+    return NextResponse.json([...tariffs, ...categoryTariffs])
   } catch (error: any) {
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
-      return NextResponse.json({ error: error.message }, { status: 403 })
+      return NextResponse.json(
+        { error: 'Энэ үйлдлийг хийх эрх байхгүй байна. Дансны эрхээр нэвтэрнэ үү.' },
+        { status: 403 }
+      )
     }
     return NextResponse.json(
       { error: error.message || 'Алдаа гарлаа' },
@@ -53,8 +133,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT])
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Нэвтрэх эрх шаардлагатай' }, { status: 401 })
 
     const data = await request.json()
 
@@ -67,8 +147,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: validationError }, { status: 400 })
     }
 
-    const baseCleanFee = parseNumberOrDefault(data.baseCleanFee, 0)
-    const baseDirtyFee = parseNumberOrDefault(data.baseDirtyFee, 0)
+    let baseCleanFee = parseNumberOrDefault(data.baseCleanFee, 0)
+    let baseDirtyFee = parseNumberOrDefault(data.baseDirtyFee, 0)
     const cleanPerM3 = parseNumberOrDefault(data.cleanPerM3, 0)
     const dirtyPerM3 = parseNumberOrDefault(data.dirtyPerM3, 0)
 
@@ -79,23 +159,64 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Хэрэв байгууллага сонгосон бол нэг байгууллагад тариф үүсгэнэ (хуучин зан төлөвийг хадгална)
+    const pipeFees = await prisma.pipeFee.findMany({ orderBy: { diameterMm: 'asc' } })
+    const getBaseFromPipe = (connectionNumber: string | null) => {
+      if (!connectionNumber) return null
+      const diam = parseInt(String(connectionNumber).trim(), 10)
+      if (Number.isNaN(diam)) return null
+      const pipe = pipeFees.find((p) => p.diameterMm === diam)
+      return pipe ? { baseCleanFee: pipe.baseCleanFee, baseDirtyFee: pipe.baseDirtyFee } : null
+    }
+
+    // Хэрэв байгууллага сонгосон бол нэг байгууллагад тариф үүсгэнэ
     if (organizationId) {
-      const tariff = await prisma.organizationTariff.create({
-        data: {
-          organizationId,
-          month,
-          year,
-          baseCleanFee,
-          baseDirtyFee,
-          cleanPerM3,
-          dirtyPerM3,
-        },
-        include: {
-          organization: { select: { id: true, name: true, code: true, connectionNumber: true, category: true } },
-        },
+      const org = await prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { connectionNumber: true },
       })
-      return NextResponse.json(tariff)
+      const pipeBase = org ? getBaseFromPipe(org.connectionNumber) : null
+      if (pipeBase) {
+        baseCleanFee = pipeBase.baseCleanFee
+        baseDirtyFee = pipeBase.baseDirtyFee
+      }
+      const existing = await prisma.organizationTariff.findUnique({
+        where: { organizationId_year_month: { organizationId, year, month } },
+        select: { id: true },
+      })
+
+      const tariff = existing
+        ? await prisma.organizationTariff.update({
+            where: { organizationId_year_month: { organizationId, year, month } },
+            data: { baseCleanFee, baseDirtyFee, cleanPerM3, dirtyPerM3 },
+            include: {
+              organization: {
+                select: { id: true, name: true, code: true, connectionNumber: true, category: true },
+              },
+            },
+          })
+        : await prisma.organizationTariff.create({
+            data: {
+              organizationId,
+              month,
+              year,
+              baseCleanFee,
+              baseDirtyFee,
+              cleanPerM3,
+              dirtyPerM3,
+            },
+            include: {
+              organization: {
+                select: { id: true, name: true, code: true, connectionNumber: true, category: true },
+              },
+            },
+          })
+
+      return NextResponse.json({
+        success: true,
+        created: existing ? 0 : 1,
+        updated: existing ? 1 : 0,
+        tariff,
+      })
     }
 
     // Харин байгууллага сонгохгүй, зөвхөн хэрэглэгчийн төрөл (category) сонгосон тохиолдолд
@@ -106,47 +227,71 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const orgs = await prisma.organization.findMany({
-      where: { category },
-      select: { id: true, name: true },
+    // Always persist category tariff so it can be used later (even if no org exists yet)
+    await upsertCategoryTariff({
+      category,
+      year,
+      month,
+      baseCleanFee,
+      baseDirtyFee,
+      cleanPerM3,
+      dirtyPerM3,
     })
 
-    if (orgs.length === 0) {
-      return NextResponse.json(
-        { error: 'Энэ төрөлтэй байгууллага олдсонгүй' },
-        { status: 400 }
-      )
-    }
+    const orgs = await prisma.organization.findMany({
+      where: { category },
+      select: { id: true, name: true, connectionNumber: true },
+    })
 
-    const created: any[] = []
+    let created = 0
+    let updated = 0
     for (const org of orgs) {
-      try {
-        const t = await prisma.organizationTariff.create({
+      const pipeBase = getBaseFromPipe(org.connectionNumber)
+      const orgBaseClean = pipeBase ? pipeBase.baseCleanFee : baseCleanFee
+      const orgBaseDirty = pipeBase ? pipeBase.baseDirtyFee : baseDirtyFee
+
+      const key = { organizationId: org.id, year, month }
+      const existing = await prisma.organizationTariff.findUnique({
+        where: { organizationId_year_month: key },
+        select: { id: true },
+      })
+
+      if (existing) {
+        await prisma.organizationTariff.update({
+          where: { organizationId_year_month: key },
+          data: {
+            baseCleanFee: orgBaseClean,
+            baseDirtyFee: orgBaseDirty,
+            cleanPerM3,
+            dirtyPerM3,
+          },
+        })
+        updated += 1
+      } else {
+        await prisma.organizationTariff.create({
           data: {
             organizationId: org.id,
             month,
             year,
-            baseCleanFee,
-            baseDirtyFee,
+            baseCleanFee: orgBaseClean,
+            baseDirtyFee: orgBaseDirty,
             cleanPerM3,
             dirtyPerM3,
           },
-          include: {
-            organization: { select: { id: true, name: true, code: true, connectionNumber: true, category: true } },
-          },
         })
-        created.push(t)
-      } catch (error: any) {
-        // Аль хэдийн тарифтай байгууллага байвал алдааг үл тоонo (unique constraint)
-        if (error.code !== 'P2002') {
-          throw error
-        }
+        created += 1
       }
     }
 
     return NextResponse.json({
       success: true,
-      count: created.length,
+      created,
+      updated,
+      count: created + updated,
+      message:
+        orgs.length === 0
+          ? 'Төрлийн тариф хадгаллаа. Энэ төрлийн байгууллага одоогоор байхгүй тул байгууллага дээр тариф үүсгэсэнгүй.'
+          : `Амжилттай. Нэмэгдсэн: ${created}, шинэчлэгдсэн: ${updated}`,
     })
   } catch (error: any) {
     if (error.code === 'P2002') {
@@ -156,7 +301,10 @@ export async function POST(request: NextRequest) {
       )
     }
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
-      return NextResponse.json({ error: error.message }, { status: 403 })
+      return NextResponse.json(
+        { error: 'Энэ үйлдлийг хийх эрх байхгүй байна. Дансны эрхээр нэвтэрнэ үү.' },
+        { status: 403 }
+      )
     }
     return NextResponse.json(
       { error: error.message || 'Алдаа гарлаа' },
@@ -202,7 +350,10 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json(updated)
   } catch (error: any) {
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
-      return NextResponse.json({ error: error.message }, { status: 403 })
+      return NextResponse.json(
+        { error: 'Энэ үйлдлийг хийх эрх байхгүй байна. Дансны эрхээр нэвтэрнэ үү.' },
+        { status: 403 }
+      )
     }
     return NextResponse.json(
       { error: error.message || 'Алдаа гарлаа' },
@@ -217,6 +368,21 @@ export async function DELETE(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
+    const kind = searchParams.get('kind')
+    if (kind === 'category') {
+      const category = searchParams.get('category')
+      const month = parseInt(searchParams.get('month') || '', 10)
+      const year = parseInt(searchParams.get('year') || '', 10)
+      const validationError = validateMonthYear(month, year)
+      if (!category || validationError) {
+        return NextResponse.json({ error: 'Category, сар, он шаардлагатай' }, { status: 400 })
+      }
+      await prisma.$runCommandRaw({
+        delete: 'category_tariffs',
+        deletes: [{ q: { category, year, month }, limit: 1 }],
+      } as any)
+      return NextResponse.json({ success: true })
+    }
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'Tariff ID шаардлагатай' }, { status: 400 })
 
@@ -224,7 +390,10 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true })
   } catch (error: any) {
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
-      return NextResponse.json({ error: error.message }, { status: 403 })
+      return NextResponse.json(
+        { error: 'Энэ үйлдлийг хийх эрх байхгүй байна. Дансны эрхээр нэвтэрнэ үү.' },
+        { status: 403 }
+      )
     }
     return NextResponse.json(
       { error: error.message || 'Алдаа гарлаа' },

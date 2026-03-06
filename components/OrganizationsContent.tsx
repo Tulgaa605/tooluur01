@@ -17,8 +17,16 @@ interface Organization {
   category?: string
 }
 
+interface PipeFee {
+  id: string
+  diameterMm: number
+  baseCleanFee: number
+  baseDirtyFee: number
+}
+
 export default function OrganizationsContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [pipeFees, setPipeFees] = useState<PipeFee[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -37,6 +45,13 @@ export default function OrganizationsContent() {
 
   useEffect(() => {
     loadOrganizations()
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/pipe-fees')
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => setPipeFees(Array.isArray(data) ? data : []))
+      .catch(() => setPipeFees([]))
   }, [])
 
   const loadOrganizations = () => {
@@ -265,14 +280,30 @@ export default function OrganizationsContent() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Шугамын хоолой
+                        Шугамын хоолой (мм)
                       </label>
                       <input
                         type="text"
                         value={form.connectionNumber}
-                        onChange={(e) => setForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          const next = { ...form, connectionNumber: val }
+                          const diam = val ? parseInt(String(val).trim(), 10) : NaN
+                          const pipe = !Number.isNaN(diam) && pipeFees.length > 0
+                            ? pipeFees.find(p => p.diameterMm === diam)
+                            : undefined
+                          if (pipe) {
+                            next.baseCleanFee = pipe.baseCleanFee ?? 0
+                            next.baseDirtyFee = pipe.baseDirtyFee ?? 0
+                          }
+                          setForm(next)
+                        }}
+                        placeholder="Жишээ: 50"
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
                       />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Шугамын голч (мм) оруулбал суурь хураамж автоматаар дутуулагдана
+                      </p>
                     </div>
                   </div>
                 <div>

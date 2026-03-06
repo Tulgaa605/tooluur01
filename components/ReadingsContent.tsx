@@ -16,6 +16,14 @@ interface Organization {
   baseCleanFee?: number
   baseDirtyFee?: number
   category?: string
+  connectionNumber?: string | null
+}
+
+interface PipeFee {
+  id: string
+  diameterMm: number
+  baseCleanFee: number
+  baseDirtyFee: number
 }
 
 interface OrganizationTariff {
@@ -31,6 +39,18 @@ interface OrganizationTariff {
     id: string
     category?: string
   }
+}
+
+interface CategoryTariff {
+  id: string
+  kind: 'category'
+  category: string
+  year: number
+  month: number
+  baseCleanFee: number
+  baseDirtyFee: number
+  cleanPerM3: number
+  dirtyPerM3: number
 }
 
 interface Meter {
@@ -94,6 +114,8 @@ export default function ReadingsContent() {
   const [meters, setMeters] = useState<Meter[]>([])
   const [allMeters, setAllMeters] = useState<Meter[]>([])
   const [tariffs, setTariffs] = useState<OrganizationTariff[]>([])
+  const [categoryTariffs, setCategoryTariffs] = useState<CategoryTariff[]>([])
+  const [pipeFees, setPipeFees] = useState<PipeFee[]>([])
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [readings, setReadings] = useState<Reading[]>([])
@@ -128,16 +150,33 @@ export default function ReadingsContent() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/tariffs')
+    fetch('/api/tariffs?includeCategory=1')
       .then(res => {
         if (!res.ok) return res.json().then(() => [])
         return res.json()
       })
       .then(data => {
-        if (Array.isArray(data)) setTariffs(data)
-        else setTariffs([])
+        if (Array.isArray(data)) {
+          const orgTariffs = data.filter((t: any) => !t?.kind) as OrganizationTariff[]
+          const catTariffs = data.filter((t: any) => t?.kind === 'category') as CategoryTariff[]
+          setTariffs(orgTariffs)
+          setCategoryTariffs(catTariffs)
+        } else {
+          setTariffs([])
+          setCategoryTariffs([])
+        }
       })
-      .catch(() => setTariffs([]))
+      .catch(() => {
+        setTariffs([])
+        setCategoryTariffs([])
+      })
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/pipe-fees')
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => (Array.isArray(data) ? setPipeFees(data) : setPipeFees([])))
+      .catch(() => setPipeFees([]))
   }, [])
 
   useEffect(() => {
@@ -334,10 +373,11 @@ export default function ReadingsContent() {
     setNewReadings([])
     try {
       // Хамгийн сүүлийн өгөгдөл авахын өмнө байгууллага, тоолуурын жагсаалтыг шинэчилнэ
-      const [orgRes, meterRes, readingsRes] = await Promise.all([
+      const [orgRes, meterRes, readingsRes, pipeRes] = await Promise.all([
         fetch('/api/organizations'),
         fetch('/api/meters'),
         fetch('/api/readings'),
+        fetch('/api/pipe-fees'),
       ])
 
       const orgData = await orgRes.json()
@@ -362,6 +402,8 @@ export default function ReadingsContent() {
 
       const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
       const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
+      const pipeData = await pipeRes.json().catch(() => [])
+      const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
 
       // Хэрэглэгч (байгууллага) бүрээр 1 мөр үүсгэнэ.
       // Хэрэв тоолуур байвал эхний тоолуурыг автоматаар сонгоно, байхгүй бол meterNumberInput-оор шинээр үүсгэнэ.
@@ -393,31 +435,57 @@ export default function ReadingsContent() {
           startValue = latestForMeter.endValue ?? 0
         }
 
-        // Суурь/тариф нь хугацаа болон хэрэглэгчийн төрлөөс хамаарч өөрчлөгддөг тул тухайн (year, month)-ын
-        // тарифаас авна. Эхлээд байгууллага дээрх тарифыг, байхгүй бол ижил төрлийн (category) тарифыг ашиглана.
+        // Суурь хураамж нь шугамын хоолойгоор (PipeFee) тодорхойлогдоно. Хэрэглэгч "Шугамын хоолой 50" гэж
+        // бүртгэсэн бол 50мм-ийн PipeFee-аас суурь авна. М³-ийн үнэ (cleanPerM3, dirtyPerM3) нь тарифаас ирнэ.
+        const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
+        const pipeFee = !Number.isNaN(pipeDiam) && pipes.length > 0
+          ? pipes.find((p) => p.diameterMm === pipeDiam)
+          : undefined
+        if (pipeFee) {
+          baseClean = pipeFee.baseCleanFee ?? 0
+          baseDirty = pipeFee.baseDirtyFee ?? 0
+        }
+
+        // М³-ийн үнэ болон тарифын суурь (шугам олдоогүй тохиолдолд) нь (year, month)-ын тарифаас ирнэ.
         let tariffForPeriod = tariffs.find(
           (t) =>
             t.organizationId === org.id &&
             t.year === year &&
             t.month === month
         )
-
         if (!tariffForPeriod && org?.category) {
-          tariffForPeriod = tariffs.find(
-            (t) =>
-              t.organization?.category === org.category &&
-              t.year === year &&
-              t.month === month
+          const cat = categoryTariffs.find(
+            (t) => t.category === org.category && t.year === year && t.month === month
           )
+          if (cat) {
+            tariffForPeriod = {
+              id: cat.id,
+              organizationId: org.id,
+              year: cat.year,
+              month: cat.month,
+              baseCleanFee: cat.baseCleanFee,
+              baseDirtyFee: cat.baseDirtyFee,
+              cleanPerM3: cat.cleanPerM3,
+              dirtyPerM3: cat.dirtyPerM3,
+              organization: { id: org.id, category: org.category },
+            }
+          } else {
+            tariffForPeriod = tariffs.find(
+              (t) =>
+                t.organization?.category === org.category &&
+                t.year === year &&
+                t.month === month
+            )
+          }
         }
-
         if (tariffForPeriod) {
-          baseClean = tariffForPeriod.baseCleanFee ?? 0
-          baseDirty = tariffForPeriod.baseDirtyFee ?? 0
+          if (!pipeFee) {
+            baseClean = tariffForPeriod.baseCleanFee ?? 0
+            baseDirty = tariffForPeriod.baseDirtyFee ?? 0
+          }
           cleanPerM3 = tariffForPeriod.cleanPerM3 ?? 0
           dirtyPerM3 = tariffForPeriod.dirtyPerM3 ?? 0
-        } else if (org) {
-          // Fallback: organization defaults (no tariff row for that month)
+        } else if (org && !pipeFee) {
           baseClean = org.baseCleanFee ?? 0
           baseDirty = org.baseDirtyFee ?? 0
         }
@@ -436,7 +504,7 @@ export default function ReadingsContent() {
           month,
           year,
           startValue,
-          endValue: 0,
+          endValue: startValue,
           usage: 0,
           baseClean,
           baseDirty,
@@ -475,8 +543,26 @@ export default function ReadingsContent() {
       return !!r.organizationId && (r.meterNumberInput || '').trim() !== ''
     })
 
+    const rowsWithDataButNoMeter = newReadings.filter((r) => {
+      if (!r._isNew || !r.organizationId) return false
+      const hasMeter = !!r.meterId || ((r.meterNumberInput || '').trim() !== '')
+      if (hasMeter) return false
+      const hasReading = (r.endValue ?? 0) !== 0 || (r.startValue ?? 0) !== 0
+      return hasReading
+    })
+
+    if (rowsWithDataButNoMeter.length > 0) {
+      const names = rowsWithDataButNoMeter.map((r) => r.organization?.name || '-').join(', ')
+      setMessage({
+        type: 'error',
+        text: `Заалт оруулсан боловч тоолуур байхгүй мөр байна. Хэрэглэгч: ${names}. «Шинэ тоолуур» баганад тоолуурын дугаар оруулна уу эсвэл мөрийг цуцлах товч дарна уу.`,
+      })
+      setTimeout(() => setMessage(null), 6000)
+      return
+    }
+
     if (rowsToSave.length === 0) {
-      setMessage({ type: 'error', text: 'Хадгалах заалт олдсонгүй' })
+      setMessage({ type: 'error', text: 'Хадгалах заалт олдсонгүй. Тоолуур сонгоно уу эсвэл тоолуургүй мөрөнд «Шинэ тоолуур» оруулна уу.' })
       setTimeout(() => setMessage(null), 3000)
       return
     }
@@ -915,9 +1001,13 @@ export default function ReadingsContent() {
                   </div>
                 )}
 
+                <p className="mb-4 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-4 py-3">
+                  <strong>Мэдэгдэл:</strong> Эхний заалт нь өмнөх сарын эцсийн заалтаас автоматаар дутуулагдана. Эцсийн заалтын баганад тоолуурын одоогийн уншилтыг оруулна уу. Тоолуургүй хэрэглэгчид эхлээд «Шинэ тоолуур» баганад тоолуурын дугаар оруулбал тухайн мөрийг хадгалж болно.
+                </p>
+
                 {/* Grid in Modal */}
-                <div className="flex-1 overflow-hidden">
-                  <div className="ag-theme-alpine" style={{ height: '500px', width: '100%' }}>
+                <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0">
+                  <div className="ag-theme-alpine" style={{ height: '500px', minWidth: 'max-content', width: '100%' }}>
                     <AgGridReact
                       ref={modalGridRef}
                       rowData={newReadings}
@@ -1029,8 +1119,8 @@ export default function ReadingsContent() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="ag-theme-alpine" style={{ height: '600px', width: '100%' }}>
+        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+          <div className="ag-theme-alpine" style={{ height: '600px', minWidth: 'max-content', width: '100%' }}>
             {readingsLoading ? (
               <div className="flex items-center justify-center h-full text-gray-600">
                 Ачааллаж байна...
@@ -1044,7 +1134,6 @@ export default function ReadingsContent() {
                   sortable: true,
                   filter: true,
                   resizable: true,
-                  flex: 1,
                 }}
                 onCellValueChanged={handleCellValueChanged}
                 pagination={true}
