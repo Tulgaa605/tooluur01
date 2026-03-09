@@ -229,26 +229,13 @@ export default function TariffsContent() {
 
   return (
     <div className="px-4 sm:px-0">
-      <div className="mb-8">
-        <h2 className="text-2xl font-semibold text-gray-900">Тариф</h2>
-        <p className="mt-1 text-sm text-gray-600">
-          Сар бүрийн “цэвэр/бохир суурь хураамж” (мөн м³-ийн үнэ) оруулна.
-        </p>
-      </div>
-
-      {message && (
-        <div
-          className={`mb-6 p-4 rounded-md ${
-            message.type === 'success'
-              ? 'bg-green-50 text-green-800 border border-green-200'
-              : 'bg-red-50 text-red-800 border border-red-200'
-          }`}
-        >
-          {message.text}
+      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Тариф</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Сар бүрийн «цэвэр/бохир суурь хураамж» (мөн м³-ийн үнэ) оруулна.
+          </p>
         </div>
-      )}
-
-      <div className="mb-8 flex justify-end">
         <button
           type="button"
           onClick={() => {
@@ -264,11 +251,23 @@ export default function TariffsContent() {
             setSelectedCategory('')
             setShowTariffModal(true)
           }}
-          className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+          className="shrink-0 px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
           Шинэ тариф нэмэх
         </button>
       </div>
+
+      {message && (
+        <div
+          className={`mb-6 p-4 rounded-md ${
+            message.type === 'success'
+              ? 'bg-green-50 text-green-800 border border-green-200'
+              : 'bg-red-50 text-red-800 border border-red-200'
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
 
       <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
         <table className="min-w-full divide-y divide-gray-200">

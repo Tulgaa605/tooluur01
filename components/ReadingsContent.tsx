@@ -707,8 +707,8 @@ export default function ReadingsContent() {
     },
     {
       headerName: 'Хэрэглэгчийн нэр',
-      flex: 1,
-      minWidth: 120,
+      width: 180,
+      minWidth: 140,
       editable: false,
       valueGetter: (params: any) => params.data?.organization?.name || '-',
     },
@@ -1081,8 +1081,8 @@ export default function ReadingsContent() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto w-full">
-          <div className="ag-theme-alpine w-full" style={{ height: '600px', width: '100%' }}>
+        <div className="bg-white rounded-lg border border-gray-200 w-full">
+          <div className="ag-theme-alpine" style={{ height: '600px', width: '100%' }}>
             {readingsLoading ? (
               <div className="flex items-center justify-center h-full text-gray-600">
                 Ачааллаж байна...
@@ -1097,7 +1097,6 @@ export default function ReadingsContent() {
                   filter: true,
                   resizable: true,
                 }}
-                onGridReady={(e) => e.api.sizeColumnsToFit()}
                 onCellValueChanged={handleCellValueChanged}
                 pagination={true}
                 paginationPageSize={20}
