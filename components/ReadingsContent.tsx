@@ -5,7 +5,7 @@ import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule, ICellEditorParams } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
-import { TrashIcon, PlusIcon } from '@heroicons/react/24/outline'
+import { TrashIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
 
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -97,9 +97,6 @@ interface Reading {
     id?: string
     meterNumber: string
   }
-  // For organizations without an existing meter: allow entering a new meter number in the modal,
-  // then auto-create the meter on save.
-  meterNumberInput?: string
   organizationId?: string
   organization?: {
     name: string
@@ -406,7 +403,7 @@ export default function ReadingsContent() {
       const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
 
       // Хэрэглэгч (байгууллага) бүрээр 1 мөр үүсгэнэ.
-      // Хэрэв тоолуур байвал эхний тоолуурыг автоматаар сонгоно, байхгүй бол meterNumberInput-оор шинээр үүсгэнэ.
+      // Хэрэв тоолуур байвал эхний тоолуурыг автоматаар сонгоно.
       let rows: Reading[] = orgList.map((org) => {
         const meter = metersList.find((m) => m.organizationId === org.id)
         const latestForMeter = meter ? latest.find((r) => r.meterId === meter.id) : undefined
@@ -500,7 +497,6 @@ export default function ReadingsContent() {
           },
           meterId: meter?.id,
           meter: meter ? { meterNumber: meter.meterNumber } : undefined,
-          meterNumberInput: '',
           month,
           year,
           startValue,
@@ -534,19 +530,11 @@ export default function ReadingsContent() {
   }
 
   const handleSaveNewReadings = async () => {
-    // Save all new readings:
-    // - if meterId exists -> save directly
-    // - if meterId missing but meterNumberInput exists -> create meter then save
-    const rowsToSave = newReadings.filter((r) => {
-      if (!r._isNew) return false
-      if (r.meterId) return true
-      return !!r.organizationId && (r.meterNumberInput || '').trim() !== ''
-    })
+    const rowsToSave = newReadings.filter((r) => r._isNew && r.meterId)
 
     const rowsWithDataButNoMeter = newReadings.filter((r) => {
       if (!r._isNew || !r.organizationId) return false
-      const hasMeter = !!r.meterId || ((r.meterNumberInput || '').trim() !== '')
-      if (hasMeter) return false
+      if (r.meterId) return false
       const hasReading = (r.endValue ?? 0) !== 0 || (r.startValue ?? 0) !== 0
       return hasReading
     })
@@ -555,14 +543,14 @@ export default function ReadingsContent() {
       const names = rowsWithDataButNoMeter.map((r) => r.organization?.name || '-').join(', ')
       setMessage({
         type: 'error',
-        text: `Заалт оруулсан боловч тоолуур байхгүй мөр байна. Хэрэглэгч: ${names}. «Шинэ тоолуур» баганад тоолуурын дугаар оруулна уу эсвэл мөрийг цуцлах товч дарна уу.`,
+        text: `Заалт оруулсан боловч тоолуур сонгоогүй мөр байна. Хэрэглэгч: ${names}. Тоолуур сонгоно уу эсвэл мөрийг цуцлах товч дарна уу.`,
       })
       setTimeout(() => setMessage(null), 6000)
       return
     }
 
     if (rowsToSave.length === 0) {
-      setMessage({ type: 'error', text: 'Хадгалах заалт олдсонгүй. Тоолуур сонгоно уу эсвэл тоолуургүй мөрөнд «Шинэ тоолуур» оруулна уу.' })
+      setMessage({ type: 'error', text: 'Хадгалах заалт олдсонгүй. Тоолуур сонгосон мөрөнд эцсийн заалт оруулж хадгална уу.' })
       setTimeout(() => setMessage(null), 3000)
       return
     }
@@ -572,26 +560,7 @@ export default function ReadingsContent() {
 
     try {
       for (const reading of rowsToSave) {
-        let meterId = reading.meterId
-        if (!meterId) {
-          const meterNumber = (reading.meterNumberInput || '').trim()
-          if (!reading.organizationId || meterNumber === '') continue
-
-          const mRes = await fetch('/api/meters', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              meterNumber,
-              organizationId: reading.organizationId,
-            }),
-          })
-          const mData = await mRes.json()
-          if (!mRes.ok) {
-            throw new Error(mData?.error || 'Тоолуур үүсгэхэд алдаа гарлаа')
-          }
-          meterId = mData.id
-        }
-
+        const meterId = reading.meterId!
         const res = await fetch('/api/readings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -882,8 +851,8 @@ export default function ReadingsContent() {
         if (params.data?._isNew) {
           return (
             <button
+              type="button"
               onClick={() => {
-                // Remove from newReadings if in modal, otherwise from readings
                 if (showAddModal) {
                   setNewReadings(prev => prev.filter(r => r !== params.data))
                 } else {
@@ -893,12 +862,13 @@ export default function ReadingsContent() {
               className="text-gray-600 hover:text-gray-900 p-1 rounded hover:bg-gray-50 transition-colors"
               title="Цуцлах"
             >
-              <span className="text-xs">Цуцлах</span>
+              <XMarkIcon className="h-5 w-5" />
             </button>
           )
         }
         return (
           <button
+            type="button"
             onClick={() => handleDeleteReading(params.data.id)}
             className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
             title="Устгах"
@@ -911,29 +881,12 @@ export default function ReadingsContent() {
   ], [allMeters, organizations, MeterCellEditor, showAddModal])
 
   const modalColumnDefs: ColDef<Reading>[] = useMemo(
-    () => {
-      const base = columnDefs.filter(col =>
+    () =>
+      columnDefs.filter((col) =>
         !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ', 'Үйлдэл'].includes(
           (col.headerName as string) || ''
         )
-      )
-
-      const meterInputCol: ColDef<Reading> = {
-        headerName: 'Шинэ тоолуур',
-        width: 160,
-        field: 'meterNumberInput',
-        editable: (params: any) => params.data?._isNew === true && !params.data?.meterId,
-        cellEditor: 'agTextCellEditor',
-        valueGetter: (params: any) => params.data?.meterNumberInput || '',
-      }
-
-      // Insert right after meter selector column
-      const idx = base.findIndex((c) => c.field === 'meterId')
-      if (idx >= 0) {
-        return [...base.slice(0, idx + 1), meterInputCol, ...base.slice(idx + 1)]
-      }
-      return [meterInputCol, ...base]
-    },
+      ),
     [columnDefs]
   )
 
@@ -964,15 +917,16 @@ export default function ReadingsContent() {
 
       {showAddModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+          <div className="flex min-h-full items-center justify-center p-4">
             {/* Backdrop */}
             <div
               className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
               onClick={handleCloseAddModal}
-            ></div>
+              aria-hidden
+            />
 
-            {/* Modal Panel */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-6xl sm:w-full max-h-[90vh] flex flex-col">
+            {/* Modal Panel - төвд байрлуулах */}
+            <div className="relative z-10 w-full max-w-6xl max-h-[90vh] flex flex-col bg-white rounded-lg shadow-xl overflow-hidden">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4 flex flex-col flex-1 overflow-hidden">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-2xl font-semibold text-gray-900">Шинэ заалт оруулах</h3>
@@ -1002,7 +956,7 @@ export default function ReadingsContent() {
                 )}
 
                 <p className="mb-4 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-4 py-3">
-                  <strong>Мэдэгдэл:</strong> Эхний заалт нь өмнөх сарын эцсийн заалтаас автоматаар дутуулагдана. Эцсийн заалтын баганад тоолуурын одоогийн уншилтыг оруулна уу. Тоолуургүй хэрэглэгчид эхлээд «Шинэ тоолуур» баганад тоолуурын дугаар оруулбал тухайн мөрийг хадгалж болно.
+                  <strong>Мэдэгдэл:</strong> Эхний заалт нь өмнөх сарын эцсийн заалтаас автоматаар дутуулагдана. Эцсийн заалтын баганад тоолуурын одоогийн уншилтыг оруулна уу. Тоолуургүй байгууллагад эхлээд «Тоолуурууд» хуудсаас тоолуур нэмнэ үү.
                 </p>
 
                 {/* Grid in Modal */}
@@ -1042,11 +996,7 @@ export default function ReadingsContent() {
                     onClick={handleSaveNewReadings}
                     disabled={
                       loading ||
-                      newReadings.filter(
-                        (r) =>
-                          r._isNew &&
-                          (r.meterId || (!!r.organizationId && (r.meterNumberInput || '').trim() !== ''))
-                      ).length === 0
+                      newReadings.filter((r) => r._isNew && r.meterId).length === 0
                     }
                     className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
                   >

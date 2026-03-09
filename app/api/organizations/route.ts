@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser, requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
 
 export async function GET(request: NextRequest) {
   try {
@@ -85,7 +86,13 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    return NextResponse.json(organization)
+    // Энэ төрлийн тариф бүртгэлтэй бол байгууллага дээр автоматаар тариф үүсгэнэ
+    const tariffsApplied = await applyCategoryTariffsToOrganization(organization.id)
+
+    return NextResponse.json({
+      ...organization,
+      tariffsApplied,
+    })
   } catch (error: any) {
     console.error('Organization creation error:', error)
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {

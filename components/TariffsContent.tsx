@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 
 type OrganizationCategory =
   | 'HOUSEHOLD'
@@ -328,13 +329,17 @@ export default function TariffsContent() {
                   {(t.dirtyPerM3 ?? 0).toFixed(2)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <button
-                    onClick={() => handleDelete(t.id)}
-                    disabled={saving}
-                    className="text-red-600 hover:text-red-900 disabled:opacity-50"
-                  >
-                    Устгах
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(t.id)}
+                      disabled={saving}
+                      className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                      title="Устгах"
+                    >
+                      <TrashIcon className="h-5 w-5" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -401,20 +406,24 @@ export default function TariffsContent() {
                     {(fee.baseDirtyFee ?? 0).toFixed(2)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    <button
-                      type="button"
-                      onClick={() => handlePipeEdit(fee)}
-                      className="mr-3 text-blue-600 hover:text-blue-900"
-                    >
-                      Засах
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handlePipeDelete(fee.id)}
-                      className="text-red-600 hover:text-red-900"
-                    >
-                      Устгах
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handlePipeEdit(fee)}
+                        className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors"
+                        title="Засах"
+                      >
+                        <PencilIcon className="h-5 w-5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePipeDelete(fee.id)}
+                        className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
+                        title="Устгах"
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
         id: true,
         meterNumber: true,
         organizationId: true,
-        // year: true, // Temporarily commented out until Prisma client is regenerated
+        year: true,
         organization: {
           select: {
             id: true,
@@ -59,11 +59,14 @@ export async function POST(request: NextRequest) {
     const data = await request.json()
 
     const currentYear = new Date().getFullYear()
+    const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
+      ? data.year
+      : currentYear
     const meter = await prisma.meter.create({
       data: {
         meterNumber: data.meterNumber,
         organizationId: data.organizationId,
-        // year: data.year || currentYear, // Temporarily commented out until Prisma client is regenerated
+        year,
       },
     })
 
@@ -99,12 +102,15 @@ export async function PUT(request: NextRequest) {
     }
 
     const currentYear = new Date().getFullYear()
+    const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
+      ? data.year
+      : currentYear
     const meter = await prisma.meter.update({
       where: { id: data.id },
       data: {
         meterNumber: data.meterNumber.trim(),
         organizationId: data.organizationId,
-        // year: data.year || currentYear, // Temporarily commented out until Prisma client is regenerated
+        year,
       },
     })
 

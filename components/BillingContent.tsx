@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { ArrowDownTrayIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
 
 interface Reading {
   id: string
@@ -164,17 +165,21 @@ export default function BillingContent() {
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex gap-2">
                     <button
+                      type="button"
                       onClick={() => handleDownload(reading)}
-                      className="text-primary-600 hover:text-primary-900"
+                      className="text-primary-600 hover:text-primary-900 p-1 rounded hover:bg-primary-50 transition-colors"
+                      title="Татах"
                     >
-                      Татах
+                      <ArrowDownTrayIcon className="h-5 w-5" />
                     </button>
                     <button
+                      type="button"
                       onClick={() => handleSendNotification(reading)}
                       disabled={sending === reading.id}
-                      className="text-green-600 hover:text-green-900 disabled:opacity-50"
+                      className="text-green-600 hover:text-green-900 p-1 rounded hover:bg-green-50 transition-colors disabled:opacity-50"
+                      title={sending === reading.id ? 'Илгээж байна...' : 'Илгээх'}
                     >
-                      {sending === reading.id ? 'Илгээж байна...' : 'Илгээх'}
+                      <PaperAirplaneIcon className="h-5 w-5" />
                     </button>
                   </div>
                 </td>

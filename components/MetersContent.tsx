@@ -23,9 +23,11 @@ export default function MetersContent() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const currentYear = new Date().getFullYear()
   const [form, setForm] = useState({
     meterNumber: '',
     organizationId: '',
+    year: currentYear,
   })
 
   useEffect(() => {
@@ -92,7 +94,7 @@ export default function MetersContent() {
 
       setShowForm(false)
       setEditingId(null)
-      setForm({ meterNumber: '', organizationId: '' })
+      setForm({ meterNumber: '', organizationId: '', year: currentYear })
       loadMeters()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -104,6 +106,7 @@ export default function MetersContent() {
     setForm({
       meterNumber: meter.meterNumber,
       organizationId: meter.organizationId,
+      year: meter.year ?? currentYear,
     })
     setShowForm(true)
   }
@@ -139,7 +142,7 @@ export default function MetersContent() {
           onClick={() => {
             setShowForm(!showForm)
             setEditingId(null)
-            setForm({ meterNumber: '', organizationId: '' })
+            setForm({ meterNumber: '', organizationId: '', year: currentYear })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -177,6 +180,20 @@ export default function MetersContent() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md"
                 required
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Он
+              </label>
+              <select
+                value={form.year}
+                onChange={(e) => setForm(prev => ({ ...prev, year: parseInt(e.target.value, 10) }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              >
+                {Array.from({ length: 11 }, (_, i) => currentYear - 5 + i).map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
             </div>
             <div className="flex justify-end">
               <button
