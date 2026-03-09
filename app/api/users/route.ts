@@ -6,8 +6,14 @@ import { Role } from '@/lib/role'
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    const where: { organizationId?: string | null } = {}
+    if (user.organizationId) {
+      where.organizationId = user.organizationId
+    }
     const users = await prisma.user.findMany({
+      where: Object.keys(where).length ? where : undefined,
       select: {
         id: true,
         email: true,
@@ -41,6 +47,7 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
 
     if (!data.id) {
@@ -57,11 +64,27 @@ export async function PUT(request: NextRequest) {
       )
     }
 
+    if (user.organizationId) {
+      const target = await prisma.user.findUnique({
+        where: { id: data.id },
+        select: { organizationId: true },
+      })
+      if (!target || target.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ хэрэглэгчийг засах эрхгүй' },
+          { status: 403 }
+        )
+      }
+    }
+
     const updateData: any = {
       name: data.name.trim(),
       code: data.code?.trim() || null,
       phone: data.phone?.trim() || null,
-      organizationId: data.organizationId || null,
+      organizationId: data.organizationId ?? null,
+    }
+    if (user.organizationId) {
+      updateData.organizationId = user.organizationId
     }
 
     // Only allow role update for MANAGER
@@ -103,9 +126,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
-    if (!user) {
-      throw new Error('Unauthorized')
-    }
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -122,6 +143,19 @@ export async function DELETE(request: NextRequest) {
         { error: 'Та өөрийгөө устгах боломжгүй' },
         { status: 400 }
       )
+    }
+
+    if (user.organizationId) {
+      const target = await prisma.user.findUnique({
+        where: { id },
+        select: { organizationId: true },
+      })
+      if (!target || target.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ хэрэглэгчийг устгах эрхгүй' },
+          { status: 403 }
+        )
+      }
     }
 
     await prisma.user.delete({

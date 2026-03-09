@@ -24,9 +24,9 @@ export async function GET(request: NextRequest) {
     const previousYear = currentMonth === 1 ? currentYear - 1 : currentYear
 
     let whereClause: any = {}
-
-    // USER can only see their own organization's data
     if (user.role === Role.USER && user.organizationId) {
+      whereClause.organizationId = user.organizationId
+    } else if ((user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) && user.organizationId) {
       whereClause.organizationId = user.organizationId
     }
 
@@ -88,16 +88,17 @@ export async function GET(request: NextRequest) {
       monthlyData.push({ month: monthName, usage })
     }
 
-    // Top organizations (only for MANAGER)
     let topOrganizations: Array<{ name: string; usage: number }> = []
     if (user.role === Role.MANAGER) {
       try {
+        const topWhere: any = {
+          month: currentMonth,
+          year: currentYear,
+        }
+        if (user.organizationId) topWhere.organizationId = user.organizationId
         const orgUsage = await prisma.meterReading.groupBy({
           by: ['organizationId'],
-          where: {
-            month: currentMonth,
-            year: currentYear,
-          },
+          where: topWhere,
           _sum: {
             usage: true,
           },

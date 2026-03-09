@@ -74,11 +74,15 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
-    const organizationId = searchParams.get('organizationId')
+    const organizationIdParam = searchParams.get('organizationId')
     const year = searchParams.get('year') ? parseInt(searchParams.get('year') as string, 10) : undefined
 
     const where: any = {}
-    if (organizationId) where.organizationId = organizationId
+    if (user.organizationId) {
+      where.organizationId = user.organizationId
+    } else if (organizationIdParam) {
+      where.organizationId = organizationIdParam
+    }
     if (year) where.year = year
 
     const tariffs = await prisma.organizationTariff.findMany({
@@ -138,9 +142,16 @@ export async function POST(request: NextRequest) {
 
     const data = await request.json()
 
-    const organizationId = data.organizationId as string | undefined
+    let organizationId = data.organizationId as string | undefined
     const category = data.category as string | undefined
     const month = parseInt(String(data.month), 10)
+    if (user.organizationId && organizationId && organizationId !== user.organizationId) {
+      return NextResponse.json(
+        { error: 'Зөвхөн өөрийн байгууллагын тариф тохируулах боломжтой' },
+        { status: 403 }
+      )
+    }
+    if (user.organizationId && !category) organizationId = user.organizationId
     const year = parseInt(String(data.year), 10)
     const validationError = validateMonthYear(month, year)
     if (validationError) {
@@ -338,6 +349,18 @@ export async function PUT(request: NextRequest) {
         { status: 400 }
       )
     }
+    if (user.organizationId) {
+      const existing = await prisma.organizationTariff.findUnique({
+        where: { id: data.id },
+        select: { organizationId: true },
+      })
+      if (!existing || existing.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ тарифыг засах эрхгүй' },
+          { status: 403 }
+        )
+      }
+    }
 
     const updated = await prisma.organizationTariff.update({
       where: { id: data.id },
@@ -385,6 +408,18 @@ export async function DELETE(request: NextRequest) {
     }
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'Tariff ID шаардлагатай' }, { status: 400 })
+    if (user.organizationId) {
+      const tariff = await prisma.organizationTariff.findUnique({
+        where: { id },
+        select: { organizationId: true },
+      })
+      if (!tariff || tariff.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ тарифыг устгах эрхгүй' },
+          { status: 403 }
+        )
+      }
+    }
 
     await prisma.organizationTariff.delete({ where: { id } })
     return NextResponse.json({ success: true })

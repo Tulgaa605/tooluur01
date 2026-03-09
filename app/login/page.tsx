@@ -1,10 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 
 export default function LoginPage() {
-  const router = useRouter()
   const [isRegister, setIsRegister] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -35,8 +33,8 @@ export default function LoginPage() {
         throw new Error(data.error || (isRegister ? 'Бүртгэлд алдаа гарлаа' : 'Нэвтрэхэд алдаа гарлаа'))
       }
 
-      router.push('/dashboard')
-      router.refresh()
+      // Шинэ хэрэглэгчээр нэвтрэхэд бүр шинэ сесс эхлүүлэхийн тулд бүтэн дахин ачаална
+      window.location.href = '/dashboard'
     } catch (err: any) {
       setError(err.message)
     } finally {

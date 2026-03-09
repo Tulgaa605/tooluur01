@@ -6,15 +6,16 @@ import { Role } from '@/lib/role'
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const organizationId = searchParams.get('organizationId')
 
     const where: any = {}
-    if (organizationId) {
+    if (user.organizationId) {
+      where.organizationId = user.organizationId
+    } else if (organizationId) {
       where.organizationId = organizationId
     } else {
-      // Filter to only get meters with valid organizationId
-      // First, get all organization IDs that exist
       const validOrgIds = await prisma.organization.findMany({
         select: { id: true },
       })
@@ -56,7 +57,16 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
+
+    const orgId = user.organizationId || data.organizationId
+    if (user.organizationId && data.organizationId && data.organizationId !== user.organizationId) {
+      return NextResponse.json(
+        { error: 'Зөвхөн өөрийн байгууллагад тоолуур нэмэх боломжтой' },
+        { status: 403 }
+      )
+    }
 
     const currentYear = new Date().getFullYear()
     const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
@@ -65,7 +75,7 @@ export async function POST(request: NextRequest) {
     const meter = await prisma.meter.create({
       data: {
         meterNumber: data.meterNumber,
-        organizationId: data.organizationId,
+        organizationId: orgId,
         year,
       },
     })
@@ -85,6 +95,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
 
     if (!data.id) {
@@ -101,17 +112,32 @@ export async function PUT(request: NextRequest) {
       )
     }
 
+    if (user.organizationId) {
+      const existing = await prisma.meter.findUnique({
+        where: { id: data.id },
+        select: { organizationId: true },
+      })
+      if (!existing || existing.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ тоолуурыг засах эрхгүй' },
+          { status: 403 }
+        )
+      }
+    }
+
     const currentYear = new Date().getFullYear()
     const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
       ? data.year
       : currentYear
+    const updateData: any = {
+      meterNumber: data.meterNumber.trim(),
+      organizationId: data.organizationId,
+      year,
+    }
+    if (user.organizationId) updateData.organizationId = user.organizationId
     const meter = await prisma.meter.update({
       where: { id: data.id },
-      data: {
-        meterNumber: data.meterNumber.trim(),
-        organizationId: data.organizationId,
-        year,
-      },
+      data: updateData,
     })
 
     return NextResponse.json(meter)
@@ -136,6 +162,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -146,7 +173,6 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    // Check if meter has readings
     const meter = await prisma.meter.findUnique({
       where: { id },
       include: {
@@ -160,7 +186,12 @@ export async function DELETE(request: NextRequest) {
         { status: 404 }
       )
     }
-
+    if (user.organizationId && meter.organizationId !== user.organizationId) {
+      return NextResponse.json(
+        { error: 'Энэ тоолуурыг устгах эрхгүй' },
+        { status: 403 }
+      )
+    }
     if (meter.readings.length > 0) {
       return NextResponse.json(
         { error: 'Энэ тоолууртай холбоотой заалт байна. Эхлээд заалтуудыг устгана уу' },

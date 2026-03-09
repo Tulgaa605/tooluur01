@@ -707,7 +707,8 @@ export default function ReadingsContent() {
     },
     {
       headerName: 'Хэрэглэгчийн нэр',
-      width: 200,
+      flex: 1,
+      minWidth: 120,
       editable: false,
       valueGetter: (params: any) => params.data?.organization?.name || '-',
     },
@@ -880,15 +881,26 @@ export default function ReadingsContent() {
     },
   ], [allMeters, organizations, MeterCellEditor, showAddModal])
 
-  const modalColumnDefs: ColDef<Reading>[] = useMemo(
-    () =>
-      columnDefs.filter((col) =>
-        !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ', 'Үйлдэл'].includes(
-          (col.headerName as string) || ''
-        )
-      ),
-    [columnDefs]
-  )
+  const modalColumnDefs: ColDef<Reading>[] = useMemo(() => {
+    const filtered = columnDefs.filter((col) =>
+      !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ', 'Үйлдэл'].includes(
+        (col.headerName as string) || ''
+      )
+    )
+    return filtered.map((col) =>
+      (col.headerName as string) === 'Хэрэглэгчийн нэр'
+        ? { ...col, flex: 1, minWidth: 120, width: undefined }
+        : col
+    )
+  }, [columnDefs])
+
+  useEffect(() => {
+    if (!showAddModal) return
+    const t = setTimeout(() => {
+      modalGridRef.current?.api?.sizeColumnsToFit()
+    }, 100)
+    return () => clearTimeout(t)
+  }, [showAddModal, newReadings.length])
 
   return (
     <div className="px-4 sm:px-0">
@@ -959,9 +971,8 @@ export default function ReadingsContent() {
                   <strong>Мэдэгдэл:</strong> Эхний заалт нь өмнөх сарын эцсийн заалтаас автоматаар дутуулагдана. Эцсийн заалтын баганад тоолуурын одоогийн уншилтыг оруулна уу. Тоолуургүй байгууллагад эхлээд «Тоолуурууд» хуудсаас тоолуур нэмнэ үү.
                 </p>
 
-                {/* Grid in Modal */}
-                <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0">
-                  <div className="ag-theme-alpine" style={{ height: '500px', minWidth: 'max-content', width: '100%' }}>
+                <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 w-full">
+                  <div className="ag-theme-alpine w-full" style={{ height: '500px', width: '100%' }}>
                     <AgGridReact
                       ref={modalGridRef}
                       rowData={newReadings}
@@ -971,6 +982,7 @@ export default function ReadingsContent() {
                         filter: false,
                         resizable: true,
                       }}
+                      onGridReady={(e) => e.api.sizeColumnsToFit()}
                       onCellValueChanged={handleCellValueChanged}
                       pagination={false}
                       domLayout="normal"
@@ -1069,8 +1081,8 @@ export default function ReadingsContent() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
-          <div className="ag-theme-alpine" style={{ height: '600px', minWidth: 'max-content', width: '100%' }}>
+        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto w-full">
+          <div className="ag-theme-alpine w-full" style={{ height: '600px', width: '100%' }}>
             {readingsLoading ? (
               <div className="flex items-center justify-center h-full text-gray-600">
                 Ачааллаж байна...
@@ -1085,6 +1097,7 @@ export default function ReadingsContent() {
                   filter: true,
                   resizable: true,
                 }}
+                onGridReady={(e) => e.api.sizeColumnsToFit()}
                 onCellValueChanged={handleCellValueChanged}
                 pagination={true}
                 paginationPageSize={20}

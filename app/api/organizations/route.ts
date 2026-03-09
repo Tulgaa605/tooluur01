@@ -7,8 +7,14 @@ import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    const where: { id?: string } = {}
+    if (user.organizationId) {
+      where.id = user.organizationId
+    }
     const organizations = await prisma.organization.findMany({
+      where: Object.keys(where).length ? where : undefined,
       orderBy: { name: 'asc' },
     })
 
@@ -27,7 +33,14 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
+    if (user.organizationId) {
+      return NextResponse.json(
+        { error: 'Зөвхөн нэг байгууллагад хамаарах хэрэглэгч шинэ байгууллага үүсгэх боломжгүй' },
+        { status: 403 }
+      )
+    }
 
     if (!data.name || data.name.trim() === '') {
       return NextResponse.json(
@@ -115,12 +128,19 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
 
     if (!data.id) {
       return NextResponse.json(
         { error: 'Байгууллагын ID шаардлагатай' },
         { status: 400 }
+      )
+    }
+    if (user.organizationId && data.id !== user.organizationId) {
+      return NextResponse.json(
+        { error: 'Зөвхөн өөрийн байгууллагыг засах боломжтой' },
+        { status: 403 }
       )
     }
 
@@ -216,6 +236,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -223,6 +244,12 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { error: 'Байгууллагын ID шаардлагатай' },
         { status: 400 }
+      )
+    }
+    if (user.organizationId && id !== user.organizationId) {
+      return NextResponse.json(
+        { error: 'Зөвхөн өөрийн байгууллагыг устгах боломжтой' },
+        { status: 403 }
       )
     }
 

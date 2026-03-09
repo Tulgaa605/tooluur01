@@ -6,17 +6,16 @@ import { Role } from '@/lib/role'
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()))
+    const whereBase: any = { year }
+    if (user.organizationId) whereBase.organizationId = user.organizationId
 
-    // Monthly data
     const monthlyData = []
     for (let month = 1; month <= 12; month++) {
       const readings = await prisma.meterReading.findMany({
-        where: {
-          month,
-          year,
-        },
+        where: { ...whereBase, month },
       })
 
       const usage = readings.reduce((sum, r) => sum + r.usage, 0)
@@ -28,12 +27,9 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Organization data
     const orgUsage = await prisma.meterReading.groupBy({
       by: ['organizationId'],
-      where: {
-        year,
-      },
+      where: whereBase,
       _sum: {
         usage: true,
         total: true,

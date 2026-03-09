@@ -17,11 +17,6 @@ type CategoryTariffDoc = {
   cleanPerM3?: number
   dirtyPerM3?: number
 }
-
-/**
- * Шинэ байгууллага нэмэгдэхэд тухайн төрлийн (category) тариф байвал
- * байгууллага дээр OrganizationTariff үүсгэнэ.
- */
 export async function applyCategoryTariffsToOrganization(organizationId: string): Promise<number> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },

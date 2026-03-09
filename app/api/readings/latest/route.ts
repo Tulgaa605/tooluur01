@@ -12,9 +12,9 @@ export async function GET(request: NextRequest) {
     }
 
     const where: any = {}
-
-    // USER can only see their own organization
     if (user.role === Role.USER && user.organizationId) {
+      where.organizationId = user.organizationId
+    } else if ((user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) && user.organizationId) {
       where.organizationId = user.organizationId
     }
 

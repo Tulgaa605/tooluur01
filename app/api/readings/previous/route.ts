@@ -6,6 +6,7 @@ import { Role } from '@/lib/role'
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const meterId = searchParams.get('meterId')
     const month = parseInt(searchParams.get('month') || '1')
@@ -13,6 +14,15 @@ export async function GET(request: NextRequest) {
 
     if (!meterId) {
       return NextResponse.json({ error: 'Тоолуурын ID шаардлагатай' }, { status: 400 })
+    }
+    if (user.organizationId) {
+      const meter = await prisma.meter.findUnique({
+        where: { id: meterId },
+        select: { organizationId: true },
+      })
+      if (!meter || meter.organizationId !== user.organizationId) {
+        return NextResponse.json({ error: 'Эрх байхгүй' }, { status: 403 })
+      }
     }
 
     // Calculate previous month
