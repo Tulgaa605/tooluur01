@@ -59,11 +59,16 @@ export default function TariffsContent() {
   const [selectedCategory, setSelectedCategory] = useState<OrganizationCategory | ''>('')
   const [showTariffModal, setShowTariffModal] = useState(false)
   const [showPipeModal, setShowPipeModal] = useState(false)
-  const [pipeForm, setPipeForm] = useState({
+  const [pipeForm, setPipeForm] = useState<{
+    id: string
+    diameterMm: string
+    baseCleanFee: string
+    baseDirtyFee: string
+  }>({
     id: '',
-    diameterMm: 0,
-    baseCleanFee: 0,
-    baseDirtyFee: 0,
+    diameterMm: '',
+    baseCleanFee: '',
+    baseDirtyFee: '',
   })
 
   const current = useMemo(() => {
@@ -73,12 +78,12 @@ export default function TariffsContent() {
 
   const [form, setForm] = useState({
     organizationId: '',
-    year: current.year,
-    month: current.month,
-    baseCleanFee: 0,
-    baseDirtyFee: 0,
-    cleanPerM3: 0,
-    dirtyPerM3: 0,
+    year: String(current.year),
+    month: String(current.month),
+    baseCleanFee: '',
+    baseDirtyFee: '',
+    cleanPerM3: '',
+    dirtyPerM3: '',
   })
 
   const loadAll = async () => {
@@ -126,12 +131,12 @@ export default function TariffsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category: selectedCategory,
-          year: Number(form.year),
-          month: Number(form.month),
-          baseCleanFee: Number(form.baseCleanFee),
-          baseDirtyFee: Number(form.baseDirtyFee),
-          cleanPerM3: Number(form.cleanPerM3),
-          dirtyPerM3: Number(form.dirtyPerM3),
+          year: Number(form.year) || current.year,
+          month: Number(form.month) || current.month,
+          baseCleanFee: Number(form.baseCleanFee) || 0,
+          baseDirtyFee: Number(form.baseDirtyFee) || 0,
+          cleanPerM3: Number(form.cleanPerM3) || 0,
+          dirtyPerM3: Number(form.dirtyPerM3) || 0,
         }),
       })
       const data = await res.json()
@@ -174,11 +179,12 @@ export default function TariffsContent() {
     try {
       const method = pipeForm.id ? 'PUT' : 'POST'
       const url = pipeForm.id ? '/api/pipe-fees' : '/api/pipe-fees'
-      const body = pipeForm.id ? pipeForm : {
-        diameterMm: Number(pipeForm.diameterMm),
-        baseCleanFee: Number(pipeForm.baseCleanFee),
-        baseDirtyFee: Number(pipeForm.baseDirtyFee),
-      }
+      const diameterMm = Number(pipeForm.diameterMm) || 0
+      const baseCleanFee = Number(pipeForm.baseCleanFee) || 0
+      const baseDirtyFee = Number(pipeForm.baseDirtyFee) || 0
+      const body = pipeForm.id
+        ? { id: pipeForm.id, diameterMm, baseCleanFee, baseDirtyFee }
+        : { diameterMm, baseCleanFee, baseDirtyFee }
 
       const res = await fetch(url, {
         method,
@@ -188,7 +194,7 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
 
-      setPipeForm({ id: '', diameterMm: 0, baseCleanFee: 0, baseDirtyFee: 0 })
+      setPipeForm({ id: '', diameterMm: '', baseCleanFee: '', baseDirtyFee: '' })
       await loadAll()
     } catch (e: any) {
       setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
@@ -200,9 +206,9 @@ export default function TariffsContent() {
   const handlePipeEdit = (fee: PipeFee) => {
     setPipeForm({
       id: fee.id,
-      diameterMm: fee.diameterMm,
-      baseCleanFee: fee.baseCleanFee,
-      baseDirtyFee: fee.baseDirtyFee,
+      diameterMm: String(fee.diameterMm),
+      baseCleanFee: String(fee.baseCleanFee),
+      baseDirtyFee: String(fee.baseDirtyFee),
     })
     setShowPipeModal(true)
   }
@@ -241,12 +247,12 @@ export default function TariffsContent() {
           onClick={() => {
             setForm({
               organizationId: '',
-              year: current.year,
-              month: current.month,
-              baseCleanFee: 0,
-              baseDirtyFee: 0,
-              cleanPerM3: 0,
-              dirtyPerM3: 0,
+              year: String(current.year),
+              month: String(current.month),
+              baseCleanFee: '',
+              baseDirtyFee: '',
+              cleanPerM3: '',
+              dirtyPerM3: '',
             })
             setSelectedCategory('')
             setShowTariffModal(true)
@@ -365,7 +371,7 @@ export default function TariffsContent() {
           <button
             type="button"
             onClick={() => {
-              setPipeForm({ id: '', diameterMm: 0, baseCleanFee: 0, baseDirtyFee: 0 })
+              setPipeForm({ id: '', diameterMm: '', baseCleanFee: '', baseDirtyFee: '' })
               setShowPipeModal(true)
             }}
             className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
@@ -485,10 +491,9 @@ export default function TariffsContent() {
                       <input
                         type="number"
                         value={form.year}
-                        onChange={(e) =>
-                          setForm((p) => ({ ...p, year: parseInt(e.target.value) || current.year }))
-                        }
+                        onChange={(e) => setForm((p) => ({ ...p, year: e.target.value }))}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        placeholder="0"
                         required
                       />
                     </div>
@@ -499,10 +504,9 @@ export default function TariffsContent() {
                         min={1}
                         max={12}
                         value={form.month}
-                        onChange={(e) =>
-                          setForm((p) => ({ ...p, month: parseInt(e.target.value) || current.month }))
-                        }
+                        onChange={(e) => setForm((p) => ({ ...p, month: e.target.value }))}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        placeholder="0"
                         required
                       />
                     </div>
@@ -519,10 +523,9 @@ export default function TariffsContent() {
                       min={0}
                       step={0.01}
                       value={form.cleanPerM3}
-                      onChange={(e) =>
-                        setForm((p) => ({ ...p, cleanPerM3: parseFloat(e.target.value) || 0 }))
-                      }
+                      onChange={(e) => setForm((p) => ({ ...p, cleanPerM3: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="0"
                     />
                   </div>
                   <div>
@@ -534,10 +537,9 @@ export default function TariffsContent() {
                       min={0}
                       step={0.01}
                       value={form.dirtyPerM3}
-                      onChange={(e) =>
-                        setForm((p) => ({ ...p, dirtyPerM3: parseFloat(e.target.value) || 0 }))
-                      }
+                      onChange={(e) => setForm((p) => ({ ...p, dirtyPerM3: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="0"
                     />
                   </div>
                 </div>
@@ -600,9 +602,10 @@ export default function TariffsContent() {
                     min={1}
                     value={pipeForm.diameterMm}
                     onChange={(e) =>
-                      setPipeForm((p) => ({ ...p, diameterMm: parseInt(e.target.value) || 0 }))
+                      setPipeForm((p) => ({ ...p, diameterMm: e.target.value }))
                     }
                     className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    placeholder="0"
                     required
                   />
                 </div>
@@ -616,9 +619,10 @@ export default function TariffsContent() {
                     step={0.01}
                     value={pipeForm.baseCleanFee}
                     onChange={(e) =>
-                      setPipeForm((p) => ({ ...p, baseCleanFee: parseFloat(e.target.value) || 0 }))
+                      setPipeForm((p) => ({ ...p, baseCleanFee: e.target.value }))
                     }
                     className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    placeholder="0"
                   />
                 </div>
                 <div>
@@ -631,9 +635,10 @@ export default function TariffsContent() {
                     step={0.01}
                     value={pipeForm.baseDirtyFee}
                     onChange={(e) =>
-                      setPipeForm((p) => ({ ...p, baseDirtyFee: parseFloat(e.target.value) || 0 }))
+                      setPipeForm((p) => ({ ...p, baseDirtyFee: e.target.value }))
                     }
                     className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    placeholder="0"
                   />
                 </div>
 

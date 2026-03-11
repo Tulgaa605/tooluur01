@@ -6,16 +6,21 @@ import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
 
 export async function GET(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const where: { id?: string } = {}
-    if (user.organizationId) {
+    const { searchParams } = new URL(request.url)
+    const categoryFilter = searchParams.get('category')
+
+    const where: { id?: string; category?: string } = {}
+    if (categoryFilter === 'HOUSEHOLD') {
+      where.category = 'HOUSEHOLD'
+    } else if (user.organizationId) {
       where.id = user.organizationId
     }
     const organizations = await prisma.organization.findMany({
       where: Object.keys(where).length ? where : undefined,
-      orderBy: { name: 'asc' },
+      orderBy: categoryFilter === 'HOUSEHOLD' ? { createdAt: 'desc' } : { name: 'asc' },
     })
 
     return NextResponse.json(organizations)
@@ -32,15 +37,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
-    if (user.organizationId) {
-      return NextResponse.json(
-        { error: 'Зөвхөн нэг байгууллагад хамаарах хэрэглэгч шинэ байгууллага үүсгэх боломжгүй' },
-        { status: 403 }
-      )
-    }
 
     if (!data.name || data.name.trim() === '') {
       return NextResponse.json(

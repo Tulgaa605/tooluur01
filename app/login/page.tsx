@@ -3,10 +3,8 @@
 import { useState } from 'react'
 
 export default function LoginPage() {
-  const [isRegister, setIsRegister] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -16,24 +14,18 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login'
-      const body = isRegister 
-        ? { email, password, name }
-        : { email, password }
-
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ email, password }),
       })
 
       const data = await res.json()
 
       if (!res.ok) {
-        throw new Error(data.error || (isRegister ? 'Бүртгэлд алдаа гарлаа' : 'Нэвтрэхэд алдаа гарлаа'))
+        throw new Error(data.error || 'Нэвтрэхэд алдаа гарлаа')
       }
 
-      // Шинэ хэрэглэгчээр нэвтрэхэд бүр шинэ сесс эхлүүлэхийн тулд бүтэн дахин ачаална
       window.location.href = '/dashboard'
     } catch (err: any) {
       setError(err.message)
@@ -50,7 +42,7 @@ export default function LoginPage() {
             Усны тоолуурын систем
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            {isRegister ? 'Бүртгүүлэх' : 'Нэвтрэх'}
+            Нэвтрэх
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
@@ -60,22 +52,6 @@ export default function LoginPage() {
             </div>
           )}
           <div className="space-y-4">
-            {isRegister && (
-              <div>
-                <label htmlFor="name" className="block text-sm font-medium text-gray-700">
-                  Нэр
-                </label>
-                <input
-                  id="name"
-                  name="name"
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                />
-              </div>
-            )}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
                 Имэйл
@@ -111,26 +87,7 @@ export default function LoginPage() {
               disabled={loading}
               className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
             >
-              {loading 
-                ? (isRegister ? 'Бүртгэж байна...' : 'Нэвтэрч байна...') 
-                : (isRegister ? 'Бүртгүүлэх' : 'Нэвтрэх')}
-            </button>
-          </div>
-          <div className="text-center">
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegister(!isRegister)
-                setError('')
-                setEmail('')
-                setPassword('')
-                setName('')
-              }}
-              className="text-sm text-primary-600 hover:text-primary-700"
-            >
-              {isRegister 
-                ? 'Аль хэдийн бүртгэлтэй юу? Нэвтрэх' 
-                : 'Бүртгэл байхгүй юу? Бүртгүүлэх'}
+              {loading ? 'Нэвтэрч байна...' : 'Нэвтрэх'}
             </button>
           </div>
         </form>
@@ -138,4 +95,3 @@ export default function LoginPage() {
     </div>
   )
 }
-

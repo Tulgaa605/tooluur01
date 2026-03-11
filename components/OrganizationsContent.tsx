@@ -30,6 +30,7 @@ export default function OrganizationsContent() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const currentYear = new Date().getFullYear()
   const [form, setForm] = useState({
     name: '',
     code: '',
@@ -37,9 +38,9 @@ export default function OrganizationsContent() {
     phone: '',
     email: '',
     connectionNumber: '',
-    baseCleanFee: 0,
-    baseDirtyFee: 0,
-    year: new Date().getFullYear(),
+    baseCleanFee: '',
+    baseDirtyFee: '',
+    year: String(currentYear),
     category: 'HOUSEHOLD',
   })
 
@@ -85,7 +86,13 @@ export default function OrganizationsContent() {
     try {
       const url = editingId ? '/api/organizations' : '/api/organizations'
       const method = editingId ? 'PUT' : 'POST'
-      const body = editingId ? { ...form, id: editingId } : form
+      const body = {
+        ...form,
+        baseCleanFee: Number(form.baseCleanFee) || 0,
+        baseDirtyFee: Number(form.baseDirtyFee) || 0,
+        year: Number(form.year) || currentYear,
+        ...(editingId ? { id: editingId } : {}),
+      }
 
       const res = await fetch(url, {
         method,
@@ -108,9 +115,9 @@ export default function OrganizationsContent() {
         phone: '',
         email: '',
         connectionNumber: '',
-        baseCleanFee: 0,
-        baseDirtyFee: 0,
-        year: new Date().getFullYear(),
+        baseCleanFee: '',
+        baseDirtyFee: '',
+        year: String(currentYear),
         category: 'HOUSEHOLD',
       })
       loadOrganizations()
@@ -128,9 +135,9 @@ export default function OrganizationsContent() {
       phone: org.phone || '',
       email: org.email || '',
       connectionNumber: org.connectionNumber || '',
-      baseCleanFee: org.baseCleanFee ?? 0,
-      baseDirtyFee: org.baseDirtyFee ?? 0,
-      year: org.year,
+      baseCleanFee: String(org.baseCleanFee ?? ''),
+      baseDirtyFee: String(org.baseDirtyFee ?? ''),
+      year: String(org.year),
       category: org.category || 'HOUSEHOLD',
     })
     setShowForm(true)
@@ -177,9 +184,9 @@ export default function OrganizationsContent() {
                 phone: '',
                 email: '',
                 connectionNumber: '',
-                baseCleanFee: 0,
-                baseDirtyFee: 0,
-                year: new Date().getFullYear(),
+                baseCleanFee: '',
+                baseDirtyFee: '',
+                year: String(currentYear),
                 category: 'HOUSEHOLD',
               })
             }
@@ -293,8 +300,8 @@ export default function OrganizationsContent() {
                             ? pipeFees.find(p => p.diameterMm === diam)
                             : undefined
                           if (pipe) {
-                            next.baseCleanFee = pipe.baseCleanFee ?? 0
-                            next.baseDirtyFee = pipe.baseDirtyFee ?? 0
+                            next.baseCleanFee = String(pipe.baseCleanFee ?? '')
+                            next.baseDirtyFee = String(pipe.baseDirtyFee ?? '')
                           }
                           setForm(next)
                         }}
@@ -334,12 +341,10 @@ export default function OrganizationsContent() {
                         step="0.01"
                         value={form.baseCleanFee}
                         onChange={(e) =>
-                          setForm(prev => ({
-                            ...prev,
-                            baseCleanFee: parseFloat(e.target.value) || 0,
-                          }))
+                          setForm(prev => ({ ...prev, baseCleanFee: e.target.value }))
                         }
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        placeholder="0"
                       />
                     </div>
                     <div>
@@ -352,12 +357,10 @@ export default function OrganizationsContent() {
                         step="0.01"
                         value={form.baseDirtyFee}
                         onChange={(e) =>
-                          setForm(prev => ({
-                            ...prev,
-                            baseDirtyFee: parseFloat(e.target.value) || 0,
-                          }))
+                          setForm(prev => ({ ...prev, baseDirtyFee: e.target.value }))
                         }
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        placeholder="0"
                       />
                     </div>
                   </div>
@@ -369,12 +372,10 @@ export default function OrganizationsContent() {
                       type="number"
                       value={form.year}
                       onChange={(e) =>
-                        setForm(prev => ({
-                          ...prev,
-                          year: parseInt(e.target.value) || new Date().getFullYear(),
-                        }))
+                        setForm(prev => ({ ...prev, year: e.target.value }))
                       }
                       className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="0"
                       required
                     />
                   </div>

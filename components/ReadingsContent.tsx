@@ -117,8 +117,8 @@ export default function ReadingsContent() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [readings, setReadings] = useState<Reading[]>([])
   const [readingsLoading, setReadingsLoading] = useState(false)
-  const [filterMonth, setFilterMonth] = useState<number | ''>('')
-  const [filterYear, setFilterYear] = useState<number | ''>('')
+  const [filterMonth, setFilterMonth] = useState('')
+  const [filterYear, setFilterYear] = useState('')
   const [filterOrgId, setFilterOrgId] = useState<string>('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [latestMeterReadings, setLatestMeterReadings] = useState<Reading[]>([])
@@ -201,8 +201,8 @@ export default function ReadingsContent() {
     setReadingsLoading(true)
     try {
       const params = new URLSearchParams()
-      if (filterMonth) params.append('month', filterMonth.toString())
-      if (filterYear) params.append('year', filterYear.toString())
+      if (filterMonth.trim()) params.append('month', filterMonth.trim())
+      if (filterYear.trim()) params.append('year', filterYear.trim())
       if (filterOrgId) params.append('organizationId', filterOrgId)
 
       const res = await fetch(`/api/readings?${params.toString()}`)
@@ -1047,12 +1047,12 @@ export default function ReadingsContent() {
                 </label>
                 <input
                   type="number"
-                  min="1"
-                  max="12"
+                  min={1}
+                  max={12}
                   value={filterMonth}
-                  onChange={(e) => setFilterMonth(e.target.value ? parseInt(e.target.value) : '')}
+                  onChange={(e) => setFilterMonth(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="Бүгд"
+                  placeholder="0"
                 />
               </div>
 
@@ -1063,9 +1063,9 @@ export default function ReadingsContent() {
                 <input
                   type="number"
                   value={filterYear}
-                  onChange={(e) => setFilterYear(e.target.value ? parseInt(e.target.value) : '')}
+                  onChange={(e) => setFilterYear(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="Бүгд"
+                  placeholder="0"
                 />
               </div>
 

@@ -11,14 +11,17 @@ interface ReportData {
 export default function ReportsContent() {
   const [data, setData] = useState<ReportData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [year, setYear] = useState(new Date().getFullYear())
+  const currentYear = new Date().getFullYear()
+  const [year, setYear] = useState(String(currentYear))
 
   useEffect(() => {
     loadReports()
   }, [year])
 
+  const yearNum = Number(year) || currentYear
+
   const loadReports = () => {
-    fetch(`/api/reports?year=${year}`)
+    fetch(`/api/reports?year=${yearNum}`)
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -61,10 +64,11 @@ export default function ReportsContent() {
             type="number"
             value={year}
             onChange={(e) => {
-              setYear(parseInt(e.target.value))
+              setYear(e.target.value)
               setLoading(true)
             }}
             className="px-3 py-2 border border-gray-300 rounded-md"
+            placeholder="0"
           />
         </div>
       </div>

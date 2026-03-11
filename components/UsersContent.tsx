@@ -17,9 +17,10 @@ interface User {
 }
 
 type OrganizationCategory =
+  | 'HOUSEHOLD'          // Хувь хүн
   | 'ORGANIZATION'       // Байгууллага
   | 'BUSINESS'           // Аж ахуйн нэгж
-  | 'TRANSPORT_DISPOSAL' // Зөөврөөр татан зайлуулах
+  | 'TRANSPORT_DISPOSAL'// Зөөврөөр татан зайлуулах
   | 'TRANSPORT_RECEPTION'// Зөөврүүд хүлээн авах
   | 'WATER_POINT'        // Ус түгээх байр
 
@@ -45,13 +46,21 @@ export default function UsersContent() {
   const [showUserForm, setShowUserForm] = useState(false)
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
   const [userForm, setUserForm] = useState({
+    ovog: '',
     name: '',
     email: '',
     phone: '',
     role: 'USER',
     organizationId: '',
     password: '',
+    code: '',
+    address: '',
+    connectionNumber: '15',
   })
+
+  // Хувь хүн (HOUSEHOLD) жагсаалт
+  const [households, setHouseholds] = useState<Organization[]>([])
+  const [householdsLoading, setHouseholdsLoading] = useState(true)
 
   // Organizations state
   const [orgs, setOrgs] = useState<Organization[]>([])
@@ -65,14 +74,15 @@ export default function UsersContent() {
     phone: '',
     email: '',
     connectionNumber: '',
-    year: new Date().getFullYear(),
+    year: String(new Date().getFullYear()),
     category: 'HOUSEHOLD' as OrganizationCategory,
   })
 
   useEffect(() => {
     loadUsers()
     loadOrganizations()
-    fetch('/api/organizations')
+    loadHouseholds()
+    fetch('/api/organizations', { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -81,6 +91,27 @@ export default function UsersContent() {
       })
       .catch(() => setOrganizations([]))
   }, [])
+
+  const loadHouseholds = () => {
+    setHouseholdsLoading(true)
+    fetch('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
+      .then(res => {
+        if (!res.ok) return res.json().then(() => ({ error: true }))
+        return res.json()
+      })
+      .then(data => {
+        if (data && !data.error && Array.isArray(data)) {
+          setHouseholds(data)
+        } else {
+          setHouseholds([])
+        }
+        setHouseholdsLoading(false)
+      })
+      .catch(() => {
+        setHouseholds([])
+        setHouseholdsLoading(false)
+      })
+  }
 
   const loadUsers = () => {
     fetch('/api/users')
@@ -122,7 +153,7 @@ export default function UsersContent() {
         if (data && data.error) {
           setOrgs([])
         } else if (data && Array.isArray(data)) {
-          setOrgs(data)
+          setOrgs(data.filter((o: Organization) => o.category !== 'HOUSEHOLD'))
           setOrganizations(data)
         } else {
           setOrgs([])
@@ -138,12 +169,16 @@ export default function UsersContent() {
   const handleEditUser = (user: User) => {
     setEditingUserId(user.id)
     setUserForm({
+      ovog: '',
       name: user.name,
       email: user.email,
       phone: user.phone || '',
       role: user.role,
       organizationId: user.organizationId || '',
       password: '',
+      code: '',
+      address: '',
+      connectionNumber: '15',
     })
     setShowUserForm(true)
   }
@@ -170,23 +205,47 @@ export default function UsersContent() {
   const handleSubmitUser = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      const method = editingUserId ? 'PUT' : 'POST'
-      const body = editingUserId ? { ...userForm, id: editingUserId } : userForm
-
-      const res = await fetch(editingUserId ? '/api/users' : '/api/auth/register', {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
-
+      if (editingUserId) {
+        const res = await fetch('/api/users', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: editingUserId,
+            name: userForm.name,
+            email: userForm.email,
+            phone: userForm.phone,
+            role: userForm.role,
+            organizationId: userForm.organizationId || null,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
+      } else {
+        const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Хувь хүн'
+        const orgRes = await fetch('/api/organizations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            name: fullName,
+            code: userForm.code?.trim() || null,
+            address: userForm.address?.trim() || null,
+            phone: userForm.phone?.trim() || null,
+            email: userForm.email?.trim() || null,
+            connectionNumber: (userForm.connectionNumber || '15').trim() || '15',
+            category: 'HOUSEHOLD',
+          }),
+        })
+        const orgData = await orgRes.json()
+        if (!orgRes.ok) throw new Error(orgData.error || orgData.message || 'Байгууллага үүсгэхэд алдаа гарлаа')
+        alert('Шинэ хувь хүн амжилттай бүртгэгдлээ.')
+      }
       setShowUserForm(false)
       setEditingUserId(null)
-      setUserForm({ name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '' })
+      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '', code: '', address: '', connectionNumber: '15' })
       loadUsers()
       loadOrganizations()
+      loadHouseholds()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     }
@@ -201,7 +260,7 @@ export default function UsersContent() {
       phone: org.phone || '',
       email: org.email || '',
       connectionNumber: org.connectionNumber || '',
-      year: org.year,
+      year: String(org.year),
       category: (org.category || 'HOUSEHOLD') as OrganizationCategory,
     })
     setShowOrgForm(true)
@@ -235,7 +294,11 @@ export default function UsersContent() {
     try {
       const url = editingOrgId ? '/api/organizations' : '/api/organizations'
       const method = editingOrgId ? 'PUT' : 'POST'
-      const body = editingOrgId ? { ...orgForm, id: editingOrgId } : orgForm
+      const body = {
+        ...orgForm,
+        year: Number(orgForm.year) || new Date().getFullYear(),
+        ...(editingOrgId ? { id: editingOrgId } : {}),
+      }
 
       const res = await fetch(url, {
         method,
@@ -251,7 +314,7 @@ export default function UsersContent() {
 
       setShowOrgForm(false)
       setEditingOrgId(null)
-      setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear(), category: 'HOUSEHOLD' as OrganizationCategory })
+      setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: String(new Date().getFullYear()), category: 'HOUSEHOLD' as OrganizationCategory })
       loadOrganizations()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -306,15 +369,49 @@ export default function UsersContent() {
               onClick={() => {
                 if (!showUserForm) {
                   setEditingUserId(null)
-                  setUserForm({ name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '' })
+                  setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '', code: '', address: '', connectionNumber: '15' })
                 }
                 setShowUserForm(!showUserForm)
               }}
               className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
             >
-              {showUserForm ? 'Цуцлах' : 'Шинэ хэрэглэгч'}
+              {showUserForm ? 'Цуцлах' : 'ШИНЭ ХУВЬ ХҮН'}
             </button>
           </div>
+
+          {householdsLoading ? (
+            <p className="text-gray-500">Ачааллаж байна...</p>
+          ) : (
+            <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Нэр</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хэрэглэгчийн код</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хаяг</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Утас</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Имэйл</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Шугамын хоолой</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {households.map((h) => (
+                    <tr key={h.id}>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.name || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.code || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.address || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.phone || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.email || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.connectionNumber || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {households.length === 0 && (
+                <div className="text-center py-12 text-gray-500">Бүртгэгдсэн хувь хүн байхгүй. Шинэ хувь хүн нэмнэ үү.</div>
+              )}
+            </div>
+          )}
 
           {showUserForm && (
             <div className="fixed inset-0 z-50 overflow-y-auto">
@@ -328,7 +425,7 @@ export default function UsersContent() {
                   <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-xl font-semibold text-gray-900">
-                        {editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хэрэглэгч нэмэх'}
+                        {editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хувь хүн бүртгэх'}
                       </h3>
                       <button
                         onClick={() => setShowUserForm(false)}
@@ -342,89 +439,116 @@ export default function UsersContent() {
                     </div>
 
                     <form onSubmit={handleSubmitUser} className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Нэр
-                          </label>
-                          <input
-                            type="text"
-                            value={userForm.name}
-                            onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Имэйл
-                          </label>
-                          <input
-                            type="email"
-                            value={userForm.email}
-                            onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                            required
-                            disabled={!!editingUserId}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Утас
-                          </label>
-                          <input
-                            type="text"
-                            value={userForm.phone}
-                            onChange={(e) => setUserForm(prev => ({ ...prev, phone: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Эрх
-                          </label>
-                          <select
-                            value={userForm.role}
-                            onChange={(e) => setUserForm(prev => ({ ...prev, role: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                            required
-                          >
-                            <option value="USER">Хэрэглэгч</option>
-                            <option value="ACCOUNTANT">Нягтлан</option>
-                            <option value="MANAGER">Захирал</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Байгууллага
-                        </label>
-                        <select
-                          value={userForm.organizationId}
-                          onChange={(e) => setUserForm(prev => ({ ...prev, organizationId: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                        >
-                          <option value="">Сонгох</option>
-                          {organizations.map(org => (
-                            <option key={org.id} value={org.id}>{org.name}</option>
-                          ))}
-                        </select>
-                      </div>
                       {!editingUserId && (
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Нууц үг
-                          </label>
-                          <input
-                            type="password"
-                            value={userForm.password}
-                            onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                            required={!editingUserId}
-                          />
-                        </div>
+                        <>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Овог</label>
+                              <input
+                                type="text"
+                                value={userForm.ovog}
+                                onChange={(e) => setUserForm(prev => ({ ...prev, ovog: e.target.value }))}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Нэр</label>
+                              <input
+                                type="text"
+                                value={userForm.name}
+                                onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                required
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Хэрэглэгчийн код</label>
+                            <input
+                              type="text"
+                              value={userForm.code}
+                              onChange={(e) => setUserForm(prev => ({ ...prev, code: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Хаяг</label>
+                            <input
+                              type="text"
+                              value={userForm.address}
+                              onChange={(e) => setUserForm(prev => ({ ...prev, address: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Утас</label>
+                              <input
+                                type="text"
+                                value={userForm.phone}
+                                onChange={(e) => setUserForm(prev => ({ ...prev, phone: e.target.value }))}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Имэйл</label>
+                              <input
+                                type="email"
+                                value={userForm.email}
+                                onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Шугамын хоолой</label>
+                            <input
+                              type="text"
+                              value={userForm.connectionNumber}
+                              onChange={(e) => setUserForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              placeholder="15"
+                            />
+                          </div>
+                        </>
+                      )}
+                      {editingUserId && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Нэр</label>
+                            <input
+                              type="text"
+                              value={userForm.name}
+                              onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Имэйл</label>
+                            <input
+                              type="email"
+                              value={userForm.email}
+                              onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              required
+                              disabled
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Утас</label>
+                            <input
+                              type="text"
+                              value={userForm.phone}
+                              onChange={(e) => setUserForm(prev => ({ ...prev, phone: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Эрх</label>
+                            <p className="py-2 text-sm text-gray-600">{getRoleLabel(userForm.role)}</p>
+                          </div>
+                        </>
                       )}
                       <div className="mt-4 flex justify-end gap-3">
                         <button
@@ -448,82 +572,7 @@ export default function UsersContent() {
             </div>
           )}
 
-          {usersLoading ? (
-            <div className="text-gray-600">Ачааллаж байна...</div>
-          ) : (
-            <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Нэр
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Имэйл
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Эрх
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Байгууллага
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Он
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Үйлдэл
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {users.map((user) => (
-                    <tr key={user.id}>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {user.name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {user.email}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                          {getRoleLabel(user.role)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {user.organization?.name || '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {user.year || '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleEditUser(user)}
-                            className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors"
-                            title="Засах"
-                          >
-                            <PencilIcon className="h-5 w-5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteUser(user.id)}
-                            className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
-                            title="Устгах"
-                          >
-                            <TrashIcon className="h-5 w-5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {users.length === 0 && (
-                <div className="text-center py-12 text-gray-500">
-                  Хэрэглэгч олдсонгүй
-                </div>
-              )}
-            </div>
-          )}
+          {/* Хэрэглэгчийн жагсаалт нуугдсан — харуулахгүй */}
         </>
       )}
 
@@ -535,7 +584,7 @@ export default function UsersContent() {
               onClick={() => {
                 if (!showOrgForm) {
                   setEditingOrgId(null)
-                  setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: new Date().getFullYear(), category: 'HOUSEHOLD' as OrganizationCategory })
+                  setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: String(new Date().getFullYear()), category: 'HOUSEHOLD' as OrganizationCategory })
                 }
                 setShowOrgForm(!showOrgForm)
               }}
@@ -586,7 +635,7 @@ export default function UsersContent() {
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Код
+                            Хэрэглэгчийн код
                           </label>
                           <input
                             type="text"
@@ -653,6 +702,7 @@ export default function UsersContent() {
                           onChange={(e) => setOrgForm(prev => ({ ...prev, category: e.target.value as OrganizationCategory }))}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md"
                         >
+                          <option value="HOUSEHOLD">Хувь хүн</option>
                           <option value="ORGANIZATION">Байгууллага</option>
                           <option value="BUSINESS">Аж ахуйн нэгж</option>
                           <option value="TRANSPORT_DISPOSAL">Зөөврөөр татан зайлуулах</option>
@@ -667,8 +717,9 @@ export default function UsersContent() {
                         <input
                           type="number"
                           value={orgForm.year}
-                          onChange={(e) => setOrgForm(prev => ({ ...prev, year: parseInt(e.target.value) || new Date().getFullYear() }))}
+                          onChange={(e) => setOrgForm(prev => ({ ...prev, year: e.target.value }))}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          placeholder="0"
                           required
                         />
                       </div>
