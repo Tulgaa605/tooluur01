@@ -39,7 +39,6 @@ interface Organization {
 export default function UsersContent() {
   const [activeTab, setActiveTab] = useState<'users' | 'organizations'>('users')
   
-  // Users state
   const [users, setUsers] = useState<User[]>([])
   const [usersLoading, setUsersLoading] = useState(true)
   const [organizations, setOrganizations] = useState<Array<{ id: string; name: string }>>([])
@@ -375,7 +374,7 @@ export default function UsersContent() {
               }}
               className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
             >
-              {showUserForm ? 'Цуцлах' : 'ШИНЭ ХУВЬ ХҮН'}
+              {showUserForm ? 'Цуцлах' : 'Шинэ хэрэглэгч'}
             </button>
           </div>
 
@@ -408,7 +407,7 @@ export default function UsersContent() {
                 </tbody>
               </table>
               {households.length === 0 && (
-                <div className="text-center py-12 text-gray-500">Бүртгэгдсэн хувь хүн байхгүй. Шинэ хувь хүн нэмнэ үү.</div>
+                <div className="text-center py-12 text-gray-500">Бүртгэгдсэн хувь хүн байхгүй. Шинэ хэрэглэгч нэмнэ үү.</div>
               )}
             </div>
           )}
@@ -425,7 +424,7 @@ export default function UsersContent() {
                   <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-xl font-semibold text-gray-900">
-                        {editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хувь хүн бүртгэх'}
+                        {editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хэрэглэгч бүртгэх'}
                       </h3>
                       <button
                         onClick={() => setShowUserForm(false)}

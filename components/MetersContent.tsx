@@ -17,14 +17,18 @@ interface Meter {
     name: string
   }
 }
+type OwnerType = 'organization' | 'household'
+
 export default function MetersContent() {
   const [meters, setMeters] = useState<Meter[]>([])
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [households, setHouseholds] = useState<Organization[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const currentYear = new Date().getFullYear()
   const [form, setForm] = useState({
+    ownerType: '' as OwnerType | '',
     meterNumber: '',
     organizationId: '',
     year: currentYear,
@@ -32,23 +36,26 @@ export default function MetersContent() {
 
   useEffect(() => {
     loadMeters()
-    fetch('/api/organizations')
-      .then(res => {
-        if (!res.ok) {
-          return res.json().then(() => [])
-        }
-        return res.json()
-      })
+    fetch('/api/organizations', { credentials: 'include' })
+      .then(res => (res.ok ? res.json() : []))
       .then(data => {
-        if (data && data.error) {
-          setOrganizations([])
-        } else if (data && Array.isArray(data)) {
-          setOrganizations(data)
+        if (Array.isArray(data)) {
+          setOrganizations(data.filter((o: { category?: string }) => o.category !== 'HOUSEHOLD'))
         } else {
           setOrganizations([])
         }
       })
       .catch(() => setOrganizations([]))
+    fetch('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => {
+        if (Array.isArray(data)) {
+          setHouseholds(data)
+        } else {
+          setHouseholds([])
+        }
+      })
+      .catch(() => setHouseholds([]))
   }, [])
 
   const loadMeters = () => {
@@ -79,9 +86,19 @@ export default function MetersContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!editingId && !form.ownerType) {
+      alert('Байгууллага эсвэл Хувь хүн сонгоно уу.')
+      return
+    }
+    if (!editingId && !form.organizationId) {
+      alert('Байгууллага эсвэл Хувь хүнийг сонгоно уу.')
+      return
+    }
     try {
       const method = editingId ? 'PUT' : 'POST'
-      const body = editingId ? { ...form, id: editingId } : form
+      const body = editingId
+        ? { ...form, id: editingId }
+        : { meterNumber: form.meterNumber, organizationId: form.organizationId, year: form.year }
 
       const res = await fetch('/api/meters', {
         method,
@@ -94,7 +111,7 @@ export default function MetersContent() {
 
       setShowForm(false)
       setEditingId(null)
-      setForm({ meterNumber: '', organizationId: '', year: currentYear })
+      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
       loadMeters()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -103,7 +120,9 @@ export default function MetersContent() {
 
   const handleEdit = (meter: Meter) => {
     setEditingId(meter.id)
+    const inHousehold = households.some(h => h.id === meter.organizationId)
     setForm({
+      ownerType: inHousehold ? 'household' : 'organization',
       meterNumber: meter.meterNumber,
       organizationId: meter.organizationId,
       year: meter.year ?? currentYear,
@@ -142,7 +161,7 @@ export default function MetersContent() {
           onClick={() => {
             setShowForm(!showForm)
             setEditingId(null)
-            setForm({ meterNumber: '', organizationId: '', year: currentYear })
+            setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -151,59 +170,133 @@ export default function MetersContent() {
       </div>
 
       {showForm && (
-        <div className="mb-6 bg-white p-6 rounded-lg border border-gray-200">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Байгууллага
-              </label>
-              <select
-                value={form.organizationId}
-                onChange={(e) => setForm(prev => ({ ...prev, organizationId: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                required
-              >
-                <option value="">Сонгох</option>
-                {organizations.map(org => (
-                  <option key={org.id} value={org.id}>{org.name}</option>
-                ))}
-              </select>
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => {
+                setShowForm(false)
+                setEditingId(null)
+                setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+              }}
+              aria-hidden="true"
+            />
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-semibold text-gray-900">
+                    {editingId ? 'Тоолуур засах' : 'Шинэ тоолуур нэмэх'}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForm(false)
+                      setEditingId(null)
+                      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+                    }}
+                    className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                  >
+                    <span className="sr-only">Хаах</span>
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Байгууллага эсвэл Хувь хүн (заавал сонгоно)
+                    </label>
+                    <div className="flex gap-6 mb-3">
+                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="ownerType"
+                          checked={form.ownerType === 'organization'}
+                          onChange={() => setForm(prev => ({ ...prev, ownerType: 'organization', organizationId: '' }))}
+                          className="text-primary-600 border-gray-300"
+                        />
+                        <span>Байгууллага</span>
+                      </label>
+                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="ownerType"
+                          checked={form.ownerType === 'household'}
+                          onChange={() => setForm(prev => ({ ...prev, ownerType: 'household', organizationId: '' }))}
+                          className="text-primary-600 border-gray-300"
+                        />
+                        <span>Хувь хүн</span>
+                      </label>
+                    </div>
+                    {(form.ownerType === 'organization' || form.ownerType === 'household') && (
+                      <select
+                        value={form.organizationId}
+                        onChange={(e) => setForm(prev => ({ ...prev, organizationId: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        required
+                      >
+                        <option value="">Сонгох</option>
+                        {form.ownerType === 'organization' &&
+                          organizations.map(org => (
+                            <option key={org.id} value={org.id}>{org.name}</option>
+                          ))}
+                        {form.ownerType === 'household' &&
+                          households.map(h => (
+                            <option key={h.id} value={h.id}>{h.name}</option>
+                          ))}
+                      </select>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Тоолуурын дугаар
+                    </label>
+                    <input
+                      type="text"
+                      value={form.meterNumber}
+                      onChange={(e) => setForm(prev => ({ ...prev, meterNumber: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Он
+                    </label>
+                    <select
+                      value={form.year}
+                      onChange={(e) => setForm(prev => ({ ...prev, year: parseInt(e.target.value, 10) }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    >
+                      {Array.from({ length: 11 }, (_, i) => currentYear - 5 + i).map((y) => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex justify-end gap-3 mt-4 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowForm(false)
+                        setEditingId(null)
+                        setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+                      }}
+                      className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                    >
+                      Цуцлах
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                    >
+                      {editingId ? 'Шинэчлэх' : 'Хадгалах'}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Тоолуурын дугаар
-              </label>
-              <input
-                type="text"
-                value={form.meterNumber}
-                onChange={(e) => setForm(prev => ({ ...prev, meterNumber: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Он
-              </label>
-              <select
-                value={form.year}
-                onChange={(e) => setForm(prev => ({ ...prev, year: parseInt(e.target.value, 10) }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              >
-                {Array.from({ length: 11 }, (_, i) => currentYear - 5 + i).map((y) => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-              >
-                {editingId ? 'Шинэчлэх' : 'Хадгалах'}
-              </button>
-            </div>
-          </form>
+          </div>
         </div>
       )}
 
