@@ -5,7 +5,7 @@ import { Role } from '@/lib/role'
 
 export async function GET(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const meterId = searchParams.get('meterId')

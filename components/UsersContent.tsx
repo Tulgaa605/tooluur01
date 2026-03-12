@@ -17,16 +17,17 @@ interface User {
 }
 
 type OrganizationCategory =
-  | 'HOUSEHOLD'          // Хувь хүн
-  | 'ORGANIZATION'       // Байгууллага
-  | 'BUSINESS'           // Аж ахуйн нэгж
-  | 'TRANSPORT_DISPOSAL'// Зөөврөөр татан зайлуулах
-  | 'TRANSPORT_RECEPTION'// Зөөврүүд хүлээн авах
-  | 'WATER_POINT'        // Ус түгээх байр
+  | 'HOUSEHOLD'
+  | 'ORGANIZATION'
+  | 'BUSINESS'
+  | 'TRANSPORT_DISPOSAL'
+  | 'TRANSPORT_RECEPTION'
+  | 'WATER_POINT'
 
 interface Organization {
   id: string
   name: string
+  ovog?: string | null
   code: string | null
   address: string | null
   phone: string | null
@@ -225,9 +226,10 @@ export default function UsersContent() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({
-            name: fullName,
-            code: userForm.code?.trim() || null,
+            body: JSON.stringify({
+              name: fullName,
+              ovog: userForm.ovog?.trim() || null,
+              code: userForm.code?.trim() || null,
             address: userForm.address?.trim() || null,
             phone: userForm.phone?.trim() || null,
             email: userForm.email?.trim() || null,
@@ -385,6 +387,7 @@ export default function UsersContent() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Овог</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Нэр</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хэрэглэгчийн код</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хаяг</th>
@@ -396,6 +399,7 @@ export default function UsersContent() {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {households.map((h) => (
                     <tr key={h.id}>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.ovog ?? '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.name || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.code || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.address || '-'}</td>

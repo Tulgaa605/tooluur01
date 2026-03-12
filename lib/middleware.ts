@@ -17,7 +17,6 @@ export function requireAuth(
     throw new Error('Unauthorized')
   }
   if (allowedRoles && allowedRoles.length > 0) {
-    // Convert user.role to string for comparison
     const userRoleString = String(user.role)
     const allowedRoleStrings = allowedRoles.map(r => String(r))
     

@@ -369,11 +369,15 @@ export default function ReadingsContent() {
     setLoading(true)
     setNewReadings([])
     try {
-      // Хамгийн сүүлийн өгөгдөл авахын өмнө байгууллага, тоолуурын жагсаалтыг шинэчилнэ
-      const [orgRes, meterRes, readingsRes, pipeRes] = await Promise.all([
+      const currentMonth = new Date().getMonth() + 1
+      const currentYear = new Date().getFullYear()
+      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1
+      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear
+
+      const [orgRes, meterRes, prevReadingsRes, pipeRes] = await Promise.all([
         fetch('/api/organizations'),
         fetch('/api/meters'),
-        fetch('/api/readings'),
+        fetch(`/api/readings?month=${prevMonth}&year=${prevYear}`),
         fetch('/api/pipe-fees'),
       ])
 
@@ -387,50 +391,26 @@ export default function ReadingsContent() {
         setAllMeters(meterData)
       }
 
-      const readingsData = await readingsRes.json()
-
-      let latest: Reading[] = []
-      if (readingsRes.ok && Array.isArray(readingsData)) {
-        latest = readingsData
-        setLatestMeterReadings(readingsData)
-      } else {
-        setLatestMeterReadings([])
-      }
+      const prevReadingsData = await prevReadingsRes.json()
+      const prevReadings: Reading[] = prevReadingsRes.ok && Array.isArray(prevReadingsData) ? prevReadingsData : []
+      setLatestMeterReadings(prevReadings)
 
       const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
       const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
       const pipeData = await pipeRes.json().catch(() => [])
       const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
 
-      // Хэрэглэгч (байгууллага) бүрээр 1 мөр үүсгэнэ.
-      // Хэрэв тоолуур байвал эхний тоолуурыг автоматаар сонгоно.
+      // Одоогийн сард шинэ заалт: эхний заалт = өмнөх сарын эцсийн заалт (автоматаар)
       let rows: Reading[] = orgList.map((org) => {
         const meter = metersList.find((m) => m.organizationId === org.id)
-        const latestForMeter = meter ? latest.find((r) => r.meterId === meter.id) : undefined
-
-        let month = new Date().getMonth() + 1
-        let year = new Date().getFullYear()
-        let startValue = 0
+        const prevForMeter = meter ? prevReadings.find((r) => r.meterId === meter.id) : undefined
+        const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
+        const month = currentMonth
+        const year = currentYear
         let baseClean = 0
         let baseDirty = 0
         let cleanPerM3 = 0
         let dirtyPerM3 = 0
-
-        if (latestForMeter) {
-          const lastMonth = latestForMeter.month
-          const lastYear = latestForMeter.year
-          if (lastMonth && lastYear) {
-            if (lastMonth === 12) {
-              month = 1
-              year = lastYear + 1
-            } else {
-              month = lastMonth + 1
-              year = lastYear
-            }
-          }
-          // Эхний заалт = хамгийн сүүлийн заалтын эцсийн заалт
-          startValue = latestForMeter.endValue ?? 0
-        }
 
         // Суурь хураамж нь шугамын хоолойгоор (PipeFee) тодорхойлогдоно. Хэрэглэгч "Шугамын хоолой 50" гэж
         // бүртгэсэн бол 50мм-ийн PipeFee-аас суурь авна. М³-ийн үнэ (cleanPerM3, dirtyPerM3) нь тарифаас ирнэ.

@@ -86,6 +86,7 @@ export async function POST(request: NextRequest) {
     const organization = await prisma.organization.create({
       data: {
         name: data.name.trim(),
+        ...(data.ovog !== undefined && { ovog: data.ovog?.trim() || null }),
         code: data.code?.trim() || null,
         address: data.address?.trim() || null,
         phone: data.phone?.trim() || null,
@@ -201,6 +202,7 @@ export async function PUT(request: NextRequest) {
       where: { id: data.id },
       data: {
         name: data.name.trim(),
+        ...(data.ovog !== undefined ? { ovog: data.ovog?.trim() || null } : {}),
         code: data.code?.trim() || null,
         address: data.address?.trim() || null,
         phone: data.phone?.trim() || null,
