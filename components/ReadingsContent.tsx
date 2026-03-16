@@ -1,14 +1,60 @@
 'use client'
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule, ICellEditorParams } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { TrashIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import ConfirmModal from './ConfirmModal'
 
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
+
+/** Тооны нүдний editor: нэг дарж бүх текстийг сонгоно (select all on focus). */
+const NumberCellEditorSelectAll = forwardRef((props: ICellEditorParams, ref: React.Ref<unknown>) => {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [value, setValue] = useState(() =>
+    props.value != null && props.value !== '' ? String(props.value) : '0'
+  )
+  useImperativeHandle(ref, () => ({
+    getValue: () => {
+      const v = inputRef.current?.value ?? ''
+      const n = parseFloat(v)
+      return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
+    },
+  }))
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    // Дараагийн frame-д select() — нэг дарж бүх текст сонгогдоно
+    const id = requestAnimationFrame(() => {
+      el.select()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [])
+  return (
+    <input
+      ref={inputRef}
+      type="number"
+      min={0}
+      step={0.01}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onFocus={(e) => e.target.select()}
+      style={{
+        width: '100%',
+        height: '100%',
+        border: '1px solid #ccc',
+        padding: '4px',
+        fontSize: '14px',
+        boxSizing: 'border-box',
+      }}
+    />
+  )
+})
+NumberCellEditorSelectAll.displayName = 'NumberCellEditorSelectAll'
 
 interface Organization {
   id: string
@@ -45,8 +91,6 @@ interface CategoryTariff {
   id: string
   kind: 'category'
   category: string
-  year: number
-  month: number
   baseCleanFee: number
   baseDirtyFee: number
   cleanPerM3: number
@@ -121,8 +165,11 @@ export default function ReadingsContent() {
   const [filterYear, setFilterYear] = useState('')
   const [filterOrgId, setFilterOrgId] = useState<string>('')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
+  const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
   const [latestMeterReadings, setLatestMeterReadings] = useState<Reading[]>([])
   const [newReadings, setNewReadings] = useState<Reading[]>([])
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const gridRef = useRef<AgGridReact>(null)
   const modalGridRef = useRef<AgGridReact>(null)
 
@@ -209,8 +256,16 @@ export default function ReadingsContent() {
       const data = await res.json()
 
       if (res.ok && Array.isArray(data)) {
-        console.log('Readings data:', data)
-        setReadings(data)
+        const normalized = data.map((r: any) => {
+          const startVal = r.startValue ?? r.start_value
+          const endVal = r.endValue ?? r.end_value
+          return {
+            ...r,
+            startValue: startVal != null && startVal !== '' ? Number(startVal) : 0,
+            endValue: endVal != null && endVal !== '' ? Number(endVal) : 0,
+          }
+        })
+        setReadings(normalized as Reading[])
       } else {
         console.error('Error fetching readings:', data)
         setReadings([])
@@ -344,156 +399,182 @@ export default function ReadingsContent() {
     }
   }, [fetchReadings, showAddModal])
 
-  const handleDeleteReading = async (id: string) => {
-    if (!confirm('Та энэ заалтыг устгахдаа итгэлтэй байна уу?')) {
-      return
-    }
+  const handleDeleteReading = (id: string) => {
+    setDeleteConfirm({ open: true, id })
+  }
 
+  const doDeleteReading = async () => {
+    const id = deleteConfirm.id
+    if (!id) return
+    setDeleteConfirm({ open: false, id: null })
     try {
-      const res = await fetch(`/api/readings?id=${id}`, {
-        method: 'DELETE',
-      })
-
+      const res = await fetch(`/api/readings?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
-
       fetchReadings()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     }
   }
 
+  // Өмнөх сарын заалтаас эхний заалт авч, нэг (org, month, year) мөр үүсгэнэ
+  const buildOneRow = useCallback((
+    org: Organization,
+    meter: Meter | undefined,
+    month: number,
+    year: number,
+    startValue: number,
+    pipes: PipeFee[],
+  ): Reading => {
+    let baseClean = 0
+    let baseDirty = 0
+    let cleanPerM3 = 0
+    let dirtyPerM3 = 0
+    const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
+    const pipeFee = !Number.isNaN(pipeDiam) && pipes.length > 0
+      ? pipes.find((p) => p.diameterMm === pipeDiam)
+      : undefined
+    if (pipeFee) {
+      baseClean = pipeFee.baseCleanFee ?? 0
+      baseDirty = pipeFee.baseDirtyFee ?? 0
+    }
+    let tariffForPeriod = tariffs.find(
+      (t) => t.organizationId === org.id && t.year === year && t.month === month
+    )
+    if (!tariffForPeriod && org?.category) {
+      const cat = categoryTariffs.find((t) => t.category === org.category)
+      if (cat) {
+        tariffForPeriod = {
+          id: cat.id,
+          organizationId: org.id,
+          year,
+          month,
+          baseCleanFee: cat.baseCleanFee,
+          baseDirtyFee: cat.baseDirtyFee,
+          cleanPerM3: cat.cleanPerM3,
+          dirtyPerM3: cat.dirtyPerM3,
+          organization: { id: org.id, category: org.category },
+        }
+      } else {
+        tariffForPeriod = tariffs.find(
+          (t) =>
+            t.organization?.category === org.category && t.year === year && t.month === month
+        )
+      }
+    }
+    if (tariffForPeriod) {
+      if (!pipeFee) {
+        baseClean = tariffForPeriod.baseCleanFee ?? 0
+        baseDirty = tariffForPeriod.baseDirtyFee ?? 0
+      }
+      cleanPerM3 = tariffForPeriod.cleanPerM3 ?? 0
+      dirtyPerM3 = tariffForPeriod.dirtyPerM3 ?? 0
+    } else if (org && !pipeFee) {
+      baseClean = org.baseCleanFee ?? 0
+      baseDirty = org.baseDirtyFee ?? 0
+    }
+    return {
+      _isNew: true,
+      organizationId: org.id,
+      organization: {
+        id: org.id,
+        name: org.name || '-',
+        code: (org as any)?.code ?? null,
+      },
+      meterId: meter?.id,
+      meter: meter ? { meterNumber: meter.meterNumber } : undefined,
+      month,
+      year,
+      startValue,
+      endValue: 0,
+      usage: 0,
+      baseClean,
+      baseDirty,
+      cleanPerM3,
+      dirtyPerM3,
+      cleanAmount: 0,
+      dirtyAmount: 0,
+      subtotal: 0,
+      vat: 0,
+      total: 0,
+    }
+  }, [tariffs, categoryTariffs])
+
+  const buildRowsForYearAndMonths = useCallback((
+    orgList: Organization[],
+    metersList: Meter[],
+    year: number,
+    months: number[],
+    prevReadingsByKey: Record<string, Reading[]>,
+    pipesOverride?: PipeFee[],
+    currentReadingsByKey?: Record<string, Reading[]>,
+  ): Reading[] => {
+    const pipes = pipesOverride ?? pipeFees
+    const rows: Reading[] = []
+    for (const org of orgList) {
+      const meter = metersList.find((m) => m.organizationId === org.id)
+      for (const month of months) {
+        const currentKey = `${year}-${month}`
+        const currentList = currentReadingsByKey?.[currentKey] ?? []
+        const existingForMeter = meter ? currentList.find((r) => r.meterId === meter.id) : undefined
+        if (existingForMeter) {
+          rows.push({ ...existingForMeter, _isNew: false })
+          continue
+        }
+        const prevMonth = month === 1 ? 12 : month - 1
+        const prevYear = month === 1 ? year - 1 : year
+        const key = `${prevYear}-${prevMonth}`
+        const prevList = prevReadingsByKey[key] ?? []
+        const prevForMeter = meter ? prevList.find((r) => r.meterId === meter.id) : undefined
+        const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
+        rows.push(buildOneRow(org, meter, month, year, startValue, pipes))
+      }
+    }
+    return rows
+  }, [buildOneRow, pipeFees])
+
   const handleOpenAddModal = async () => {
+    const currentMonth = new Date().getMonth() + 1
+    const currentYear = new Date().getFullYear()
+    setAddModalYear(currentYear)
+    setAddModalMonth(currentMonth)
     setShowAddModal(true)
     setMessage(null)
     setLoading(true)
     setNewReadings([])
     try {
-      const currentMonth = new Date().getMonth() + 1
-      const currentYear = new Date().getFullYear()
-      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1
-      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear
-
-      const [orgRes, meterRes, prevReadingsRes, pipeRes] = await Promise.all([
+      const [orgRes, meterRes, pipeRes] = await Promise.all([
         fetch('/api/organizations'),
         fetch('/api/meters'),
-        fetch(`/api/readings?month=${prevMonth}&year=${prevYear}`),
         fetch('/api/pipe-fees'),
       ])
-
       const orgData = await orgRes.json()
-      if (orgRes.ok && Array.isArray(orgData)) {
-        setOrganizations(orgData)
-      }
-
+      if (orgRes.ok && Array.isArray(orgData)) setOrganizations(orgData)
       const meterData = await meterRes.json()
-      if (meterRes.ok && Array.isArray(meterData)) {
-        setAllMeters(meterData)
-      }
-
-      const prevReadingsData = await prevReadingsRes.json()
-      const prevReadings: Reading[] = prevReadingsRes.ok && Array.isArray(prevReadingsData) ? prevReadingsData : []
-      setLatestMeterReadings(prevReadings)
-
-      const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
-      const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
+      if (meterRes.ok && Array.isArray(meterData)) setAllMeters(meterData)
       const pipeData = await pipeRes.json().catch(() => [])
       const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
+      const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
+      const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
 
-      // Одоогийн сард шинэ заалт: эхний заалт = өмнөх сарын эцсийн заалт (автоматаар)
-      let rows: Reading[] = orgList.map((org) => {
-        const meter = metersList.find((m) => m.organizationId === org.id)
-        const prevForMeter = meter ? prevReadings.find((r) => r.meterId === meter.id) : undefined
-        const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
-        const month = currentMonth
-        const year = currentYear
-        let baseClean = 0
-        let baseDirty = 0
-        let cleanPerM3 = 0
-        let dirtyPerM3 = 0
-
-        // Суурь хураамж нь шугамын хоолойгоор (PipeFee) тодорхойлогдоно. Хэрэглэгч "Шугамын хоолой 50" гэж
-        // бүртгэсэн бол 50мм-ийн PipeFee-аас суурь авна. М³-ийн үнэ (cleanPerM3, dirtyPerM3) нь тарифаас ирнэ.
-        const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
-        const pipeFee = !Number.isNaN(pipeDiam) && pipes.length > 0
-          ? pipes.find((p) => p.diameterMm === pipeDiam)
-          : undefined
-        if (pipeFee) {
-          baseClean = pipeFee.baseCleanFee ?? 0
-          baseDirty = pipeFee.baseDirtyFee ?? 0
-        }
-
-        // М³-ийн үнэ болон тарифын суурь (шугам олдоогүй тохиолдолд) нь (year, month)-ын тарифаас ирнэ.
-        let tariffForPeriod = tariffs.find(
-          (t) =>
-            t.organizationId === org.id &&
-            t.year === year &&
-            t.month === month
-        )
-        if (!tariffForPeriod && org?.category) {
-          const cat = categoryTariffs.find(
-            (t) => t.category === org.category && t.year === year && t.month === month
-          )
-          if (cat) {
-            tariffForPeriod = {
-              id: cat.id,
-              organizationId: org.id,
-              year: cat.year,
-              month: cat.month,
-              baseCleanFee: cat.baseCleanFee,
-              baseDirtyFee: cat.baseDirtyFee,
-              cleanPerM3: cat.cleanPerM3,
-              dirtyPerM3: cat.dirtyPerM3,
-              organization: { id: org.id, category: org.category },
-            }
-          } else {
-            tariffForPeriod = tariffs.find(
-              (t) =>
-                t.organization?.category === org.category &&
-                t.year === year &&
-                t.month === month
-            )
-          }
-        }
-        if (tariffForPeriod) {
-          if (!pipeFee) {
-            baseClean = tariffForPeriod.baseCleanFee ?? 0
-            baseDirty = tariffForPeriod.baseDirtyFee ?? 0
-          }
-          cleanPerM3 = tariffForPeriod.cleanPerM3 ?? 0
-          dirtyPerM3 = tariffForPeriod.dirtyPerM3 ?? 0
-        } else if (org && !pipeFee) {
-          baseClean = org.baseCleanFee ?? 0
-          baseDirty = org.baseDirtyFee ?? 0
-        }
-
-        return {
-          _isNew: true,
-          organizationId: org.id,
-          organization: {
-            id: org.id,
-            name: org.name || '-',
-            code: (org as any)?.code ?? null,
-          },
-          meterId: meter?.id,
-          meter: meter ? { meterNumber: meter.meterNumber } : undefined,
-          month,
-          year,
-          startValue,
-          endValue: startValue,
-          usage: 0,
-          baseClean,
-          baseDirty,
-          cleanPerM3,
-          dirtyPerM3,
-          cleanAmount: 0,
-          dirtyAmount: 0,
-          subtotal: 0,
-          vat: 0,
-          total: 0,
-        }
-      })
-
+      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1
+      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear
+      const [prevRes, currentRes] = await Promise.all([
+        fetch(`/api/readings?month=${prevMonth}&year=${prevYear}`),
+        fetch(`/api/readings?month=${currentMonth}&year=${currentYear}`),
+      ])
+      const prevReadingsData = prevRes.ok ? await prevRes.json() : []
+      const prevReadings: Reading[] = Array.isArray(prevReadingsData) ? prevReadingsData : []
+      const currentReadingsData = currentRes.ok ? await currentRes.json() : []
+      const currentReadings: Reading[] = Array.isArray(currentReadingsData) ? currentReadingsData : []
+      setLatestMeterReadings(prevReadings)
+      const prevReadingsByKey: Record<string, Reading[]> = {
+        [`${prevYear}-${prevMonth}`]: prevReadings,
+      }
+      const currentReadingsByKey: Record<string, Reading[]> = {
+        [`${currentYear}-${currentMonth}`]: currentReadings,
+      }
+      const rows = buildRowsForYearAndMonths(orgList, metersList, currentYear, [currentMonth], prevReadingsByKey, pipes, currentReadingsByKey)
       setNewReadings(rows)
     } catch (error) {
       setLatestMeterReadings([])
@@ -502,6 +583,46 @@ export default function ReadingsContent() {
       setLoading(false)
     }
   }
+
+  const handleAddModalApplyMonths = useCallback(async (yearOverride?: number, monthOverride?: number) => {
+    const y = yearOverride ?? addModalYear
+    const m = monthOverride ?? addModalMonth
+    const months = [m]
+    setLoading(true)
+    setMessage(null)
+    try {
+      const orgList = organizations.length ? organizations : await fetch('/api/organizations').then(r => r.ok ? r.json() : []).catch(() => [])
+      const metersList = allMeters.length ? allMeters : await fetch('/api/meters').then(r => r.ok ? r.json() : []).catch(() => [])
+      if (!Array.isArray(orgList)) setNewReadings([])
+      else {
+        const needPrevKeys: { year: number; month: number }[] = []
+        for (const month of months) {
+          const prevMonth = month === 1 ? 12 : month - 1
+          const prevYear = month === 1 ? y - 1 : y
+          needPrevKeys.push({ year: prevYear, month: prevMonth })
+        }
+        const uniq = needPrevKeys.filter((a, i) => needPrevKeys.findIndex(b => b.year === a.year && b.month === a.month) === i)
+        const prevReadingsByKey: Record<string, Reading[]> = {}
+        await Promise.all(uniq.map(async ({ year: py, month: pm }) => {
+          const res = await fetch(`/api/readings?month=${pm}&year=${py}`)
+          const data = res.ok ? await res.json() : []
+          prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
+        }))
+        const currentReadingsByKey: Record<string, Reading[]> = {}
+        await Promise.all(months.map(async (month) => {
+          const res = await fetch(`/api/readings?month=${month}&year=${y}`)
+          const data = res.ok ? await res.json() : []
+          currentReadingsByKey[`${y}-${month}`] = Array.isArray(data) ? data : []
+        }))
+        const rows = buildRowsForYearAndMonths(orgList, metersList, y, months, prevReadingsByKey, undefined, currentReadingsByKey)
+        setNewReadings(rows)
+      }
+    } catch (e) {
+      setNewReadings([])
+    } finally {
+      setLoading(false)
+    }
+  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths])
 
   const handleCloseAddModal = () => {
     setShowAddModal(false)
@@ -707,31 +828,49 @@ export default function ReadingsContent() {
     {
       headerName: 'Эхний заалт',
       width: 130,
+      colId: 'startValue',
       field: 'startValue',
       editable: true,
-      cellEditor: 'agNumberCellEditor',
-      cellEditorParams: {
-        min: 0,
-        precision: 2,
+      cellEditor: NumberCellEditorSelectAll,
+      valueParser: (params: any) => {
+        const n = parseFloat(params.newValue)
+        return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
+      },
+      valueSetter: (params: any) => {
+        if (params.data) {
+          const n = params.newValue != null ? Number(params.newValue) : 0
+          params.data.startValue = Number.isNaN(n) ? 0 : n
+        }
+        return true
       },
       valueFormatter: (params: any) => {
-        if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        const v = params.data?.startValue
+        if (v == null || v === '') return '0.00'
+        return Number(v).toFixed(2)
       },
     },
     {
       headerName: 'Эцсийн заалт',
       width: 130,
+      colId: 'endValue',
       field: 'endValue',
       editable: true,
-      cellEditor: 'agNumberCellEditor',
-      cellEditorParams: {
-        min: 0,
-        precision: 2,
+      cellEditor: NumberCellEditorSelectAll,
+      valueParser: (params: any) => {
+        const n = parseFloat(params.newValue)
+        return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
+      },
+      valueSetter: (params: any) => {
+        if (params.data) {
+          const n = params.newValue != null ? Number(params.newValue) : 0
+          params.data.endValue = Number.isNaN(n) ? 0 : n
+        }
+        return true
       },
       valueFormatter: (params: any) => {
-        if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        const v = params.data?.endValue
+        if (v == null || v === '') return '0.00'
+        return Number(v).toFixed(2)
       },
     },
     {
@@ -891,7 +1030,7 @@ export default function ReadingsContent() {
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 flex items-center gap-2"
         >
           <PlusIcon className="h-5 w-5" />
-          Шинэ заалт нэмэх
+          Заалт оруулах
         </button>
       </div>
 
@@ -921,7 +1060,7 @@ export default function ReadingsContent() {
             <div className="relative z-10 w-full max-w-6xl max-h-[90vh] flex flex-col bg-white rounded-lg shadow-xl overflow-hidden">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4 flex flex-col flex-1 overflow-hidden">
                 <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-2xl font-semibold text-gray-900">Шинэ заалт оруулах</h3>
+                  <h3 className="text-2xl font-semibold text-gray-900">Заалт оруулах</h3>
                   <div className="flex gap-2">
                     <button
                       onClick={handleCloseAddModal}
@@ -932,6 +1071,44 @@ export default function ReadingsContent() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     </button>
+                  </div>
+                </div>
+
+                <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-gray-600">Он:</label>
+                      <select
+                        value={addModalYear}
+                        onChange={(e) => {
+                          const newYear = Number(e.target.value)
+                          setAddModalYear(newYear)
+                          handleAddModalApplyMonths(newYear, addModalMonth)
+                        }}
+                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"
+                      >
+                        {[new Date().getFullYear() + 1, new Date().getFullYear(), new Date().getFullYear() - 1].map((y) => (
+                          <option key={y} value={y}>{y}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-gray-600">Сар:</label>
+                      <select
+                        value={addModalMonth}
+                        onChange={(e) => {
+                          const newMonth = Number(e.target.value)
+                          setAddModalMonth(newMonth)
+                          handleAddModalApplyMonths(addModalYear, newMonth)
+                        }}
+                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-20"
+                      >
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {loading && <span className="text-sm text-gray-500">Бэлтгэж байна...</span>}
                   </div>
                 </div>
 
@@ -947,16 +1124,15 @@ export default function ReadingsContent() {
                   </div>
                 )}
 
-                <p className="mb-4 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-4 py-3">
-                  <strong>Мэдэгдэл:</strong> Эхний заалт нь өмнөх сарын эцсийн заалтаас автоматаар дутуулагдана. Эцсийн заалтын баганад тоолуурын одоогийн уншилтыг оруулна уу. Тоолуургүй байгууллагад эхлээд «Тоолуурууд» хуудсаас тоолуур нэмнэ үү.
-                </p>
-
                 <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 w-full">
                   <div className="ag-theme-alpine w-full" style={{ height: '500px', width: '100%' }}>
                     <AgGridReact
+                      theme="legacy"
                       ref={modalGridRef}
                       rowData={newReadings}
                       columnDefs={modalColumnDefs}
+                      getRowId={(params: any) => params.data?.id ?? `new-${params.data?.organizationId}-${params.data?.year}-${params.data?.month}-${params.node?.rowIndex ?? 0}`}
+                      rowBuffer={15}
                       defaultColDef={{
                         sortable: true,
                         filter: false,
@@ -966,6 +1142,7 @@ export default function ReadingsContent() {
                       onCellValueChanged={handleCellValueChanged}
                       pagination={false}
                       domLayout="normal"
+                      singleClickEdit={true}
                       stopEditingWhenCellsLoseFocus={true}
                       suppressClickEdit={false}
                       enterNavigatesVertically={true}
@@ -1069,9 +1246,12 @@ export default function ReadingsContent() {
               </div>
             ) : (
               <AgGridReact
+                theme="legacy"
                 ref={gridRef}
                 rowData={readings}
                 columnDefs={columnDefs}
+                getRowId={(params: any) => params.data?.id ?? `row-${params.node?.rowIndex ?? params.data?.meterId ?? 0}`}
+                rowBuffer={20}
                 defaultColDef={{
                   sortable: true,
                   filter: true,
@@ -1081,6 +1261,7 @@ export default function ReadingsContent() {
                 pagination={true}
                 paginationPageSize={20}
                 domLayout="normal"
+                singleClickEdit={true}
                 stopEditingWhenCellsLoseFocus={true}
                 suppressClickEdit={false}
                 enterNavigatesVertically={true}
@@ -1093,6 +1274,13 @@ export default function ReadingsContent() {
           </div>
         </div>
       </div>
+      <ConfirmModal
+        open={deleteConfirm.open}
+        title="Заалт устгах"
+        message="Та энэ заалтыг устгахдаа итгэлтэй байна уу?"
+        onConfirm={doDeleteReading}
+        onCancel={() => setDeleteConfirm({ open: false, id: null })}
+      />
     </div>
   )
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import ConfirmModal from './ConfirmModal'
 
 type OrganizationCategory =
   | 'HOUSEHOLD'
@@ -34,12 +35,13 @@ interface Tariff {
   organization?: Organization
   kind?: 'org' | 'category'
   category?: OrganizationCategory
-  year: number
-  month: number
+  year?: number
+  month?: number
   baseCleanFee: number
   baseDirtyFee: number
   cleanPerM3: number
   dirtyPerM3: number
+  updatedAt?: string
 }
 
 interface PipeFee {
@@ -85,6 +87,7 @@ export default function TariffsContent() {
     cleanPerM3: '',
     dirtyPerM3: '',
   })
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'tariff' | 'pipe'; id: string } | null>(null)
 
   const loadAll = async () => {
     setLoading(true)
@@ -92,7 +95,7 @@ export default function TariffsContent() {
     try {
       const [orgRes, tariffRes, pipeRes] = await Promise.all([
         fetch('/api/organizations'),
-        fetch('/api/tariffs'),
+        fetch('/api/tariffs?includeCategory=1'),
         fetch('/api/pipe-fees'),
       ])
 
@@ -131,8 +134,6 @@ export default function TariffsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category: selectedCategory,
-          year: Number(form.year) || current.year,
-          month: Number(form.month) || current.month,
           baseCleanFee: Number(form.baseCleanFee) || 0,
           baseDirtyFee: Number(form.baseDirtyFee) || 0,
           cleanPerM3: Number(form.cleanPerM3) || 0,
@@ -142,6 +143,7 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
 
+      setShowTariffModal(false)
       await loadAll()
       setMessage({ type: 'success', text: data.message || 'Тариф амжилттай хадгаллаа' })
     } catch (e: any) {
@@ -151,15 +153,21 @@ export default function TariffsContent() {
     }
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Энэ тарифыг устгах уу?')) return
+  const handleDelete = (id: string) => {
+    setDeleteConfirm({ type: 'tariff', id })
+  }
+
+  const doDeleteTariff = async () => {
+    if (!deleteConfirm || deleteConfirm.type !== 'tariff') return
+    const id = deleteConfirm.id
+    setDeleteConfirm(null)
     setSaving(true)
     setMessage(null)
     try {
       const t = tariffs.find((x) => x.id === id)
       const url =
         t?.kind === 'category' && t.category
-          ? `/api/tariffs?kind=category&category=${encodeURIComponent(t.category)}&year=${t.year}&month=${t.month}`
+          ? `/api/tariffs?kind=category&category=${encodeURIComponent(t.category)}`
           : `/api/tariffs?id=${id}`
       const res = await fetch(url, { method: 'DELETE' })
       const data = await res.json()
@@ -213,8 +221,14 @@ export default function TariffsContent() {
     setShowPipeModal(true)
   }
 
-  const handlePipeDelete = async (id: string) => {
-    if (!confirm('Энэ шугамын голчийн суурь хураамжийг устгах уу?')) return
+  const handlePipeDelete = (id: string) => {
+    setDeleteConfirm({ type: 'pipe', id })
+  }
+
+  const doDeletePipe = async () => {
+    if (!deleteConfirm || deleteConfirm.type !== 'pipe') return
+    const id = deleteConfirm.id
+    setDeleteConfirm(null)
     setSaving(true)
     setMessage(null)
     try {
@@ -286,9 +300,6 @@ export default function TariffsContent() {
                 Хэрэглэгчийн төрөл
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Шугамын хоолой
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Ц суурь
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -309,7 +320,9 @@ export default function TariffsContent() {
             {tariffs.map((t) => (
               <tr key={t.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.year}-{String(t.month).padStart(2, '0')}
+                  {t.kind === 'category'
+                    ? '—'
+                    : `${t.year}-${String(t.month).padStart(2, '0')}`}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {t.kind === 'category'
@@ -317,9 +330,6 @@ export default function TariffsContent() {
                     : t.organization?.category
                       ? (CATEGORY_LABELS[t.organization.category as OrganizationCategory] ?? t.organization.category)
                       : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.kind === 'category' ? '-' : t.organization?.connectionNumber || '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {(t.baseCleanFee ?? 0).toFixed(2)}
@@ -471,6 +481,9 @@ export default function TariffsContent() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Хэрэглэгчийн төрөл
                     </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Нэмэгдсэн тариф шинэчлэлт хийх хүртэл идэвхтэй байна.
+                    </p>
                     <select
                       value={selectedCategory}
                       onChange={(e) => setSelectedCategory(e.target.value as OrganizationCategory | '')}
@@ -484,32 +497,6 @@ export default function TariffsContent() {
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Он</label>
-                      <input
-                        type="number"
-                        value={form.year}
-                        onChange={(e) => setForm((p) => ({ ...p, year: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                        placeholder="0"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Сар</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={12}
-                        value={form.month}
-                        onChange={(e) => setForm((p) => ({ ...p, month: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                        placeholder="0"
-                        required
-                      />
-                    </div>
                   </div>
                 </div>
 
@@ -662,6 +649,19 @@ export default function TariffsContent() {
             </div>
           </div>
         </div>
+      )}
+      {deleteConfirm && (
+        <ConfirmModal
+          open={true}
+          title={deleteConfirm.type === 'tariff' ? 'Тариф устгах' : 'Шугамын голчийн суурь хураамж устгах'}
+          message={
+            deleteConfirm.type === 'tariff'
+              ? 'Энэ тарифыг устгах уу?'
+              : 'Энэ шугамын голчийн суурь хураамжийг устгах уу?'
+          }
+          onConfirm={deleteConfirm.type === 'tariff' ? doDeleteTariff : doDeletePipe}
+          onCancel={() => setDeleteConfirm(null)}
+        />
       )}
     </div>
   )

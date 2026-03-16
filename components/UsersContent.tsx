@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import ConfirmModal from './ConfirmModal'
 
 interface User {
   id: string
@@ -77,6 +78,8 @@ export default function UsersContent() {
     year: String(new Date().getFullYear()),
     category: 'HOUSEHOLD' as OrganizationCategory,
   })
+
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'user' | 'org'; id: string } | null>(null)
 
   useEffect(() => {
     loadUsers()
@@ -183,19 +186,18 @@ export default function UsersContent() {
     setShowUserForm(true)
   }
 
-  const handleDeleteUser = async (id: string) => {
-    if (!confirm('Та энэ хэрэглэгчийг устгахдаа итгэлтэй байна уу?')) {
-      return
-    }
+  const handleDeleteUser = (id: string) => {
+    setDeleteConfirm({ type: 'user', id })
+  }
 
+  const doDeleteUser = async () => {
+    if (!deleteConfirm || deleteConfirm.type !== 'user') return
+    const id = deleteConfirm.id
+    setDeleteConfirm(null)
     try {
-      const res = await fetch(`/api/users?id=${id}`, {
-        method: 'DELETE',
-      })
-
+      const res = await fetch(`/api/users?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
-
       loadUsers()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -267,24 +269,20 @@ export default function UsersContent() {
     setShowOrgForm(true)
   }
 
-  const handleDeleteOrg = async (id: string) => {
-    if (!confirm('Та энэ байгууллагыг устгахдаа итгэлтэй байна уу?')) {
-      return
-    }
+  const handleDeleteOrg = (id: string) => {
+    setDeleteConfirm({ type: 'org', id })
+  }
 
+  const doDeleteOrg = async () => {
+    if (!deleteConfirm || deleteConfirm.type !== 'org') return
+    const id = deleteConfirm.id
+    setDeleteConfirm(null)
     try {
-      const res = await fetch(`/api/organizations?id=${id}`, {
-        method: 'DELETE',
-      })
-
+      const res = await fetch(`/api/organizations?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Алдаа гарлаа')
-      }
-
+      if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadOrganizations()
-      loadUsers() // Refresh users list in case organization was deleted
+      loadUsers()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     }
@@ -833,6 +831,19 @@ export default function UsersContent() {
             </div>
           )}
         </>
+      )}
+      {deleteConfirm && (
+        <ConfirmModal
+          open={true}
+          title={deleteConfirm.type === 'user' ? 'Хэрэглэгч устгах' : 'Байгууллага устгах'}
+          message={
+            deleteConfirm.type === 'user'
+              ? 'Та энэ хэрэглэгчийг устгахдаа итгэлтэй байна уу?'
+              : 'Та энэ байгууллагыг устгахдаа итгэлтэй байна уу?'
+          }
+          onConfirm={deleteConfirm.type === 'user' ? doDeleteUser : doDeleteOrg}
+          onCancel={() => setDeleteConfirm(null)}
+        />
       )}
     </div>
   )

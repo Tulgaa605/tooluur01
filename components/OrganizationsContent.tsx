@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import ConfirmModal from './ConfirmModal'
 
 interface Organization {
   id: string
@@ -43,6 +44,7 @@ export default function OrganizationsContent() {
     year: String(currentYear),
     category: 'HOUSEHOLD',
   })
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   useEffect(() => {
     loadOrganizations()
@@ -143,22 +145,18 @@ export default function OrganizationsContent() {
     setShowForm(true)
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Та энэ байгууллагыг устгахдаа итгэлтэй байна уу?')) {
-      return
-    }
+  const handleDelete = (id: string) => {
+    setDeleteConfirmId(id)
+  }
 
+  const doDelete = async () => {
+    if (!deleteConfirmId) return
+    const id = deleteConfirmId
+    setDeleteConfirmId(null)
     try {
-      const res = await fetch(`/api/organizations?id=${id}`, {
-        method: 'DELETE',
-      })
-
+      const res = await fetch(`/api/organizations?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Алдаа гарлаа')
-      }
-
+      if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadOrganizations()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -493,6 +491,13 @@ export default function OrganizationsContent() {
           </div>
         )}
       </div>
+      <ConfirmModal
+        open={deleteConfirmId !== null}
+        title="Байгууллага устгах"
+        message="Та энэ байгууллагыг устгахдаа итгэлтэй байна уу?"
+        onConfirm={doDelete}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   )
 }

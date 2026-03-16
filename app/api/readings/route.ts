@@ -3,6 +3,57 @@ import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 
+function extractMongoBatch(result: any): any[] {
+  if (!result) return []
+  const cursor = result.cursor
+  if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) return cursor.firstBatch
+  if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) return cursor.nextBatch
+  return []
+}
+
+/** Байгууллагын тухайн сарын тарифын утгыг олно (organization tariff эсвэл төрлийн тариф). */
+async function getTariffRatesForPeriod(
+  organizationId: string,
+  year: number,
+  month: number
+): Promise<{ baseClean: number; baseDirty: number; cleanPerM3: number; dirtyPerM3: number }> {
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { category: true },
+  })
+  if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
+
+  const orgTariff = await prisma.organizationTariff.findUnique({
+    where: { organizationId_year_month: { organizationId, year, month } },
+    select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
+  })
+  if (orgTariff) {
+    return {
+      baseClean: orgTariff.baseCleanFee ?? 0,
+      baseDirty: orgTariff.baseDirtyFee ?? 0,
+      cleanPerM3: orgTariff.cleanPerM3 ?? 0,
+      dirtyPerM3: orgTariff.dirtyPerM3 ?? 0,
+    }
+  }
+
+  const catFind = await prisma.$runCommandRaw({
+    find: 'category_tariffs',
+    filter: { category: org.category },
+    limit: 1,
+  } as any)
+  const catDocs = extractMongoBatch(catFind) as { baseCleanFee?: number; baseDirtyFee?: number; cleanPerM3?: number; dirtyPerM3?: number }[]
+  if (catDocs.length > 0) {
+    const d = catDocs[0]
+    return {
+      baseClean: d.baseCleanFee ?? 0,
+      baseDirty: d.baseDirtyFee ?? 0,
+      cleanPerM3: d.cleanPerM3 ?? 0,
+      dirtyPerM3: d.dirtyPerM3 ?? 0,
+    }
+  }
+  return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
@@ -164,7 +215,32 @@ export async function GET(request: NextRequest) {
       ],
     })
 
-    return NextResponse.json(readings)
+    // Одоогийн тарифаар дүнг дахин тооцоолж буцаана (зөрүү × ₮/м³ + суурь)
+    const result = await Promise.all(
+      readings.map(async (r) => {
+        const tariff = await getTariffRatesForPeriod(r.organizationId, r.year, r.month)
+        const usage = r.usage ?? 0
+        const cleanAmount = usage * tariff.cleanPerM3 + tariff.baseClean
+        const dirtyAmount = usage * tariff.dirtyPerM3 + tariff.baseDirty
+        const subtotal = cleanAmount + dirtyAmount
+        const vat = subtotal * 0.1
+        const total = subtotal + vat
+        return {
+          ...r,
+          baseClean: tariff.baseClean,
+          baseDirty: tariff.baseDirty,
+          cleanPerM3: tariff.cleanPerM3,
+          dirtyPerM3: tariff.dirtyPerM3,
+          cleanAmount,
+          dirtyAmount,
+          subtotal,
+          vat,
+          total,
+        }
+      })
+    )
+
+    return NextResponse.json(result)
   } catch (error: any) {
     console.error('Readings GET error:', error)
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
@@ -222,12 +298,18 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    // Get meter to get cleanPerM3 and dirtyPerM3 (or use existing values)
-    const cleanPerM3 = existingReading.cleanPerM3 || 0
-    const dirtyPerM3 = existingReading.dirtyPerM3 || 0
-
-    const cleanAmount = usage * cleanPerM3 + (data.baseClean || 0)
-    const dirtyAmount = usage * dirtyPerM3 + (data.baseDirty || 0)
+    // Одоогийн тарифаар дүнг дахин тооцоолно (байгууллагын тариф зөрүүгээр үржигдэнэ)
+    const tariff = await getTariffRatesForPeriod(
+      existingReading.organizationId,
+      data.year,
+      data.month
+    )
+    const baseClean = tariff.baseClean
+    const baseDirty = tariff.baseDirty
+    const cleanPerM3 = tariff.cleanPerM3
+    const dirtyPerM3 = tariff.dirtyPerM3
+    const cleanAmount = usage * cleanPerM3 + baseClean
+    const dirtyAmount = usage * dirtyPerM3 + baseDirty
     const subtotal = cleanAmount + dirtyAmount
     const vat = subtotal * 0.1
     const total = subtotal + vat
@@ -240,8 +322,10 @@ export async function PUT(request: NextRequest) {
         startValue: data.startValue,
         endValue: data.endValue,
         usage,
-        baseClean: data.baseClean || 0,
-        baseDirty: data.baseDirty || 0,
+        baseClean,
+        baseDirty,
+        cleanPerM3,
+        dirtyPerM3,
         cleanAmount,
         dirtyAmount,
         subtotal,

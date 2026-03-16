@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import ConfirmModal from './ConfirmModal'
 
 interface Organization {
   id: string
@@ -27,6 +28,7 @@ export default function MetersContent() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const currentYear = new Date().getFullYear()
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [form, setForm] = useState({
     ownerType: '' as OwnerType | '',
     meterNumber: '',
@@ -130,19 +132,18 @@ export default function MetersContent() {
     setShowForm(true)
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Та энэ тоолуурыг устгахдаа итгэлтэй байна уу?')) {
-      return
-    }
+  const handleDelete = (id: string) => {
+    setDeleteConfirmId(id)
+  }
 
+  const doDelete = async () => {
+    if (!deleteConfirmId) return
+    const id = deleteConfirmId
+    setDeleteConfirmId(null)
     try {
-      const res = await fetch(`/api/meters?id=${id}`, {
-        method: 'DELETE',
-      })
-
+      const res = await fetch(`/api/meters?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
-
       loadMeters()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -308,7 +309,7 @@ export default function MetersContent() {
                 Тоолуурын дугаар
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Байгууллага
+                Хэрэглэгч
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Он
@@ -358,6 +359,13 @@ export default function MetersContent() {
           </div>
         )} 
       </div>
+      <ConfirmModal
+        open={deleteConfirmId !== null}
+        title="Тоолуур устгах"
+        message="Та энэ тоолуурыг устгахдаа итгэлтэй байна уу?"
+        onConfirm={doDelete}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   )
 }

@@ -19,8 +19,6 @@ function validateMonthYear(month: number, year: number) {
 type CategoryTariffDoc = {
   _id: any
   category: string
-  year: number
-  month: number
   baseCleanFee: number
   baseDirtyFee: number
   cleanPerM3: number
@@ -39,8 +37,6 @@ function extractMongoBatch(result: any): any[] {
 
 async function upsertCategoryTariff(params: {
   category: string
-  year: number
-  month: number
   baseCleanFee: number
   baseDirtyFee: number
   cleanPerM3: number
@@ -51,7 +47,7 @@ async function upsertCategoryTariff(params: {
     update: 'category_tariffs',
     updates: [
       {
-        q: { category: params.category, year: params.year, month: params.month },
+        q: { category: params.category },
         u: {
           $set: {
             baseCleanFee: params.baseCleanFee,
@@ -98,21 +94,17 @@ export async function GET(request: NextRequest) {
     const includeCategory = searchParams.get('includeCategory') === '1'
     if (!includeCategory) return NextResponse.json(tariffs)
 
-    const catFilter: any = {}
-    if (year) catFilter.year = year
     const catFind = await prisma.$runCommandRaw({
       find: 'category_tariffs',
-      filter: catFilter,
-      sort: { year: -1, month: -1, updatedAt: -1 },
+      filter: {},
+      sort: { updatedAt: -1 },
       limit: 500,
     } as any)
     const catDocs = extractMongoBatch(catFind) as CategoryTariffDoc[]
     const categoryTariffs = catDocs.map((d: any) => ({
-      id: `category:${d.category}:${d.year}:${d.month}`,
+      id: `category:${d.category}`,
       kind: 'category',
       category: d.category,
-      year: d.year,
-      month: d.month,
       baseCleanFee: d.baseCleanFee ?? 0,
       baseDirtyFee: d.baseDirtyFee ?? 0,
       cleanPerM3: d.cleanPerM3 ?? 0,
@@ -144,7 +136,6 @@ export async function POST(request: NextRequest) {
 
     let organizationId = data.organizationId as string | undefined
     const category = data.category as string | undefined
-    const month = parseInt(String(data.month), 10)
     if (user.organizationId && organizationId && organizationId !== user.organizationId) {
       return NextResponse.json(
         { error: 'Зөвхөн өөрийн байгууллагын тариф тохируулах боломжтой' },
@@ -152,10 +143,13 @@ export async function POST(request: NextRequest) {
       )
     }
     if (user.organizationId && !category) organizationId = user.organizationId
-    const year = parseInt(String(data.year), 10)
-    const validationError = validateMonthYear(month, year)
-    if (validationError) {
-      return NextResponse.json({ error: validationError }, { status: 400 })
+    const year = organizationId ? parseInt(String(data.year), 10) : 0
+    const month = organizationId ? parseInt(String(data.month), 10) : 0
+    if (organizationId) {
+      const validationError = validateMonthYear(month, year)
+      if (validationError) {
+        return NextResponse.json({ error: validationError }, { status: 400 })
+      }
     }
 
     let baseCleanFee = parseNumberOrDefault(data.baseCleanFee, 0)
@@ -238,35 +232,34 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Always persist category tariff so it can be used later (even if no org exists yet)
+    // Нэг төрлийн тариф нэг л байна; шинэчлэх хүртэл идэвхтэй
     await upsertCategoryTariff({
       category,
-      year,
-      month,
       baseCleanFee,
       baseDirtyFee,
       cleanPerM3,
       dirtyPerM3,
     })
 
+    // Байгууллага бүрт тухайн сарын тариф бичлэг үүсгэж, уншилтанд хэрэглэгдэнэ
+    const now = new Date()
+    const currentYear = now.getFullYear()
+    const currentMonth = now.getMonth() + 1
     const orgs = await prisma.organization.findMany({
       where: { category },
       select: { id: true, name: true, connectionNumber: true },
     })
-
     let created = 0
     let updated = 0
     for (const org of orgs) {
       const pipeBase = getBaseFromPipe(org.connectionNumber)
       const orgBaseClean = pipeBase ? pipeBase.baseCleanFee : baseCleanFee
       const orgBaseDirty = pipeBase ? pipeBase.baseDirtyFee : baseDirtyFee
-
-      const key = { organizationId: org.id, year, month }
+      const key = { organizationId: org.id, year: currentYear, month: currentMonth }
       const existing = await prisma.organizationTariff.findUnique({
         where: { organizationId_year_month: key },
         select: { id: true },
       })
-
       if (existing) {
         await prisma.organizationTariff.update({
           where: { organizationId_year_month: key },
@@ -282,8 +275,8 @@ export async function POST(request: NextRequest) {
         await prisma.organizationTariff.create({
           data: {
             organizationId: org.id,
-            month,
-            year,
+            year: currentYear,
+            month: currentMonth,
             baseCleanFee: orgBaseClean,
             baseDirtyFee: orgBaseDirty,
             cleanPerM3,
@@ -294,15 +287,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const parts: string[] = []
+    if (created > 0) parts.push(`нэмэгдсэн: ${created}`)
+    if (updated > 0) parts.push(`шинэчлэгдсэн: ${updated}`)
+    const detail = parts.length ? ` (${parts.join(', ')})` : ''
     return NextResponse.json({
       success: true,
-      created,
-      updated,
-      count: created + updated,
       message:
         orgs.length === 0
-          ? 'Төрлийн тариф амжилттай хадгаллаа. Энэ төрлийн байгууллага одоогоор байхгүй; ийм төрлийн байгууллага нэмэгдэхэд энэ тариф автоматаар хэрэглэгдэнэ.'
-          : `Амжилттай. Нэмэгдсэн: ${created}, шинэчлэгдсэн: ${updated}`,
+          ? 'Төрлийн тариф хадгаллаа. Шинэчлэлт хийх хүртэл энэ тариф хүчинтэй байна.'
+          : `Төрлийн тариф хадгаллаа. ${orgs.length} байгууллагад тухайн сарын тариф хэрэглэгдлээ.${detail}`,
     })
   } catch (error: any) {
     if (error.code === 'P2002') {
@@ -394,15 +388,12 @@ export async function DELETE(request: NextRequest) {
     const kind = searchParams.get('kind')
     if (kind === 'category') {
       const category = searchParams.get('category')
-      const month = parseInt(searchParams.get('month') || '', 10)
-      const year = parseInt(searchParams.get('year') || '', 10)
-      const validationError = validateMonthYear(month, year)
-      if (!category || validationError) {
-        return NextResponse.json({ error: 'Category, сар, он шаардлагатай' }, { status: 400 })
+      if (!category) {
+        return NextResponse.json({ error: 'Хэрэглэгчийн төрөл (category) шаардлагатай' }, { status: 400 })
       }
       await prisma.$runCommandRaw({
         delete: 'category_tariffs',
-        deletes: [{ q: { category, year, month }, limit: 1 }],
+        deletes: [{ q: { category }, limit: 1 }],
       } as any)
       return NextResponse.json({ success: true })
     }

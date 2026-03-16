@@ -10,13 +10,13 @@ function extractMongoBatch(result: any): any[] {
 
 type CategoryTariffDoc = {
   category: string
-  year: number
-  month: number
   baseCleanFee?: number
   baseDirtyFee?: number
   cleanPerM3?: number
   dirtyPerM3?: number
 }
+
+/** Шинэ байгууллага үүсгэхэд тухайн төрлийн одоогийн тариф байвал тухайн сарын organization tariff үүсгэнэ. */
 export async function applyCategoryTariffsToOrganization(organizationId: string): Promise<number> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
@@ -36,42 +36,37 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
   const catFind = await prisma.$runCommandRaw({
     find: 'category_tariffs',
     filter: { category: org.category },
-    sort: { year: -1, month: -1 },
-    limit: 24,
+    limit: 1,
   } as any)
   const catDocs = extractMongoBatch(catFind) as CategoryTariffDoc[]
   if (catDocs.length === 0) return 0
 
+  const d = catDocs[0]
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
   const pipeBase = getBaseFromPipe(org.connectionNumber)
-  let created = 0
+  const baseCleanFee = pipeBase ? pipeBase.baseCleanFee : (d.baseCleanFee ?? 0)
+  const baseDirtyFee = pipeBase ? pipeBase.baseDirtyFee : (d.baseDirtyFee ?? 0)
+  const cleanPerM3 = d.cleanPerM3 ?? 0
+  const dirtyPerM3 = d.dirtyPerM3 ?? 0
 
-  for (const d of catDocs) {
-    const year = d.year
-    const month = d.month
-    const baseCleanFee = pipeBase ? pipeBase.baseCleanFee : (d.baseCleanFee ?? 0)
-    const baseDirtyFee = pipeBase ? pipeBase.baseDirtyFee : (d.baseDirtyFee ?? 0)
-    const cleanPerM3 = d.cleanPerM3 ?? 0
-    const dirtyPerM3 = d.dirtyPerM3 ?? 0
+  const existing = await prisma.organizationTariff.findUnique({
+    where: { organizationId_year_month: { organizationId, year, month } },
+    select: { id: true },
+  })
+  if (existing) return 0
 
-    const existing = await prisma.organizationTariff.findUnique({
-      where: { organizationId_year_month: { organizationId, year, month } },
-      select: { id: true },
-    })
-    if (existing) continue
-
-    await prisma.organizationTariff.create({
-      data: {
-        organizationId,
-        month,
-        year,
-        baseCleanFee,
-        baseDirtyFee,
-        cleanPerM3,
-        dirtyPerM3,
-      },
-    })
-    created += 1
-  }
-
-  return created
+  await prisma.organizationTariff.create({
+    data: {
+      organizationId,
+      month,
+      year,
+      baseCleanFee,
+      baseDirtyFee,
+      cleanPerM3,
+      dirtyPerM3,
+    },
+  })
+  return 1
 }
