@@ -2,6 +2,12 @@
   "name": "water-billing-system",
   "version": "1.0.0",
   "private": true,
+  "postcss": {
+    "plugins": {
+      "tailwindcss": {},
+      "autoprefixer": {}
+    }
+  },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
