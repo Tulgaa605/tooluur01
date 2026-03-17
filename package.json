@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "cross-env NODE_ENV=development next dev -p 3001",
+    "dev:clean": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\" && cross-env NODE_ENV=development next dev -p 3001",
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
@@ -23,25 +24,26 @@
     "bcryptjs": "^2.4.3",
     "date-fns": "^3.6.0",
     "jsonwebtoken": "^9.0.2",
-    "next": "^14.2.0",
+    "next": "^16.1.7",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "recharts": "^2.12.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.6",
-    "@types/node": "^20.14.0",
-    "@types/react": "^18.3.0",
+    "@types/node": "20.19.37",
+    "@types/react": "18.3.28",
     "@types/react-dom": "^18.3.0",
-    "autoprefixer": "^10.4.0",
+    "autoprefixer": "^10.4.27",
     "eslint": "^8.57.0",
     "eslint-config-next": "^14.2.0",
-    "postcss": "^8.4.0",
+    "postcss": "^8.5.8",
     "prisma": "^5.19.0",
-    "tailwindcss": "^3.4.0",
+    "tailwindcss": "^3.4.19",
     "ts-node": "^10.9.2",
-    "typescript": "^5.5.0"
+    "typescript": "5.9.3"
   }
 }

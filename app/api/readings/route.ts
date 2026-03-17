@@ -11,7 +11,7 @@ function extractMongoBatch(result: any): any[] {
   return []
 }
 
-/** Байгууллагын тухайн сарын тарифын утгыг олно (organization tariff эсвэл төрлийн тариф). */
+/** Байгууллагын тухайн сарын тарифын утгыг олно: шугамын голч (PipeFee), organization tariff, төрлийн тариф эсвэл байгууллагын суурь. */
 async function getTariffRatesForPeriod(
   organizationId: string,
   year: number,
@@ -19,21 +19,39 @@ async function getTariffRatesForPeriod(
 ): Promise<{ baseClean: number; baseDirty: number; cleanPerM3: number; dirtyPerM3: number }> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { category: true },
+    select: { category: true, connectionNumber: true, baseCleanFee: true, baseDirtyFee: true },
   })
   if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
+
+  let baseClean = 0
+  let baseDirty = 0
+  let cleanPerM3 = 0
+  let dirtyPerM3 = 0
+
+  const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
+  if (!Number.isNaN(pipeDiam)) {
+    const pipeFee = await prisma.pipeFee.findUnique({
+      where: { diameterMm: pipeDiam },
+      select: { baseCleanFee: true, baseDirtyFee: true },
+    })
+    if (pipeFee) {
+      baseClean = pipeFee.baseCleanFee ?? 0
+      baseDirty = pipeFee.baseDirtyFee ?? 0
+    }
+  }
 
   const orgTariff = await prisma.organizationTariff.findUnique({
     where: { organizationId_year_month: { organizationId, year, month } },
     select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
   })
   if (orgTariff) {
-    return {
-      baseClean: orgTariff.baseCleanFee ?? 0,
-      baseDirty: orgTariff.baseDirtyFee ?? 0,
-      cleanPerM3: orgTariff.cleanPerM3 ?? 0,
-      dirtyPerM3: orgTariff.dirtyPerM3 ?? 0,
+    if (Number.isNaN(pipeDiam)) {
+      baseClean = orgTariff.baseCleanFee ?? 0
+      baseDirty = orgTariff.baseDirtyFee ?? 0
     }
+    cleanPerM3 = orgTariff.cleanPerM3 ?? 0
+    dirtyPerM3 = orgTariff.dirtyPerM3 ?? 0
+    return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
   }
 
   const catFind = await prisma.$runCommandRaw({
@@ -44,14 +62,20 @@ async function getTariffRatesForPeriod(
   const catDocs = extractMongoBatch(catFind) as { baseCleanFee?: number; baseDirtyFee?: number; cleanPerM3?: number; dirtyPerM3?: number }[]
   if (catDocs.length > 0) {
     const d = catDocs[0]
-    return {
-      baseClean: d.baseCleanFee ?? 0,
-      baseDirty: d.baseDirtyFee ?? 0,
-      cleanPerM3: d.cleanPerM3 ?? 0,
-      dirtyPerM3: d.dirtyPerM3 ?? 0,
+    if (Number.isNaN(pipeDiam)) {
+      baseClean = d.baseCleanFee ?? 0
+      baseDirty = d.baseDirtyFee ?? 0
     }
+    cleanPerM3 = d.cleanPerM3 ?? 0
+    dirtyPerM3 = d.dirtyPerM3 ?? 0
+    return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
   }
-  return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
+
+  if (Number.isNaN(pipeDiam)) {
+    baseClean = org.baseCleanFee ?? 0
+    baseDirty = org.baseDirtyFee ?? 0
+  }
+  return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
 }
 
 export async function POST(request: NextRequest) {
@@ -85,8 +109,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const cleanAmount = usage * data.cleanPerM3 + data.baseClean
-    const dirtyAmount = usage * data.dirtyPerM3 + data.baseDirty
+    const tariff = await getTariffRatesForPeriod(meter.organizationId, data.year, data.month)
+    const baseClean = tariff.baseClean
+    const baseDirty = tariff.baseDirty
+    const cleanPerM3 = tariff.cleanPerM3
+    const dirtyPerM3 = tariff.dirtyPerM3
+
+    const cleanAmount = usage * cleanPerM3 + baseClean
+    const dirtyAmount = usage * dirtyPerM3 + baseDirty
     const subtotal = cleanAmount + dirtyAmount
     const vat = subtotal * 0.1
     const total = subtotal + vat
@@ -118,10 +148,10 @@ export async function POST(request: NextRequest) {
         startValue: data.startValue,
         endValue: data.endValue,
         usage,
-        baseClean: data.baseClean,
-        baseDirty: data.baseDirty,
-        cleanPerM3: data.cleanPerM3,
-        dirtyPerM3: data.dirtyPerM3,
+        baseClean,
+        baseDirty,
+        cleanPerM3,
+        dirtyPerM3,
         cleanAmount,
         dirtyAmount,
         subtotal,

@@ -106,10 +106,10 @@ export default function TariffsContent() {
       setOrganizations(Array.isArray(orgData) ? orgData : [])
       setTariffs(Array.isArray(tariffData) ? tariffData : [])
       setPipeFees(Array.isArray(pipeData) ? pipeData : [])
-    } catch (e: any) {
+    } catch (e) {
       setOrganizations([])
       setTariffs([])
-      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
       setLoading(false)
     }
@@ -146,8 +146,8 @@ export default function TariffsContent() {
       setShowTariffModal(false)
       await loadAll()
       setMessage({ type: 'success', text: data.message || 'Тариф амжилттай хадгаллаа' })
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
       setSaving(false)
     }
@@ -173,8 +173,8 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
       await loadAll()
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
       setSaving(false)
     }
@@ -204,8 +204,8 @@ export default function TariffsContent() {
 
       setPipeForm({ id: '', diameterMm: '', baseCleanFee: '', baseDirtyFee: '' })
       await loadAll()
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
       setSaving(false)
     }
@@ -236,8 +236,8 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
       await loadAll()
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e?.message || 'Алдаа гарлаа' })
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
       setSaving(false)
     }
@@ -377,6 +377,9 @@ export default function TariffsContent() {
             <p className="mt-1 text-sm text-gray-600">
               Шугамын голч (мм)-оор цэвэр/бохир усны суурь хураамжийг тохируулна.
             </p>
+            <p className="mt-2 text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
+              Байгууллага нэмэхэд «Шугамын хоолой (мм)»-д оруулсан тоо нь шугамын голч болно. Заалт оруулах үед тухайн хэрэглэгчийн шугамын голчид тохирсон энэ хүснэгтийн суурь хураамж автоматаар нэмэгдэнэ.
+            </p>
           </div>
           <button
             type="button"
@@ -500,6 +503,36 @@ export default function TariffsContent() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Цэвэр усны суурь хураамж (₮/сар)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.baseCleanFee}
+                      onChange={(e) => setForm((p) => ({ ...p, baseCleanFee: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Бохир усны суурь хураамж (₮/сар)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={form.baseDirtyFee}
+                      onChange={(e) => setForm((p) => ({ ...p, baseDirtyFee: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">

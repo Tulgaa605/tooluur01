@@ -20,15 +20,24 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       })
 
-      const data = await res.json()
+      const text = await res.text()
+      let data: { error?: string } = {}
+      try {
+        data = text ? JSON.parse(text) : {}
+      } catch {
+        if (!res.ok) {
+          setError('Серверийн алдаа. Дахин оролдоно уу.')
+          return
+        }
+      }
 
       if (!res.ok) {
         throw new Error(data.error || 'Нэвтрэхэд алдаа гарлаа')
       }
 
       window.location.href = '/dashboard'
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Нэвтрэхэд алдаа гарлаа')
     } finally {
       setLoading(false)
     }
@@ -85,7 +94,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+              className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
             >
               {loading ? 'Нэвтэрч байна...' : 'Нэвтрэх'}
             </button>
