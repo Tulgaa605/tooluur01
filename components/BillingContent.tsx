@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { ArrowDownTrayIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
+import { fetchWithAuth } from '@/lib/api'
 
 interface Reading {
   id: string
@@ -25,7 +26,7 @@ export default function BillingContent() {
   const [sending, setSending] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/readings')
+    fetchWithAuth('/api/readings')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -70,7 +71,7 @@ export default function BillingContent() {
   const handleSendNotification = async (reading: Reading) => {
     setSending(reading.id)
     try {
-      const res = await fetch('/api/notifications/send', {
+      const res = await fetchWithAuth('/api/notifications/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ readingId: reading.id }),

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
+import { fetchWithAuth } from '@/lib/api'
 
 interface Organization {
   id: string
@@ -51,14 +52,14 @@ export default function OrganizationsContent() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/pipe-fees')
+    fetchWithAuth('/api/pipe-fees')
       .then(res => (res.ok ? res.json() : []))
       .then(data => setPipeFees(Array.isArray(data) ? data : []))
       .catch(() => setPipeFees([]))
   }, [])
 
   const loadOrganizations = () => {
-    fetch('/api/organizations')
+    fetchWithAuth('/api/organizations')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -154,7 +155,7 @@ export default function OrganizationsContent() {
     const id = deleteConfirmId
     setDeleteConfirmId(null)
     try {
-      const res = await fetch(`/api/organizations?id=${id}`, { method: 'DELETE' })
+      const res = await fetchWithAuth(`/api/organizations?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadOrganizations()

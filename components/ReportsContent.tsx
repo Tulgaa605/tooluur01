@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { fetchWithAuth } from '@/lib/api'
 
 interface ReportData {
   monthlyData: Array<{ month: string; usage: number; total: number }>
@@ -21,7 +22,7 @@ export default function ReportsContent() {
   const yearNum = Number(year) || currentYear
 
   const loadReports = () => {
-    fetch(`/api/reports?year=${yearNum}`)
+    fetchWithAuth(`/api/reports?year=${yearNum}`)
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {

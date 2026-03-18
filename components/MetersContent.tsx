@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
+import { fetchWithAuth } from '@/lib/api'
 
 interface Organization {
   id: string
@@ -38,7 +39,7 @@ export default function MetersContent() {
 
   useEffect(() => {
     loadMeters()
-    fetch('/api/organizations', { credentials: 'include' })
+    fetchWithAuth('/api/organizations', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : []))
       .then(data => {
         if (Array.isArray(data)) {
@@ -48,7 +49,7 @@ export default function MetersContent() {
         }
       })
       .catch(() => setOrganizations([]))
-    fetch('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
+    fetchWithAuth('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : []))
       .then(data => {
         if (Array.isArray(data)) {
@@ -61,7 +62,7 @@ export default function MetersContent() {
   }, [])
 
   const loadMeters = () => {
-    fetch('/api/meters')
+    fetchWithAuth('/api/meters')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -102,7 +103,7 @@ export default function MetersContent() {
         ? { ...form, id: editingId }
         : { meterNumber: form.meterNumber, organizationId: form.organizationId, year: form.year }
 
-      const res = await fetch('/api/meters', {
+      const res = await fetchWithAuth('/api/meters', {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -141,7 +142,7 @@ export default function MetersContent() {
     const id = deleteConfirmId
     setDeleteConfirmId(null)
     try {
-      const res = await fetch(`/api/meters?id=${id}`, { method: 'DELETE' })
+      const res = await fetchWithAuth(`/api/meters?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadMeters()

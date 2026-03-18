@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
+import { fetchWithAuth } from '@/lib/api'
 
 interface User {
   id: string
@@ -85,7 +86,7 @@ export default function UsersContent() {
     loadUsers()
     loadOrganizations()
     loadHouseholds()
-    fetch('/api/organizations', { credentials: 'include' })
+    fetchWithAuth('/api/organizations', { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -97,7 +98,7 @@ export default function UsersContent() {
 
   const loadHouseholds = () => {
     setHouseholdsLoading(true)
-    fetch('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
+    fetchWithAuth('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
       .then(res => {
         if (!res.ok) return res.json().then(() => ({ error: true }))
         return res.json()
@@ -117,7 +118,7 @@ export default function UsersContent() {
   }
 
   const loadUsers = () => {
-    fetch('/api/users')
+    fetchWithAuth('/api/users')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -143,7 +144,7 @@ export default function UsersContent() {
   }
 
   const loadOrganizations = () => {
-    fetch('/api/organizations')
+    fetchWithAuth('/api/organizations')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -195,7 +196,7 @@ export default function UsersContent() {
     const id = deleteConfirm.id
     setDeleteConfirm(null)
     try {
-      const res = await fetch(`/api/users?id=${id}`, { method: 'DELETE' })
+      const res = await fetchWithAuth(`/api/users?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadUsers()
@@ -208,7 +209,7 @@ export default function UsersContent() {
     e.preventDefault()
     try {
       if (editingUserId) {
-        const res = await fetch('/api/users', {
+        const res = await fetchWithAuth('/api/users', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -224,7 +225,7 @@ export default function UsersContent() {
         if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       } else {
         const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Хувь хүн'
-        const orgRes = await fetch('/api/organizations', {
+        const orgRes = await fetchWithAuth('/api/organizations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -278,7 +279,7 @@ export default function UsersContent() {
     const id = deleteConfirm.id
     setDeleteConfirm(null)
     try {
-      const res = await fetch(`/api/organizations?id=${id}`, { method: 'DELETE' })
+      const res = await fetchWithAuth(`/api/organizations?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadOrganizations()

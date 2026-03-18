@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
+import { fetchWithAuth } from '@/lib/api'
 
 type OrganizationCategory =
   | 'HOUSEHOLD'
@@ -94,9 +95,9 @@ export default function TariffsContent() {
     setMessage(null)
     try {
       const [orgRes, tariffRes, pipeRes] = await Promise.all([
-        fetch('/api/organizations'),
-        fetch('/api/tariffs?includeCategory=1'),
-        fetch('/api/pipe-fees'),
+        fetchWithAuth('/api/organizations'),
+        fetchWithAuth('/api/tariffs?includeCategory=1'),
+        fetchWithAuth('/api/pipe-fees'),
       ])
 
       const orgData = await orgRes.json()
@@ -129,7 +130,7 @@ export default function TariffsContent() {
     setSaving(true)
     setMessage(null)
     try {
-      const res = await fetch('/api/tariffs', {
+      const res = await fetchWithAuth('/api/tariffs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

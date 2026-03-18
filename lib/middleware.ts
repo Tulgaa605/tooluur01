@@ -3,7 +3,11 @@ import { verifyToken, TokenPayload } from './auth'
 import { Role } from '@/lib/role'
 
 export function getAuthUser(request: NextRequest): TokenPayload | null {
-  const token = request.cookies.get('token')?.value
+  let token = request.cookies.get('token')?.value
+  if (!token) {
+    const authHeader = request.headers.get('authorization')
+    if (authHeader?.startsWith('Bearer ')) token = authHeader.slice(7)
+  }
   if (!token) return null
   return verifyToken(token)
 }

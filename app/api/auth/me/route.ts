@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
   try {
     const user = getAuthUser(request)
     if (!user) {
-      return NextResponse.json({ user: null }, { status: 401 })
+      return NextResponse.json({ user: null }, { status: 200 })
     }
 
     const dbUser = await prisma.user.findUnique({
@@ -22,9 +22,9 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    return NextResponse.json({ user: dbUser })
-  } catch (error) {
-    return NextResponse.json({ user: null }, { status: 401 })
+    return NextResponse.json({ user: dbUser }, { status: 200 })
+  } catch {
+    return NextResponse.json({ user: null }, { status: 200 })
   }
 }
 

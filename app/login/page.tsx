@@ -18,6 +18,7 @@ export default function LoginPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        credentials: 'include',
       })
 
       const text = await res.text()
@@ -35,7 +36,14 @@ export default function LoginPage() {
         throw new Error(data.error || 'Нэвтрэхэд алдаа гарлаа')
       }
 
-      window.location.href = '/dashboard'
+      const token = (data as { token?: string }).token
+      if (token && typeof window !== 'undefined') {
+        sessionStorage.setItem('token', token)
+      }
+
+      setTimeout(() => {
+        window.location.replace('/dashboard')
+      }, 100)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Нэвтрэхэд алдаа гарлаа')
     } finally {
@@ -52,6 +60,9 @@ export default function LoginPage() {
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
             Нэвтрэх
+          </p>
+          <p className="mt-1 text-center text-xs text-gray-500">
+            Жишээ: accountant@example.com / password123 (seed ажиллуулсан бол)
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>

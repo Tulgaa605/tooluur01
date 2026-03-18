@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
+import { fetchWithAuth } from '@/lib/api'
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule, ICellEditorParams } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
@@ -174,7 +175,7 @@ export default function ReadingsContent() {
   const modalGridRef = useRef<AgGridReact>(null)
 
   useEffect(() => {
-    fetch('/api/organizations')
+    fetchWithAuth('/api/organizations')
       .then(res => {
         if (!res.ok) {
           return res.json().then(() => [])
@@ -194,7 +195,7 @@ export default function ReadingsContent() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/tariffs?includeCategory=1')
+    fetchWithAuth('/api/tariffs?includeCategory=1')
       .then(res => {
         if (!res.ok) return res.json().then(() => [])
         return res.json()
@@ -217,7 +218,7 @@ export default function ReadingsContent() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/pipe-fees')
+    fetchWithAuth('/api/pipe-fees')
       .then(res => (res.ok ? res.json() : []))
       .then(data => (Array.isArray(data) ? setPipeFees(data) : setPipeFees([])))
       .catch(() => setPipeFees([]))
@@ -225,7 +226,7 @@ export default function ReadingsContent() {
 
   useEffect(() => {
     // Load all meters for dropdown
-    fetch('/api/meters')
+    fetchWithAuth('/api/meters')
       .then(res => {
         if (!res.ok) {
           return res.json().then(() => [])
@@ -252,7 +253,7 @@ export default function ReadingsContent() {
       if (filterYear.trim()) params.append('year', filterYear.trim())
       if (filterOrgId) params.append('organizationId', filterOrgId)
 
-      const res = await fetch(`/api/readings?${params.toString()}`)
+      const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
       const data = await res.json()
 
       if (res.ok && Array.isArray(data)) {
@@ -297,7 +298,7 @@ export default function ReadingsContent() {
       // Auto-fill start value from previous month if not set
       if (reading.startValue === 0 && reading.meterId && reading.month && reading.year) {
         try {
-          const res = await fetch(`/api/readings/previous?meterId=${reading.meterId}&month=${reading.month}&year=${reading.year}`)
+          const res = await fetchWithAuth(`/api/readings/previous?meterId=${reading.meterId}&month=${reading.month}&year=${reading.year}`)
           if (res.ok) {
             const data = await res.json()
             if (data && !data.error && typeof data.endValue === 'number') {
@@ -350,7 +351,7 @@ export default function ReadingsContent() {
       // Auto-fill start value from previous month if not set
       if (reading.startValue === 0 && reading.meterId && reading.month && reading.year) {
         try {
-          const res = await fetch(`/api/readings/previous?meterId=${reading.meterId}&month=${reading.month}&year=${reading.year}`)
+          const res = await fetchWithAuth(`/api/readings/previous?meterId=${reading.meterId}&month=${reading.month}&year=${reading.year}`)
           if (res.ok) {
             const data = await res.json()
             if (data && !data.error && typeof data.endValue === 'number') {
@@ -371,7 +372,7 @@ export default function ReadingsContent() {
     // Update existing reading
     if (reading.id) {
       try {
-        const res = await fetch(`/api/readings?id=${reading.id}`, {
+        const res = await fetchWithAuth(`/api/readings?id=${reading.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -408,7 +409,7 @@ export default function ReadingsContent() {
     if (!id) return
     setDeleteConfirm({ open: false, id: null })
     try {
-      const res = await fetch(`/api/readings?id=${id}`, { method: 'DELETE' })
+      const res = await fetchWithAuth(`/api/readings?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       fetchReadings()
@@ -544,9 +545,9 @@ export default function ReadingsContent() {
     setNewReadings([])
     try {
       const [orgRes, meterRes, pipeRes] = await Promise.all([
-        fetch('/api/organizations'),
-        fetch('/api/meters'),
-        fetch('/api/pipe-fees'),
+        fetchWithAuth('/api/organizations'),
+        fetchWithAuth('/api/meters'),
+        fetchWithAuth('/api/pipe-fees'),
       ])
       const orgData = await orgRes.json()
       if (orgRes.ok && Array.isArray(orgData)) setOrganizations(orgData)
@@ -560,8 +561,8 @@ export default function ReadingsContent() {
       const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1
       const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear
       const [prevRes, currentRes] = await Promise.all([
-        fetch(`/api/readings?month=${prevMonth}&year=${prevYear}`),
-        fetch(`/api/readings?month=${currentMonth}&year=${currentYear}`),
+        fetchWithAuth(`/api/readings?month=${prevMonth}&year=${prevYear}`),
+        fetchWithAuth(`/api/readings?month=${currentMonth}&year=${currentYear}`),
       ])
       const prevReadingsData = prevRes.ok ? await prevRes.json() : []
       const prevReadings: Reading[] = Array.isArray(prevReadingsData) ? prevReadingsData : []
@@ -591,8 +592,8 @@ export default function ReadingsContent() {
     setLoading(true)
     setMessage(null)
     try {
-      const orgList = organizations.length ? organizations : await fetch('/api/organizations').then(r => r.ok ? r.json() : []).catch(() => [])
-      const metersList = allMeters.length ? allMeters : await fetch('/api/meters').then(r => r.ok ? r.json() : []).catch(() => [])
+      const orgList = organizations.length ? organizations : await fetchWithAuth('/api/organizations').then(r => r.ok ? r.json() : []).catch(() => [])
+      const metersList = allMeters.length ? allMeters : await fetchWithAuth('/api/meters').then(r => r.ok ? r.json() : []).catch(() => [])
       if (!Array.isArray(orgList)) setNewReadings([])
       else {
         const needPrevKeys: { year: number; month: number }[] = []
@@ -604,13 +605,13 @@ export default function ReadingsContent() {
         const uniq = needPrevKeys.filter((a, i) => needPrevKeys.findIndex(b => b.year === a.year && b.month === a.month) === i)
         const prevReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(uniq.map(async ({ year: py, month: pm }) => {
-          const res = await fetch(`/api/readings?month=${pm}&year=${py}`)
+          const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}`)
           const data = res.ok ? await res.json() : []
           prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
         }))
         const currentReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(months.map(async (month) => {
-          const res = await fetch(`/api/readings?month=${month}&year=${y}`)
+          const res = await fetchWithAuth(`/api/readings?month=${month}&year=${y}`)
           const data = res.ok ? await res.json() : []
           currentReadingsByKey[`${y}-${month}`] = Array.isArray(data) ? data : []
         }))
@@ -662,7 +663,7 @@ export default function ReadingsContent() {
     try {
       for (const reading of rowsToSave) {
         const meterId = reading.meterId!
-        const res = await fetch('/api/readings', {
+        const res = await fetchWithAuth('/api/readings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

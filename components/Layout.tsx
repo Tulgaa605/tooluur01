@@ -2,6 +2,7 @@
 
 import { useRouter, usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { fetchWithAuth } from '@/lib/api'
 
 interface User {
   email: string
@@ -26,13 +27,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (data.user) {
-          setUser(data.user)
+    const checkAuth = () =>
+      fetchWithAuth('/api/auth/me', { cache: 'no-store' })
+        .then(res => res.json())
+        .then(data => data.user)
+
+    checkAuth()
+      .then(userData => {
+        if (userData) {
+          setUser(userData)
         } else {
-          router.push('/login')
+          // Cookie дараа бичигдсэн байж болзошгүй тул нэг удаа дахин шалгана
+          return new Promise(resolve => setTimeout(resolve, 150)).then(() =>
+            checkAuth().then(retryUser => {
+              if (retryUser) setUser(retryUser)
+              else router.push('/login')
+            })
+          )
         }
       })
       .catch(() => router.push('/login'))
@@ -40,7 +51,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [router])
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' })
+    if (typeof window !== 'undefined') sessionStorage.removeItem('token')
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
     router.push('/login')
   }
 

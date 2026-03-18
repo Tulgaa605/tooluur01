@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { fetchWithAuth } from '@/lib/api'
 
 interface DashboardData {
   totalUsage: number
@@ -17,7 +18,7 @@ export default function DashboardContent() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/dashboard')
+    fetchWithAuth('/api/dashboard')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {

@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Windows дээр .next дотор permission/lock асуудал үүсэж байвал distDir-ийг тусад нь салгаж өгнө
+  distDir: '.next-build',
   webpack: (config, { dev }) => {
     if (dev) {
       config.watchOptions = config.watchOptions || {};
@@ -8,6 +10,7 @@ const nextConfig = {
         ...(Array.isArray(config.watchOptions.ignored) ? config.watchOptions.ignored : [config.watchOptions.ignored].filter(Boolean)),
         '**/node_modules/**',
         '**/.next/**',
+        '**/.next-build/**',
         'C:\\System Volume Information/**',
         'C:\\pagefile.sys',
       ].filter(Boolean);
