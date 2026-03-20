@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
@@ -58,6 +58,7 @@ export default function TariffsContent() {
   const [pipeFees, setPipeFees] = useState<PipeFee[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [selectedCategory, setSelectedCategory] = useState<OrganizationCategory | ''>('')
   const [showTariffModal, setShowTariffModal] = useState(false)
@@ -83,8 +84,6 @@ export default function TariffsContent() {
     organizationId: '',
     year: String(current.year),
     month: String(current.month),
-    baseCleanFee: '',
-    baseDirtyFee: '',
     cleanPerM3: '',
     dirtyPerM3: '',
   })
@@ -121,12 +120,41 @@ export default function TariffsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // UI дээр type/category тариф (kind === 'category') байвал тухайн category-н current month-ийн
+  // organizationTariff мөрүүдийг нууж "2 удаа нэмэгдсэн" мэт харагдахаас сэргийлнэ.
+  const categoryTariffCategories = useMemo(() => {
+    const s = new Set<OrganizationCategory>()
+    for (const t of tariffs) {
+      if (t.kind === 'category' && t.category) {
+        s.add(t.category)
+      }
+    }
+    return s
+  }, [tariffs])
+
+  const visibleTariffs = useMemo(() => {
+    return tariffs.filter((t) => {
+      // Category тариф үргэлж харагдана
+      if (t.kind === 'category') return true
+      const orgCategory = t.organization?.category
+      if (!orgCategory) return true
+
+      // Current month дээр category тариф байгаа бол organization мөрүүдийг нуух
+      if (t.year === current.year && t.month === current.month) {
+        return !categoryTariffCategories.has(orgCategory as OrganizationCategory)
+      }
+      return true
+    })
+  }, [tariffs, categoryTariffCategories, current.year, current.month])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedCategory) {
       setMessage({ type: 'error', text: 'Хэрэглэгчийн төрлийг эхлээд сонгоно уу' })
       return
     }
+    if (savingRef.current) return
+    savingRef.current = true
     setSaving(true)
     setMessage(null)
     try {
@@ -135,8 +163,9 @@ export default function TariffsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category: selectedCategory,
-          baseCleanFee: Number(form.baseCleanFee) || 0,
-          baseDirtyFee: Number(form.baseDirtyFee) || 0,
+          // Суурь хураамж: шугамын голчийн хүснэг + байгууллагын хоолойн мм-ээр API автоматаар тохируулна
+          baseCleanFee: 0,
+          baseDirtyFee: 0,
           cleanPerM3: Number(form.cleanPerM3) || 0,
           dirtyPerM3: Number(form.dirtyPerM3) || 0,
         }),
@@ -151,6 +180,7 @@ export default function TariffsContent() {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
       setSaving(false)
+      savingRef.current = false
     }
   }
 
@@ -254,7 +284,7 @@ export default function TariffsContent() {
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">Тариф</h2>
           <p className="mt-1 text-sm text-gray-600">
-            Сар бүрийн «цэвэр/бохир суурь хураамж» (мөн м³-ийн үнэ) оруулна.
+            Төрлийн тарифаар м³-ийн үнэ оруулна. Суурь хураамж шугамын голчоор доорх хүснэгтээс автоматаар тооцогдоно.
           </p>
         </div>
         <button
@@ -264,8 +294,6 @@ export default function TariffsContent() {
               organizationId: '',
               year: String(current.year),
               month: String(current.month),
-              baseCleanFee: '',
-              baseDirtyFee: '',
               cleanPerM3: '',
               dirtyPerM3: '',
             })
@@ -301,12 +329,6 @@ export default function TariffsContent() {
                 Хэрэглэгчийн төрөл
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Ц суурь
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Б суурь
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Ц (₮/м³)
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -318,11 +340,11 @@ export default function TariffsContent() {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {tariffs.map((t) => (
+            {visibleTariffs.map((t) => (
               <tr key={t.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {t.kind === 'category'
-                    ? '—'
+                    ? `${current.year}-${String(current.month).padStart(2, '0')}`
                     : `${t.year}-${String(t.month).padStart(2, '0')}`}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -331,12 +353,6 @@ export default function TariffsContent() {
                     : t.organization?.category
                       ? (CATEGORY_LABELS[t.organization.category as OrganizationCategory] ?? t.organization.category)
                       : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {(t.baseCleanFee ?? 0).toFixed(2)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {(t.baseDirtyFee ?? 0).toFixed(2)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {(t.cleanPerM3 ?? 0).toFixed(2)}
@@ -504,36 +520,6 @@ export default function TariffsContent() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Цэвэр усны суурь хураамж (₮/сар)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={form.baseCleanFee}
-                      onChange={(e) => setForm((p) => ({ ...p, baseCleanFee: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      placeholder="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Бохир усны суурь хураамж (₮/сар)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={form.baseDirtyFee}
-                      onChange={(e) => setForm((p) => ({ ...p, baseDirtyFee: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      placeholder="0"
-                    />
-                  </div>
-                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">

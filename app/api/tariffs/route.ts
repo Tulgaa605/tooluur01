@@ -70,15 +70,14 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
-    const organizationIdParam = searchParams.get('organizationId')
     const year = searchParams.get('year') ? parseInt(searchParams.get('year') as string, 10) : undefined
 
-    const where: any = {}
-    if (user.organizationId) {
-      where.organizationId = user.organizationId
-    } else if (organizationIdParam) {
-      where.organizationId = organizationIdParam
+    // Зөвхөн өөрийн байгууллагын тариф
+    if (!user.organizationId) {
+      return NextResponse.json([])
     }
+
+    const where: any = { organizationId: user.organizationId }
     if (year) where.year = year
 
     const tariffs = await prisma.organizationTariff.findMany({

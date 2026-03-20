@@ -23,11 +23,20 @@ export async function GET(request: NextRequest) {
     const previousMonth = currentMonth === 1 ? 12 : currentMonth - 1
     const previousYear = currentMonth === 1 ? currentYear - 1 : currentYear
 
+    // Зөвхөн өөрийн байгууллагын өгөгдөл
     let whereClause: any = {}
-    if (user.role === Role.USER && user.organizationId) {
+    if (user.organizationId) {
       whereClause.organizationId = user.organizationId
-    } else if ((user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) && user.organizationId) {
-      whereClause.organizationId = user.organizationId
+    } else {
+      return NextResponse.json({
+        currentMonthUsage: 0,
+        previousMonthUsage: 0,
+        usageChange: 0,
+        totalUsage: 0,
+        monthlyData: [],
+        topOrganizations: [],
+        organizationData: [],
+      })
     }
 
     // Get current month usage
@@ -62,14 +71,10 @@ export async function GET(request: NextRequest) {
         ? ((currentMonthUsage - previousMonthUsage) / previousMonthUsage) * 100
         : 0
 
-    // Get all readings for total
-    const allReadings = await prisma.meterReading.findMany({
-      where: whereClause,
-    })
-    const totalUsage = allReadings.reduce((sum, r) => sum + r.usage, 0)
-
     // Monthly data for chart (last 12 months)
     const monthlyData = []
+    // "Нийт зарцуулсан ус" гэдгийг графиктай уялдуулахын тулд сүүлийн 12 сарын нийлбэрээр бодно.
+    let totalUsage = 0
     for (let i = 11; i >= 0; i--) {
       const date = new Date(currentYear, currentMonth - 1 - i, 1)
       const month = date.getMonth() + 1
@@ -86,6 +91,7 @@ export async function GET(request: NextRequest) {
 
       const usage = monthReadings.reduce((sum, r) => sum + r.usage, 0)
       monthlyData.push({ month: monthName, usage })
+      totalUsage += usage
     }
 
     let topOrganizations: Array<{ name: string; usage: number }> = []

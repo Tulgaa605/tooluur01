@@ -15,7 +15,11 @@ export async function GET(request: NextRequest) {
     if (!meterId) {
       return NextResponse.json({ error: 'Тоолуурын ID шаардлагатай' }, { status: 400 })
     }
-    if (user.organizationId) {
+    // USER/ACCOUNTANT: зөвхөн өөрийн байгууллагын тоолуурууд дээрх өмнөх заалтыг авна
+    if ((String(user.role) === Role.USER || String(user.role) === Role.ACCOUNTANT)) {
+      if (!user.organizationId) {
+        return NextResponse.json({ error: 'Эрх байхгүй' }, { status: 403 })
+      }
       const meter = await prisma.meter.findUnique({
         where: { id: meterId },
         select: { organizationId: true },

@@ -300,7 +300,7 @@ export default function UsersContent() {
         ...(editingOrgId ? { id: editingOrgId } : {}),
       }
 
-      const res = await fetch(url, {
+      const res = await fetchWithAuth(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

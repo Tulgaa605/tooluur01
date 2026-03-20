@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser, requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { generateToken } from '@/lib/auth'
 import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
 
 export async function GET(request: NextRequest) {
@@ -12,14 +13,19 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const categoryFilter = searchParams.get('category')
 
+    // Нягтлан: зөвхөн өөрийн байгууллага.
+    // Захирал: хүсвэл бүгдийг харах боломжтой (шүүх params дээр нэмэлт хийх боломжтой).
+    const canSeeAllOrgs = user.role === Role.MANAGER
     const where: { id?: string; category?: string } = {}
-    if (categoryFilter === 'HOUSEHOLD') {
-      where.category = 'HOUSEHOLD'
-    } else if (user.organizationId) {
+    if (!canSeeAllOrgs) {
+      if (!user.organizationId) return NextResponse.json([])
       where.id = user.organizationId
     }
+    if (categoryFilter === 'HOUSEHOLD') {
+      where.category = 'HOUSEHOLD'
+    }
     const organizations = await prisma.organization.findMany({
-      where: Object.keys(where).length ? where : undefined,
+      where,
       orderBy: categoryFilter === 'HOUSEHOLD' ? { createdAt: 'desc' } : { name: 'asc' },
     })
 
@@ -99,13 +105,38 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    let newToken: string | undefined
+    if (user.organizationId == null) {
+      await prisma.user.update({
+        where: { id: user.userId },
+        data: { organizationId: organization.id },
+      })
+      newToken = generateToken({
+        userId: user.userId,
+        email: user.email,
+        role: user.role as Role,
+        organizationId: organization.id,
+      })
+    }
+
     // Энэ төрлийн тариф бүртгэлтэй бол байгууллага дээр автоматаар тариф үүсгэнэ
     const tariffsApplied = await applyCategoryTariffsToOrganization(organization.id)
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       ...organization,
       tariffsApplied,
+      ...(newToken && { token: newToken }),
     })
+    if (newToken) {
+      response.cookies.set('token', newToken, {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+      })
+    }
+    return response
   } catch (error: any) {
     console.error('Organization creation error:', error)
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {

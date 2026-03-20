@@ -12,11 +12,10 @@ export async function GET(request: NextRequest) {
     }
 
     const where: any = {}
-    if (user.role === Role.USER && user.organizationId) {
-      where.organizationId = user.organizationId
-    } else if ((user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) && user.organizationId) {
+    if ((String(user.role) === Role.USER || String(user.role) === Role.ACCOUNTANT) && user.organizationId) {
       where.organizationId = user.organizationId
     }
+    // MANAGER: organizationId шүүх байхгүй тул бүх байгууллагын сүүлийн заалт харагдана.
 
     // Pull readings ordered by newest, then pick first per meter in code.
     const readings = await prisma.meterReading.findMany({

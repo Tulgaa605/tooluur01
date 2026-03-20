@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAuthUser, requireAuth } from '@/lib/middleware'
+import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 
@@ -8,19 +8,16 @@ export async function GET(request: NextRequest) {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
-    const organizationId = searchParams.get('organizationId')
+    const filterOrgId = searchParams.get('organizationId')
 
     const where: any = {}
-    if (user.organizationId) {
+    // ACCOUNTANT: зөвхөн өөрийн байгууллага
+    if (String(user.role) === Role.ACCOUNTANT) {
+      if (!user.organizationId) return NextResponse.json([])
       where.organizationId = user.organizationId
-    } else if (organizationId) {
-      where.organizationId = organizationId
-    } else {
-      const validOrgIds = await prisma.organization.findMany({
-        select: { id: true },
-      })
-      const validOrgIdSet = new Set(validOrgIds.map(org => org.id))
-      where.organizationId = { in: Array.from(validOrgIdSet) }
+    } else if (filterOrgId) {
+      // MANAGER: зөвхөн шүүлтээр (organizationId) харах
+      where.organizationId = filterOrgId
     }
 
     const meters = await prisma.meter.findMany({
@@ -60,12 +57,28 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
 
-    const orgId = user.organizationId || data.organizationId
-    if (user.organizationId && data.organizationId && data.organizationId !== user.organizationId) {
-      return NextResponse.json(
-        { error: 'Зөвхөн өөрийн байгууллагад тоолуур нэмэх боломжтой' },
-        { status: 403 }
-      )
+    const orgId =
+      String(user.role) === Role.ACCOUNTANT
+        ? user.organizationId
+        : data.organizationId != null && String(data.organizationId).trim() !== ''
+          ? String(data.organizationId).trim()
+          : user.organizationId
+    if (!orgId) {
+      return NextResponse.json({ error: 'Байгууллага сонгоно уу' }, { status: 400 })
+    }
+
+    const orgExists = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { id: true },
+    })
+    if (!orgExists) {
+      return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+    }
+
+    const meterNumber =
+      typeof data.meterNumber === 'string' ? data.meterNumber.trim() : String(data.meterNumber ?? '').trim()
+    if (!meterNumber) {
+      return NextResponse.json({ error: 'Тоолуурын дугаар оруулна уу' }, { status: 400 })
     }
 
     const currentYear = new Date().getFullYear()
@@ -74,7 +87,7 @@ export async function POST(request: NextRequest) {
       : currentYear
     const meter = await prisma.meter.create({
       data: {
-        meterNumber: data.meterNumber,
+        meterNumber,
         organizationId: orgId,
         year,
       },
@@ -84,6 +97,12 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
       return NextResponse.json({ error: error.message }, { status: 403 })
+    }
+    if (error.code === 'P2002') {
+      return NextResponse.json(
+        { error: 'Энэ дугаартай тоолуур аль хэдийн бүртгэлтэй байна' },
+        { status: 400 }
+      )
     }
     return NextResponse.json(
       { error: error.message || 'Алдаа гарлаа' },
@@ -112,32 +131,43 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    if (user.organizationId) {
-      const existing = await prisma.meter.findUnique({
-        where: { id: data.id },
-        select: { organizationId: true },
-      })
-      if (!existing || existing.organizationId !== user.organizationId) {
-        return NextResponse.json(
-          { error: 'Энэ тоолуурыг засах эрхгүй' },
-          { status: 403 }
-        )
-      }
+    const existing = await prisma.meter.findUnique({
+      where: { id: data.id },
+      select: { organizationId: true },
+    })
+    if (!existing) {
+      return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
     }
 
     const currentYear = new Date().getFullYear()
     const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
       ? data.year
       : currentYear
-    const updateData: any = {
-      meterNumber: data.meterNumber.trim(),
-      organizationId: data.organizationId,
-      year,
+
+    let nextOrgId = existing.organizationId
+    if (String(user.role) === Role.ACCOUNTANT) {
+      if (!user.organizationId || existing.organizationId !== user.organizationId) {
+        return NextResponse.json({ error: 'Энэ тоолуурыг засах эрхгүй' }, { status: 403 })
+      }
+      nextOrgId = user.organizationId
+    } else if (data.organizationId != null && String(data.organizationId).trim() !== '') {
+      nextOrgId = String(data.organizationId).trim()
+      const orgExists = await prisma.organization.findUnique({
+        where: { id: nextOrgId },
+        select: { id: true },
+      })
+      if (!orgExists) {
+        return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+      }
     }
-    if (user.organizationId) updateData.organizationId = user.organizationId
+
     const meter = await prisma.meter.update({
       where: { id: data.id },
-      data: updateData,
+      data: {
+        meterNumber: data.meterNumber.trim(),
+        organizationId: nextOrgId,
+        year,
+      },
     })
 
     return NextResponse.json(meter)
@@ -186,11 +216,11 @@ export async function DELETE(request: NextRequest) {
         { status: 404 }
       )
     }
-    if (user.organizationId && meter.organizationId !== user.organizationId) {
-      return NextResponse.json(
-        { error: 'Энэ тоолуурыг устгах эрхгүй' },
-        { status: 403 }
-      )
+
+    if (String(user.role) === Role.ACCOUNTANT) {
+      if (!user.organizationId || meter.organizationId !== user.organizationId) {
+        return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
+      }
     }
     if (meter.readings.length > 0) {
       return NextResponse.json(

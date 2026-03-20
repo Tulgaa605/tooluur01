@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!user.organizationId) return NextResponse.json([])
 
     const where: { organizationId?: string | null } = {}
     if (user.organizationId) {
@@ -48,6 +49,9 @@ export async function PUT(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!user.organizationId) {
+      return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
+    }
     const data = await request.json()
 
     if (!data.id) {
@@ -127,6 +131,9 @@ export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!user.organizationId) {
+      return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
+    }
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 

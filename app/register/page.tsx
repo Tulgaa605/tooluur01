@@ -3,9 +3,10 @@
 import { useState } from 'react'
 import Link from 'next/link'
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -15,14 +16,15 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, name }),
+        credentials: 'include',
       })
 
       const text = await res.text()
-      let data: { error?: string } = {}
+      let data: { error?: string; token?: string } = {}
       try {
         data = text ? JSON.parse(text) : {}
       } catch {
@@ -33,12 +35,19 @@ export default function LoginPage() {
       }
 
       if (!res.ok) {
-        throw new Error(data.error || 'Нэвтрэхэд алдаа гарлаа')
+        throw new Error(data.error || 'Бүртгэлд алдаа гарлаа')
       }
 
-      window.location.href = '/dashboard'
+      const token = data.token
+      if (token && typeof window !== 'undefined') {
+        sessionStorage.setItem('token', token)
+      }
+
+      setTimeout(() => {
+        window.location.replace('/dashboard')
+      }, 100)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Нэвтрэхэд алдаа гарлаа')
+      setError(err instanceof Error ? err.message : 'Бүртгэлд алдаа гарлаа')
     } finally {
       setLoading(false)
     }
@@ -52,7 +61,7 @@ export default function LoginPage() {
             Усны тоолуурын систем
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Нэвтрэх
+            Шинэ хэрэглэгч бүртгүүлэх
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
@@ -62,6 +71,20 @@ export default function LoginPage() {
             </div>
           )}
           <div className="space-y-4">
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700">
+                Нэр
+              </label>
+              <input
+                id="name"
+                name="name"
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              />
+            </div>
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
                 Имэйл
@@ -85,10 +108,12 @@ export default function LoginPage() {
                 name="password"
                 type="password"
                 required
+                minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
               />
+              <p className="mt-1 text-xs text-gray-500">Хамгийн багадаа 6 тэмдэгт</p>
             </div>
           </div>
           <div className="space-y-3">
@@ -97,17 +122,14 @@ export default function LoginPage() {
               disabled={loading}
               className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
             >
-              {loading ? 'Нэвтэрч байна...' : 'Нэвтрэх'}
+              {loading ? 'Бүртгэж байна...' : 'Бүртгүүлэх'}
             </button>
-            <p className="text-center text-sm text-gray-600">
-              Бүртгэл байхгүй юу?{' '}
-              <Link
-                href="/register"
-                className="font-medium text-primary-600 hover:text-primary-500"
-              >
-                Бүртгүүлэх
-              </Link>
-            </p>
+            <Link
+              href="/login"
+              className="w-full flex justify-center py-2.5 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+            >
+              Нэвтрэх
+            </Link>
           </div>
         </form>
       </div>

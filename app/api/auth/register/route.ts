@@ -16,7 +16,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { email },
     })
@@ -28,18 +27,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate role
     const userRole = role && Object.values(Role).includes(role as Role) 
       ? (role as Role) 
       : Role.USER
 
-    // Hash password
     const hashedPassword = await hashPassword(password)
 
-    // Get current year
     const currentYear = new Date().getFullYear()
 
-    // Create user
     const user = await prisma.user.create({
       data: {
         email,
@@ -51,8 +46,6 @@ export async function POST(request: NextRequest) {
       },
       include: { organization: true },
     })
-
-    // Generate token and login automatically
     const token = generateToken({
       userId: user.id,
       email: user.email,
@@ -62,6 +55,7 @@ export async function POST(request: NextRequest) {
 
     const response = NextResponse.json({
       success: true,
+      token,
       user: {
         id: user.id,
         email: user.email,

@@ -97,7 +97,7 @@ export default function OrganizationsContent() {
         ...(editingId ? { id: editingId } : {}),
       }
 
-      const res = await fetch(url, {
+      const res = await fetchWithAuth(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -107,6 +107,10 @@ export default function OrganizationsContent() {
 
       if (!res.ok) {
         throw new Error(data.error || 'Алдаа гарлаа')
+      }
+
+      if (data.token && typeof window !== 'undefined') {
+        sessionStorage.setItem('token', data.token)
       }
 
       setShowForm(false)

@@ -94,7 +94,9 @@ export async function POST(request: NextRequest) {
     if (!meter) {
       return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
     }
-    if (user.organizationId && meter.organizationId !== user.organizationId) {
+
+    // ACCOUNTANT: зөвхөн өөрийн байгууллагын тоолуур дээр заалт оруулах
+    if (!user.organizationId || meter.organizationId !== user.organizationId) {
       return NextResponse.json(
         { error: 'Энэ байгууллагын заалт оруулах эрхгүй' },
         { status: 403 }
@@ -181,20 +183,24 @@ export async function GET(request: NextRequest) {
     }
     const { searchParams } = new URL(request.url)
 
+    // USER/ACCOUNTANT: зөвхөн өөрийн байгууллага.
+    // MANAGER: ?organizationId өгвөл шүүнэ (өгөөгүй бол бүгд).
     let where: any = {}
-
-    if (user.role === Role.USER && user.organizationId) {
-      where.organizationId = user.organizationId
-    } else if ((user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) && user.organizationId) {
-      where.organizationId = user.organizationId
-    } else {
-      const organizationId = searchParams.get('organizationId')
-      if (organizationId && (user.role === Role.ACCOUNTANT || user.role === Role.MANAGER)) {
-        where.organizationId = organizationId
+    const filterOrgId = searchParams.get('organizationId')
+    const roleStr = String(user.role)
+    if (roleStr === Role.USER) {
+      if (!user.organizationId) {
+        return NextResponse.json([])
       }
+      where.organizationId = user.organizationId
+    } else if (roleStr === Role.ACCOUNTANT) {
+      if (!user.organizationId) {
+        return NextResponse.json([])
+      }
+      where.organizationId = user.organizationId
+    } else if (filterOrgId) {
+      where.organizationId = filterOrgId
     }
-    // Note: We don't filter by { not: null } here because Prisma MongoDB doesn't support it
-    // Instead, we filter out null organizations in code after fetching
 
     const month = searchParams.get('month')
     if (month) {
@@ -204,23 +210,6 @@ export async function GET(request: NextRequest) {
     const year = searchParams.get('year')
     if (year) {
       where.year = parseInt(year)
-    }
-    
-    // Get all readings - use raw query to handle null organizations
-    // First, get all organization IDs that exist
-    const validOrgIds = await prisma.organization.findMany({
-      select: { id: true },
-    })
-    const validOrgIdSet = new Set(validOrgIds.map(org => org.id))
-    
-    // Add filter to only get readings with valid organizationId
-    if (Object.keys(where).length === 0 || !where.organizationId) {
-      where.organizationId = { in: Array.from(validOrgIdSet) }
-    } else if (typeof where.organizationId === 'string') {
-      // If specific organizationId is requested, verify it exists
-      if (!validOrgIdSet.has(where.organizationId)) {
-        return NextResponse.json([])
-      }
     }
     
     const readings = await prisma.meterReading.findMany({
@@ -313,11 +302,15 @@ export async function PUT(request: NextRequest) {
         { status: 404 }
       )
     }
-    if (user.organizationId && existingReading.organizationId !== user.organizationId) {
-      return NextResponse.json(
-        { error: 'Энэ заалтыг засах эрхгүй' },
-        { status: 403 }
-      )
+
+    // ACCOUNTANT: зөвхөн өөрийн байгууллагын заалтыг засах
+    if (String(user.role) === Role.ACCOUNTANT) {
+      if (!user.organizationId || existingReading.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ заалтыг засах эрхгүй' },
+          { status: 403 }
+        )
+      }
     }
 
     const usage = data.endValue - data.startValue
@@ -408,11 +401,18 @@ export async function DELETE(request: NextRequest) {
       where: { id },
       select: { organizationId: true },
     })
-    if (reading && user.organizationId && reading.organizationId !== user.organizationId) {
-      return NextResponse.json(
-        { error: 'Энэ заалтыг устгах эрхгүй' },
-        { status: 403 }
-      )
+    if (!reading) {
+      return NextResponse.json({ error: 'Заалт олдсонгүй' }, { status: 404 })
+    }
+
+    // ACCOUNTANT: зөвхөн өөрийн байгууллагын заалтыг устгах
+    if (String(user.role) === Role.ACCOUNTANT) {
+      if (!user.organizationId || reading.organizationId !== user.organizationId) {
+        return NextResponse.json(
+          { error: 'Энэ заалтыг устгах эрхгүй' },
+          { status: 403 }
+        )
+      }
     }
 
     await prisma.meterReading.delete({

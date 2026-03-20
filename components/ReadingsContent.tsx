@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { fetchWithAuth } from '@/lib/api'
 import { AgGridReact } from 'ag-grid-react'
-import { ColDef, ModuleRegistry, AllCommunityModule, ICellEditorParams } from 'ag-grid-community'
+import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { TrashIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
@@ -12,38 +12,63 @@ import ConfirmModal from './ConfirmModal'
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
 
-/** Тооны нүдний editor: нэг дарж бүх текстийг сонгоно (select all on focus). */
-const NumberCellEditorSelectAll = forwardRef((props: ICellEditorParams, ref: React.Ref<unknown>) => {
+/**
+ * AG Grid v31+ reactive cell editor: imperative getValue() энд ашиглагдахгүй.
+ * Утгыг onValueChange-аар дамжуулна — үгүй бол засвар дуусахад үргэлж анхны 0 хэвээр үлдэнэ.
+ */
+function NumberCellEditorSelectAll(props: {
+  value: unknown
+  onValueChange: (value: unknown) => void
+  eventKey: string | null
+  stopEditing: (cancel?: boolean) => void
+}) {
+  const { value, onValueChange, eventKey, stopEditing } = props
+
   const inputRef = useRef<HTMLInputElement>(null)
-  const [value, setValue] = useState(() =>
-    props.value != null && props.value !== '' ? String(props.value) : '0'
-  )
-  useImperativeHandle(ref, () => ({
-    getValue: () => {
-      const v = inputRef.current?.value ?? ''
-      const n = parseFloat(v)
-      return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
-    },
-  }))
+  const seededFromKey = useRef(false)
+
+  useEffect(() => {
+    if (seededFromKey.current) return
+    seededFromKey.current = true
+    if (eventKey && /^[0-9.,]$/.test(eventKey)) {
+      onValueChange(eventKey === ',' ? '.' : eventKey)
+    }
+  }, [eventKey, onValueChange])
+
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
     el.focus()
-    // Дараагийн frame-д select() — нэг дарж бүх текст сонгогдоно
-    const id = requestAnimationFrame(() => {
-      el.select()
-    })
+    const id = requestAnimationFrame(() => el.select())
     return () => cancelAnimationFrame(id)
   }, [])
+
+  const text = value === null || value === undefined ? '' : String(value)
+
   return (
     <input
       ref={inputRef}
-      type="number"
-      min={0}
-      step={0.01}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
+      type="text"
+      inputMode="decimal"
+      value={text}
+      onChange={(e) => {
+        let v = e.target.value.replace(',', '.')
+        if (v === '') {
+          onValueChange(null)
+          return
+        }
+        onValueChange(v)
+      }}
       onFocus={(e) => e.target.select()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          stopEditing()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          stopEditing(true)
+        }
+      }}
       style={{
         width: '100%',
         height: '100%',
@@ -54,8 +79,7 @@ const NumberCellEditorSelectAll = forwardRef((props: ICellEditorParams, ref: Rea
       }}
     />
   )
-})
-NumberCellEditorSelectAll.displayName = 'NumberCellEditorSelectAll'
+}
 
 interface Organization {
   id: string
@@ -245,8 +269,9 @@ export default function ReadingsContent() {
       .catch(() => setAllMeters([]))
   }, [])
 
-  const fetchReadings = useCallback(async () => {
-    setReadingsLoading(true)
+  const fetchReadings = useCallback(async (opts?: { silent?: boolean }) => {
+    const showLoading = !opts?.silent
+    if (showLoading) setReadingsLoading(true)
     try {
       const params = new URLSearchParams()
       if (filterMonth.trim()) params.append('month', filterMonth.trim())
@@ -275,7 +300,7 @@ export default function ReadingsContent() {
       console.error('Error fetching readings:', error)
       setReadings([])
     } finally {
-      setReadingsLoading(false)
+      if (showLoading) setReadingsLoading(false)
     }
   }, [filterMonth, filterYear, filterOrgId])
 
@@ -292,11 +317,19 @@ export default function ReadingsContent() {
 
   const handleCellValueChanged = useCallback(async (params: any) => {
     const reading = params.data as Reading
-    
+    const changedField = params.colDef?.field as string | undefined
+
     // If it's a new row in the modal, calculate all values and update display
     if (reading._isNew && showAddModal) {
-      // Auto-fill start value from previous month if not set
-      if (reading.startValue === 0 && reading.meterId && reading.month && reading.year) {
+      // Өмнөх сараас эхний заалт татахыг зөвхөн «Эхний заалт» нүд засагдсан үед хийнэ.
+      // Эцсийн заалтыг эхэнд оруулаад Enter дарвал async дүүргэлт эхний заалтыг дарж алдаж болно.
+      if (
+        changedField === 'startValue' &&
+        reading.startValue === 0 &&
+        reading.meterId &&
+        reading.month &&
+        reading.year
+      ) {
         try {
           const res = await fetchWithAuth(`/api/readings/previous?meterId=${reading.meterId}&month=${reading.month}&year=${reading.year}`)
           if (res.ok) {
@@ -329,13 +362,23 @@ export default function ReadingsContent() {
       reading.subtotal = reading.cleanAmount + reading.dirtyAmount
       reading.vat = reading.subtotal * 0.1
       reading.total = reading.subtotal + reading.vat
-      
-      // Refresh all calculated columns in the grid
-      params.api.refreshCells({ 
-        rowNodes: [params.node], 
-        columns: ['usage', 'cleanAmount', 'dirtyAmount', 'subtotal', 'vat', 'total'] 
+
+      // Дараагийн тикт refresh — commit дуусахаас өмнө refreshCells зарим тохиолдолд утга алдагдуулна
+      const api = params.api
+      const node = params.node
+      queueMicrotask(() => {
+        try {
+          if (!api?.isDestroyed?.()) {
+            api.refreshCells({
+              rowNodes: [node],
+              columns: ['usage', 'cleanAmount', 'dirtyAmount', 'subtotal', 'vat', 'total'],
+            })
+          }
+        } catch {
+          /* ignore */
+        }
       })
-      
+
       return
     }
     
@@ -348,8 +391,13 @@ export default function ReadingsContent() {
         return
       }
 
-      // Auto-fill start value from previous month if not set
-      if (reading.startValue === 0 && reading.meterId && reading.month && reading.year) {
+      if (
+        changedField === 'startValue' &&
+        reading.startValue === 0 &&
+        reading.meterId &&
+        reading.month &&
+        reading.year
+      ) {
         try {
           const res = await fetchWithAuth(`/api/readings/previous?meterId=${reading.meterId}&month=${reading.month}&year=${reading.year}`)
           if (res.ok) {
@@ -392,7 +440,8 @@ export default function ReadingsContent() {
 
         setMessage({ type: 'success', text: 'Амжилттай шинэчлэгдлээ' })
         setTimeout(() => setMessage(null), 2000)
-        fetchReadings()
+        // Нүд зассаны дараа бүх grid ачаалах хэсгээр солигдож Enter-тай зөрчилдөж болно
+        await fetchReadings({ silent: true })
       } catch (err: any) {
         setMessage({ type: 'error', text: err.message || 'Алдаа гарлаа' })
         setTimeout(() => setMessage(null), 3000)
@@ -698,56 +747,59 @@ export default function ReadingsContent() {
     }
   }
 
-  // Meter dropdown cell editor component
+  // Meter dropdown — reactive cell editor (onValueChange + stopEditing)
   const MeterCellEditor = useMemo(() => {
-    return (props: ICellEditorParams) => {
-      const [value, setValue] = useState(props.value || '')
+    return (props: {
+      value: unknown
+      onValueChange: (v: unknown) => void
+      stopEditing: (cancel?: boolean) => void
+      data: Reading
+      api: any
+      node: any
+    }) => {
+      const { value, onValueChange, stopEditing, data, api, node } = props
+      const selectVal = value == null || value === '' ? '' : String(value)
 
-      const stopEditing = () => {
-        props.stopEditing()
-      }
-
-      const handleChange = (newValue: string) => {
-        setValue(newValue)
-        const meter = allMeters.find(m => m.id === newValue)
+      const applySelection = (newValue: string) => {
+        onValueChange(newValue || null)
+        const meter = allMeters.find((m) => m.id === newValue)
         if (meter) {
-          props.data.meterId = newValue
-          props.data.meter = { meterNumber: meter.meterNumber }
-          // Find organization for this meter
-          const org = organizations.find(o => o.id === meter.organizationId)
+          data.meterId = newValue
+          data.meter = { meterNumber: meter.meterNumber }
+          const org = organizations.find((o) => o.id === meter.organizationId)
           if (org) {
-            props.data.organizationId = org.id
-            props.data.organization = { name: org.name, id: org.id, code: null }
+            data.organizationId = org.id
+            data.organization = { name: org.name, id: org.id, code: null }
           }
-          props.api.refreshCells({ rowNodes: [props.node!], columns: ['organization'] })
+          api.refreshCells({ rowNodes: [node], columns: ['organization'] })
+        } else {
+          data.meterId = undefined
+          data.meter = undefined
         }
         stopEditing()
       }
 
-      // Return select element that AG Grid will render in the cell
-      // This should appear inline in the cell, not as a popup
       return (
         <select
           autoFocus
-          value={value}
-          onChange={(e) => handleChange(e.target.value)}
-          onBlur={stopEditing}
-          style={{ 
-            width: '100%', 
-            height: '100%', 
-            border: '1px solid #ccc', 
+          value={selectVal}
+          onChange={(e) => applySelection(e.target.value)}
+          onBlur={() => stopEditing()}
+          style={{
+            width: '100%',
+            height: '100%',
+            border: '1px solid #ccc',
             padding: '4px',
             fontSize: '14px',
-            backgroundColor: 'white'
+            backgroundColor: 'white',
           }}
-          onClick={(e) => {
-            // Prevent event bubbling that might cause issues
-            e.stopPropagation()
-          }}
+          onClick={(e) => e.stopPropagation()}
         >
           <option value="">Сонгох</option>
-          {allMeters.map(meter => (
-            <option key={meter.id} value={meter.id}>{meter.meterNumber}</option>
+          {allMeters.map((meter) => (
+            <option key={meter.id} value={meter.id}>
+              {meter.meterNumber}
+            </option>
           ))}
         </select>
       )
@@ -834,7 +886,10 @@ export default function ReadingsContent() {
       editable: true,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
-        const n = parseFloat(params.newValue)
+        const raw = params.newValue
+        if (raw === null || raw === undefined || raw === '') return 0
+        const n =
+          typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.').trim())
         return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
       },
       valueSetter: (params: any) => {
@@ -858,7 +913,10 @@ export default function ReadingsContent() {
       editable: true,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
-        const n = parseFloat(params.newValue)
+        const raw = params.newValue
+        if (raw === null || raw === undefined || raw === '') return 0
+        const n =
+          typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.').trim())
         return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
       },
       valueSetter: (params: any) => {
@@ -1027,6 +1085,7 @@ export default function ReadingsContent() {
       <div className="mb-8 flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-900">Заалтын мэдээлэл</h2>
         <button
+          type="button"
           onClick={handleOpenAddModal}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 flex items-center gap-2"
         >
@@ -1129,10 +1188,13 @@ export default function ReadingsContent() {
                   <div className="ag-theme-alpine w-full" style={{ height: '500px', width: '100%' }}>
                     <AgGridReact
                       theme="legacy"
+                      reactiveCustomComponents
                       ref={modalGridRef}
                       rowData={newReadings}
                       columnDefs={modalColumnDefs}
-                      getRowId={(params: any) => params.data?.id ?? `new-${params.data?.organizationId}-${params.data?.year}-${params.data?.month}-${params.node?.rowIndex ?? 0}`}
+                      getRowId={(params: any) =>
+                        params.data?.id ?? `new-${params.data?.organizationId}-${params.data?.year}-${params.data?.month}`
+                      }
                       rowBuffer={15}
                       defaultColDef={{
                         sortable: true,
@@ -1146,8 +1208,8 @@ export default function ReadingsContent() {
                       singleClickEdit={true}
                       stopEditingWhenCellsLoseFocus={true}
                       suppressClickEdit={false}
-                      enterNavigatesVertically={true}
-                      enterNavigatesVerticallyAfterEdit={true}
+                      enterNavigatesVertically={false}
+                      enterNavigatesVerticallyAfterEdit={false}
                     />
                   </div>
                 </div>
@@ -1229,7 +1291,8 @@ export default function ReadingsContent() {
 
               <div className="flex items-end">
                 <button
-                  onClick={fetchReadings}
+                  type="button"
+                  onClick={() => void fetchReadings()}
                   className="w-full px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
                 >
                   Шүүх
@@ -1248,10 +1311,14 @@ export default function ReadingsContent() {
             ) : (
               <AgGridReact
                 theme="legacy"
+                reactiveCustomComponents
                 ref={gridRef}
                 rowData={readings}
                 columnDefs={columnDefs}
-                getRowId={(params: any) => params.data?.id ?? `row-${params.node?.rowIndex ?? params.data?.meterId ?? 0}`}
+                getRowId={(params: any) =>
+                  params.data?.id ??
+                  `m-${params.data?.meterId ?? 'x'}-${params.data?.year ?? 0}-${params.data?.month ?? 0}`
+                }
                 rowBuffer={20}
                 defaultColDef={{
                   sortable: true,
@@ -1265,8 +1332,8 @@ export default function ReadingsContent() {
                 singleClickEdit={true}
                 stopEditingWhenCellsLoseFocus={true}
                 suppressClickEdit={false}
-                enterNavigatesVertically={true}
-                enterNavigatesVerticallyAfterEdit={true}
+                enterNavigatesVertically={false}
+                enterNavigatesVerticallyAfterEdit={false}
                 overlayNoRowsTemplate={
                   '<div style="padding: 20px; text-align: center;"><p style="font-size: 16px; margin-bottom: 8px;">Заалтын мэдээлэл олдсонгүй</p><p style="font-size: 14px; color: #666;">Шүүлт өөрчлөх эсвэл шинэ заалт оруулна уу</p></div>'
                 }

@@ -50,6 +50,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       .finally(() => setLoading(false))
   }, [router])
 
+  // Хуудас руу шууд URL-оор (direct navigation) орсон ч зөвхөн эрхтэй роль нэвтрүүлэх.
+  useEffect(() => {
+    if (loading) return
+    if (!user) return
+
+    const currentMenuItem = menuItems.find((m) => m.path === pathname)
+    // Хэрэв энэ pathname menu-д байдаг бөгөөд user.role-т тохирохгүй бол dashboard руу буцаах
+    if (currentMenuItem && !currentMenuItem.roles.includes(user.role)) {
+      router.push('/dashboard')
+    }
+  }, [loading, user, pathname, router])
+
   const handleLogout = async () => {
     if (typeof window !== 'undefined') sessionStorage.removeItem('token')
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
