@@ -7,6 +7,7 @@ import { organizationIdInScope } from '@/lib/org-scope'
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
     const { readingId } = data
 
