@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,8 +10,11 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const { searchParams } = new URL(request.url)
     const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()))
-    const whereBase: any = { year }
-    if (user.organizationId) whereBase.organizationId = user.organizationId
+    const scoped = await getScopedOrganizationIds(user)
+    if (scoped.length === 0) {
+      return NextResponse.json({ monthlyData: [], organizationData: [] })
+    }
+    const whereBase: any = { year, organizationId: { in: scoped } }
 
     const monthlyData = []
     for (let month = 1; month <= 12; month++) {

@@ -19,10 +19,11 @@ export default function LoginPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        credentials: 'include',
       })
 
       const text = await res.text()
-      let data: { error?: string } = {}
+      let data: { error?: string; token?: string } = {}
       try {
         data = text ? JSON.parse(text) : {}
       } catch {
@@ -36,7 +37,13 @@ export default function LoginPage() {
         throw new Error(data.error || 'Нэвтрэхэд алдаа гарлаа')
       }
 
-      window.location.href = '/dashboard'
+      if (data.token && typeof window !== 'undefined') {
+        sessionStorage.setItem('token', data.token)
+      }
+
+      setTimeout(() => {
+        window.location.replace('/dashboard')
+      }, 100)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Нэвтрэхэд алдаа гарлаа')
     } finally {

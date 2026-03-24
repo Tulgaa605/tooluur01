@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { organizationIdInScope } from '@/lib/org-scope'
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,6 +42,10 @@ export async function POST(request: NextRequest) {
         { error: 'Заалт олдсонгүй' },
         { status: 404 }
       )
+    }
+
+    if (!(await organizationIdInScope(user, reading.organizationId))) {
+      return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
     }
 
     // Get users from the organization

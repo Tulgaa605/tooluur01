@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAuthUser, requireAuth } from '@/lib/middleware'
+import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { generateToken } from '@/lib/auth'
 import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
+import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,13 +14,18 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const categoryFilter = searchParams.get('category')
 
-    // Нягтлан: зөвхөн өөрийн байгууллага.
-    // Захирал: хүсвэл бүгдийг харах боломжтой (шүүх params дээр нэмэлт хийх боломжтой).
-    const canSeeAllOrgs = user.role === Role.MANAGER
-    const where: { id?: string; category?: string } = {}
-    if (!canSeeAllOrgs) {
+    // Нягтлан/захирал: өөрийн албан байгууллага + түүний бүртгэсэн харилцагчид л.
+    // Энгийн хэрэглэгч (USER): зөвхөн өөрийн нэг байгууллага.
+    const isStaff =
+      user.role === Role.ACCOUNTANT || user.role === Role.MANAGER
+    const where: { id?: { in: string[] }; category?: string } = {}
+    if (!isStaff) {
       if (!user.organizationId) return NextResponse.json([])
-      where.id = user.organizationId
+      where.id = { in: [user.organizationId] }
+    } else {
+      const scoped = await getScopedOrganizationIds(user)
+      if (scoped.length === 0) return NextResponse.json([])
+      where.id = { in: scoped }
     }
     if (categoryFilter === 'HOUSEHOLD') {
       where.category = 'HOUSEHOLD'
@@ -89,6 +95,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const tagManagedByOffice =
+      (user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) &&
+      user.organizationId != null
+
     const organization = await prisma.organization.create({
       data: {
         name: data.name.trim(),
@@ -102,6 +112,7 @@ export async function POST(request: NextRequest) {
         baseCleanFee,
         baseDirtyFee,
         year: data.year || currentYear,
+        ...(tagManagedByOffice ? { managedByOrganizationId: user.organizationId } : {}),
       },
     })
 
@@ -168,9 +179,19 @@ export async function PUT(request: NextRequest) {
         { status: 400 }
       )
     }
-    if (user.organizationId && data.id !== user.organizationId) {
+    const existingOrg = await prisma.organization.findUnique({
+      where: { id: data.id },
+      select: { id: true, managedByOrganizationId: true },
+    })
+    if (!existingOrg) {
+      return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 404 })
+    }
+    const canEdit =
+      existingOrg.id === user.organizationId ||
+      existingOrg.managedByOrganizationId === user.organizationId
+    if (!canEdit) {
       return NextResponse.json(
-        { error: 'Зөвхөн өөрийн байгууллагыг засах боломжтой' },
+        { error: 'Зөвхөн өөрийн эсвэл өөрийн бүртгэсэн байгууллагыг засах боломжтой' },
         { status: 403 }
       )
     }
@@ -278,14 +299,6 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       )
     }
-    if (user.organizationId && id !== user.organizationId) {
-      return NextResponse.json(
-        { error: 'Зөвхөн өөрийн байгууллагыг устгах боломжтой' },
-        { status: 403 }
-      )
-    }
-
-    // Check if organization has related data
     const org = await prisma.organization.findUnique({
       where: { id },
       include: {
@@ -299,6 +312,16 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { error: 'Байгууллага олдсонгүй' },
         { status: 404 }
+      )
+    }
+
+    const canDelete =
+      id === user.organizationId ||
+      org.managedByOrganizationId === user.organizationId
+    if (!canDelete) {
+      return NextResponse.json(
+        { error: 'Зөвхөн өөрийн эсвэл өөрийн бүртгэсэн байгууллагыг устгах боломжтой' },
+        { status: 403 }
       )
     }
 

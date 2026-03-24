@@ -391,12 +391,6 @@ export default function TariffsContent() {
             <h3 className="text-lg font-semibold text-gray-900">
               Оролтын шугамын голчийн суурь хураамж
             </h3>
-            <p className="mt-1 text-sm text-gray-600">
-              Шугамын голч (мм)-оор цэвэр/бохир усны суурь хураамжийг тохируулна.
-            </p>
-            <p className="mt-2 text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
-              Байгууллага нэмэхэд «Шугамын хоолой (мм)»-д оруулсан тоо нь шугамын голч болно. Заалт оруулах үед тухайн хэрэглэгчийн шугамын голчид тохирсон энэ хүснэгтийн суурь хураамж автоматаар нэмэгдэнэ.
-            </p>
           </div>
           <button
             type="button"

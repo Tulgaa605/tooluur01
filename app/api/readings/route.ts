@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
 function extractMongoBatch(result: any): any[] {
   if (!result) return []
@@ -95,8 +96,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
     }
 
-    // ACCOUNTANT: зөвхөн өөрийн байгууллагын тоолуур дээр заалт оруулах
-    if (!user.organizationId || meter.organizationId !== user.organizationId) {
+    // Нягтлан: зөвхөн өөрийн хамрах хүрээнд (албан + бүртгэсэн харилцагч) тоолуур дээр заалт
+    if (!(await organizationIdInScope(user, meter.organizationId))) {
       return NextResponse.json(
         { error: 'Энэ байгууллагын заалт оруулах эрхгүй' },
         { status: 403 }
@@ -183,23 +184,19 @@ export async function GET(request: NextRequest) {
     }
     const { searchParams } = new URL(request.url)
 
-    // USER/ACCOUNTANT: зөвхөн өөрийн байгууллага.
-    // MANAGER: ?organizationId өгвөл шүүнэ (өгөөгүй бол бүгд).
+    // USER / ACCOUNTANT / MANAGER: хамрах хүрээнд байгаа байгууллагын заалт
     let where: any = {}
-    const filterOrgId = searchParams.get('organizationId')
     const roleStr = String(user.role)
-    if (roleStr === Role.USER) {
-      if (!user.organizationId) {
+    if (
+      roleStr === Role.USER ||
+      roleStr === Role.ACCOUNTANT ||
+      roleStr === Role.MANAGER
+    ) {
+      const scoped = await getScopedOrganizationIds(user)
+      if (scoped.length === 0) {
         return NextResponse.json([])
       }
-      where.organizationId = user.organizationId
-    } else if (roleStr === Role.ACCOUNTANT) {
-      if (!user.organizationId) {
-        return NextResponse.json([])
-      }
-      where.organizationId = user.organizationId
-    } else if (filterOrgId) {
-      where.organizationId = filterOrgId
+      where.organizationId = { in: scoped }
     }
 
     const month = searchParams.get('month')
@@ -303,9 +300,11 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    // ACCOUNTANT: зөвхөн өөрийн байгууллагын заалтыг засах
-    if (String(user.role) === Role.ACCOUNTANT) {
-      if (!user.organizationId || existingReading.organizationId !== user.organizationId) {
+    if (
+      String(user.role) === Role.ACCOUNTANT ||
+      String(user.role) === Role.MANAGER
+    ) {
+      if (!(await organizationIdInScope(user, existingReading.organizationId))) {
         return NextResponse.json(
           { error: 'Энэ заалтыг засах эрхгүй' },
           { status: 403 }
@@ -405,9 +404,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Заалт олдсонгүй' }, { status: 404 })
     }
 
-    // ACCOUNTANT: зөвхөн өөрийн байгууллагын заалтыг устгах
-    if (String(user.role) === Role.ACCOUNTANT) {
-      if (!user.organizationId || reading.organizationId !== user.organizationId) {
+    if (
+      String(user.role) === Role.ACCOUNTANT ||
+      String(user.role) === Role.MANAGER
+    ) {
+      if (!(await organizationIdInScope(user, reading.organizationId))) {
         return NextResponse.json(
           { error: 'Энэ заалтыг устгах эрхгүй' },
           { status: 403 }

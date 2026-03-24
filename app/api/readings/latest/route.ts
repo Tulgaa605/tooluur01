@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,10 +13,11 @@ export async function GET(request: NextRequest) {
     }
 
     const where: any = {}
-    if ((String(user.role) === Role.USER || String(user.role) === Role.ACCOUNTANT) && user.organizationId) {
-      where.organizationId = user.organizationId
+    const scoped = await getScopedOrganizationIds(user)
+    if (scoped.length === 0) {
+      return NextResponse.json([])
     }
-    // MANAGER: organizationId шүүх байхгүй тул бүх байгууллагын сүүлийн заалт харагдана.
+    where.organizationId = { in: scoped }
 
     // Pull readings ordered by newest, then pick first per meter in code.
     const readings = await prisma.meterReading.findMany({

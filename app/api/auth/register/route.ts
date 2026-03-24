@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, password, name, role, organizationId } = await request.json()
+    const { email, password, name, organizationId } = await request.json()
 
     if (!email || !password || !name) {
       return NextResponse.json(
@@ -27,9 +27,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const userRole = role && Object.values(Role).includes(role as Role) 
-      ? (role as Role) 
-      : Role.USER
+    // Нээлттэй бүртгэл: бүх шинэ хэрэглэгч нягтлан эрхтэй (клиентээс role илгээхийг хүлээн авахгүй)
+    const userRole = Role.ACCOUNTANT
 
     const hashedPassword = await hashPassword(password)
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,11 +24,8 @@ export async function GET(request: NextRequest) {
     const previousMonth = currentMonth === 1 ? 12 : currentMonth - 1
     const previousYear = currentMonth === 1 ? currentYear - 1 : currentYear
 
-    // Зөвхөн өөрийн байгууллагын өгөгдөл
-    let whereClause: any = {}
-    if (user.organizationId) {
-      whereClause.organizationId = user.organizationId
-    } else {
+    const scoped = await getScopedOrganizationIds(user)
+    if (scoped.length === 0) {
       return NextResponse.json({
         currentMonthUsage: 0,
         previousMonthUsage: 0,
@@ -38,6 +36,7 @@ export async function GET(request: NextRequest) {
         organizationData: [],
       })
     }
+    const whereClause: any = { organizationId: { in: scoped } }
 
     // Get current month usage
     const currentMonthReadings = await prisma.meterReading.findMany({
@@ -101,7 +100,7 @@ export async function GET(request: NextRequest) {
           month: currentMonth,
           year: currentYear,
         }
-        if (user.organizationId) topWhere.organizationId = user.organizationId
+        topWhere.organizationId = { in: scoped }
         const orgUsage = await prisma.meterReading.groupBy({
           by: ['organizationId'],
           where: topWhere,

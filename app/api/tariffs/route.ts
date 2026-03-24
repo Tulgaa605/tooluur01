@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
 function parseNumberOrDefault(value: any, defaultValue: number) {
   if (typeof value === 'number') return value
@@ -72,12 +73,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const year = searchParams.get('year') ? parseInt(searchParams.get('year') as string, 10) : undefined
 
-    // Зөвхөн өөрийн байгууллагын тариф
-    if (!user.organizationId) {
+    const scoped = await getScopedOrganizationIds(user)
+    if (scoped.length === 0) {
       return NextResponse.json([])
     }
 
-    const where: any = { organizationId: user.organizationId }
+    const where: any = { organizationId: { in: scoped } }
     if (year) where.year = year
 
     const tariffs = await prisma.organizationTariff.findMany({
@@ -135,9 +136,9 @@ export async function POST(request: NextRequest) {
 
     let organizationId = data.organizationId as string | undefined
     const category = data.category as string | undefined
-    if (user.organizationId && organizationId && organizationId !== user.organizationId) {
+    if (organizationId && !(await organizationIdInScope(user, organizationId))) {
       return NextResponse.json(
-        { error: 'Зөвхөн өөрийн байгууллагын тариф тохируулах боломжтой' },
+        { error: 'Зөвхөн өөрийн хамрах хүрээний байгууллагын тариф тохируулах боломжтой' },
         { status: 403 }
       )
     }
@@ -228,6 +229,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Хэрэглэгчийн төрөл эсвэл байгууллага заавал сонгоно уу' },
         { status: 400 }
+      )
+    }
+
+    // Бүх байгууллагад төрлийн тариф тараах — зөвхөн нягтлан (захирал бусадын өгөгдөлд нөлөөлөхгүй)
+    if (String(user.role) !== Role.ACCOUNTANT) {
+      return NextResponse.json(
+        { error: 'Энэ үйлдлийг зөвхөн нягтлан хийнэ' },
+        { status: 403 }
       )
     }
 
@@ -342,17 +351,18 @@ export async function PUT(request: NextRequest) {
         { status: 400 }
       )
     }
-    if (user.organizationId) {
-      const existing = await prisma.organizationTariff.findUnique({
-        where: { id: data.id },
-        select: { organizationId: true },
-      })
-      if (!existing || existing.organizationId !== user.organizationId) {
-        return NextResponse.json(
-          { error: 'Энэ тарифыг засах эрхгүй' },
-          { status: 403 }
-        )
-      }
+    const existing = await prisma.organizationTariff.findUnique({
+      where: { id: data.id },
+      select: { organizationId: true },
+    })
+    if (
+      !existing?.organizationId ||
+      !(await organizationIdInScope(user, existing.organizationId))
+    ) {
+      return NextResponse.json(
+        { error: 'Энэ тарифыг засах эрхгүй' },
+        { status: 403 }
+      )
     }
 
     const updated = await prisma.organizationTariff.update({
@@ -398,17 +408,18 @@ export async function DELETE(request: NextRequest) {
     }
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'Tariff ID шаардлагатай' }, { status: 400 })
-    if (user.organizationId) {
-      const tariff = await prisma.organizationTariff.findUnique({
-        where: { id },
-        select: { organizationId: true },
-      })
-      if (!tariff || tariff.organizationId !== user.organizationId) {
-        return NextResponse.json(
-          { error: 'Энэ тарифыг устгах эрхгүй' },
-          { status: 403 }
-        )
-      }
+    const tariff = await prisma.organizationTariff.findUnique({
+      where: { id },
+      select: { organizationId: true },
+    })
+    if (
+      !tariff?.organizationId ||
+      !(await organizationIdInScope(user, tariff.organizationId))
+    ) {
+      return NextResponse.json(
+        { error: 'Энэ тарифыг устгах эрхгүй' },
+        { status: 403 }
+      )
     }
 
     await prisma.organizationTariff.delete({ where: { id } })

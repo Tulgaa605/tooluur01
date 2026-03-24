@@ -38,6 +38,10 @@ model Organization {
   baseCleanFee    Float    @default(0)
   baseDirtyFee    Float    @default(0)
   year            Int      @default(2026)
+  /// Албан байгууллага (нягтлан/усны компани) — энэ харилцагчийг хэн бүртгэсэн, хэнд харьяалагдахыг заана
+  managedByOrganizationId String? @db.ObjectId
+  managedByOrganization     Organization?  @relation("ManagedCustomers", fields: [managedByOrganizationId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  managedCustomers          Organization[] @relation("ManagedCustomers")
   users           User[]
   meters          Meter[]
   readings        MeterReading[]

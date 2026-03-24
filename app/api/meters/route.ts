@@ -2,22 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const { searchParams } = new URL(request.url)
-    const filterOrgId = searchParams.get('organizationId')
-
     const where: any = {}
-    // ACCOUNTANT: зөвхөн өөрийн байгууллага
-    if (String(user.role) === Role.ACCOUNTANT) {
-      if (!user.organizationId) return NextResponse.json([])
-      where.organizationId = user.organizationId
-    } else if (filterOrgId) {
-      // MANAGER: зөвхөн шүүлтээр (organizationId) харах
-      where.organizationId = filterOrgId
+    if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
+      const scoped = await getScopedOrganizationIds(user)
+      if (scoped.length === 0) return NextResponse.json([])
+      where.organizationId = { in: scoped }
     }
 
     const meters = await prisma.meter.findMany({
@@ -57,15 +52,17 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
 
-    const orgId =
-      String(user.role) === Role.ACCOUNTANT
-        ? user.organizationId
-        : data.organizationId != null && String(data.organizationId).trim() !== ''
-          ? String(data.organizationId).trim()
-          : user.organizationId
-    if (!orgId) {
+    const requested =
+      data.organizationId != null && String(data.organizationId).trim() !== ''
+        ? String(data.organizationId).trim()
+        : user.organizationId
+    if (!requested) {
       return NextResponse.json({ error: 'Байгууллага сонгоно уу' }, { status: 400 })
     }
+    if (!(await organizationIdInScope(user, requested))) {
+      return NextResponse.json({ error: 'Энэ байгууллагад тоолуур бүртгэх эрхгүй' }, { status: 403 })
+    }
+    const orgId = requested
 
     const orgExists = await prisma.organization.findUnique({
       where: { id: orgId },
@@ -145,19 +142,16 @@ export async function PUT(request: NextRequest) {
       : currentYear
 
     let nextOrgId = existing.organizationId
-    if (String(user.role) === Role.ACCOUNTANT) {
-      if (!user.organizationId || existing.organizationId !== user.organizationId) {
+    if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
+      if (!(await organizationIdInScope(user, existing.organizationId))) {
         return NextResponse.json({ error: 'Энэ тоолуурыг засах эрхгүй' }, { status: 403 })
       }
-      nextOrgId = user.organizationId
-    } else if (data.organizationId != null && String(data.organizationId).trim() !== '') {
-      nextOrgId = String(data.organizationId).trim()
-      const orgExists = await prisma.organization.findUnique({
-        where: { id: nextOrgId },
-        select: { id: true },
-      })
-      if (!orgExists) {
-        return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+      if (data.organizationId != null && String(data.organizationId).trim() !== '') {
+        const candidate = String(data.organizationId).trim()
+        if (!(await organizationIdInScope(user, candidate))) {
+          return NextResponse.json({ error: 'Энэ байгууллагад шилжүүлэх эрхгүй' }, { status: 403 })
+        }
+        nextOrgId = candidate
       }
     }
 
@@ -217,8 +211,8 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    if (String(user.role) === Role.ACCOUNTANT) {
-      if (!user.organizationId || meter.organizationId !== user.organizationId) {
+    if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
+      if (!(await organizationIdInScope(user, meter.organizationId))) {
         return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
       }
     }
