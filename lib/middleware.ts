@@ -3,10 +3,14 @@ import { verifyToken, TokenPayload } from './auth'
 import { Role } from '@/lib/role'
 
 export function getAuthUser(request: NextRequest): TokenPayload | null {
-  let token = request.cookies.get('token')?.value
+  // SPA нь sessionStorage-ийн шинэ token-ийг Authorization-д явуулдаг; cookie хуучин үлдсэн тохиолдолд Bearer-ийг илүүд үзнэ
+  const authHeader = request.headers.get('authorization')
+  let token: string | undefined
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7)
+  }
   if (!token) {
-    const authHeader = request.headers.get('authorization')
-    if (authHeader?.startsWith('Bearer ')) token = authHeader.slice(7)
+    token = request.cookies.get('token')?.value
   }
   if (!token) return null
   return verifyToken(token)

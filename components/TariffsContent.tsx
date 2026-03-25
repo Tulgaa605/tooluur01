@@ -6,17 +6,13 @@ import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
 
 type OrganizationCategory =
-  | 'HOUSEHOLD'
   | 'ORGANIZATION'
-  | 'BUSINESS'
   | 'TRANSPORT_DISPOSAL'
   | 'TRANSPORT_RECEPTION'
   | 'WATER_POINT'
 
 const CATEGORY_LABELS: Record<OrganizationCategory, string> = {
-  HOUSEHOLD: 'Хувь хүн',
-  ORGANIZATION: 'Байгууллага',
-  BUSINESS: 'Аж ахуйн нэгж',
+  ORGANIZATION: 'Төсөв, аж ахуйн нэгж',
   TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
   TRANSPORT_RECEPTION: 'Зөөврөөр хүлээн авах',
   WATER_POINT: 'Ус түгээх байр',

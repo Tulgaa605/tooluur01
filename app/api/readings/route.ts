@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { getManagedCustomerOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
 function extractMongoBatch(result: any): any[] {
   if (!result) return []
@@ -184,19 +184,16 @@ export async function GET(request: NextRequest) {
     }
     const { searchParams } = new URL(request.url)
 
-    // USER / ACCOUNTANT / MANAGER: хамрах хүрээнд байгаа байгууллагын заалт
+    // USER: өөрийн байгууллага. Нягтлан/захирал: зөвхөн бүртгэсэн харилцагч (албан өөрийн заалт энд бүү ор).
     let where: any = {}
     const roleStr = String(user.role)
-    if (
-      roleStr === Role.USER ||
-      roleStr === Role.ACCOUNTANT ||
-      roleStr === Role.MANAGER
-    ) {
-      const scoped = await getScopedOrganizationIds(user)
-      if (scoped.length === 0) {
-        return NextResponse.json([])
-      }
-      where.organizationId = { in: scoped }
+    if (roleStr === Role.USER) {
+      if (!user.organizationId) return NextResponse.json([])
+      where.organizationId = user.organizationId
+    } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+      const customerIds = await getManagedCustomerOrganizationIds(user)
+      if (customerIds.length === 0) return NextResponse.json([])
+      where.organizationId = { in: customerIds }
     }
 
     const month = searchParams.get('month')

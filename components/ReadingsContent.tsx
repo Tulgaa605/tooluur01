@@ -199,7 +199,7 @@ export default function ReadingsContent() {
   const modalGridRef = useRef<AgGridReact>(null)
 
   useEffect(() => {
-    fetchWithAuth('/api/organizations')
+    fetchWithAuth('/api/organizations?customersOnly=1')
       .then(res => {
         if (!res.ok) {
           return res.json().then(() => [])
@@ -336,7 +336,8 @@ export default function ReadingsContent() {
             const data = await res.json()
             if (data && !data.error && typeof data.endValue === 'number') {
               reading.startValue = data.endValue
-              params.api.refreshCells({ rowNodes: [params.node], columns: ['startValue'] })
+              reading.endValue = data.endValue
+              params.api.refreshCells({ rowNodes: [params.node], columns: ['startValue', 'endValue'] })
             }
           }
         } catch (err) {
@@ -404,7 +405,8 @@ export default function ReadingsContent() {
             const data = await res.json()
             if (data && !data.error && typeof data.endValue === 'number') {
               reading.startValue = data.endValue
-              params.api.refreshCells({ rowNodes: [params.node], columns: ['startValue'] })
+              reading.endValue = data.endValue
+              params.api.refreshCells({ rowNodes: [params.node], columns: ['startValue', 'endValue'] })
             }
           }
         } catch (err) {
@@ -536,7 +538,8 @@ export default function ReadingsContent() {
       month,
       year,
       startValue,
-      endValue: 0,
+      // Өмнөх сарын эцсийн заалт → энэ сарын эхний болон эцсийн заалтын анхны утга (хэрэглэгч эцсийг өөрчилнө)
+      endValue: startValue,
       usage: 0,
       baseClean,
       baseDirty,
@@ -594,7 +597,7 @@ export default function ReadingsContent() {
     setNewReadings([])
     try {
       const [orgRes, meterRes, pipeRes] = await Promise.all([
-        fetchWithAuth('/api/organizations'),
+        fetchWithAuth('/api/organizations?customersOnly=1'),
         fetchWithAuth('/api/meters'),
         fetchWithAuth('/api/pipe-fees'),
       ])
@@ -641,10 +644,24 @@ export default function ReadingsContent() {
     setLoading(true)
     setMessage(null)
     try {
-      const orgList = organizations.length ? organizations : await fetchWithAuth('/api/organizations').then(r => r.ok ? r.json() : []).catch(() => [])
+      const orgList = organizations.length ? organizations : await fetchWithAuth('/api/organizations?customersOnly=1').then(r => r.ok ? r.json() : []).catch(() => [])
       const metersList = allMeters.length ? allMeters : await fetchWithAuth('/api/meters').then(r => r.ok ? r.json() : []).catch(() => [])
       if (!Array.isArray(orgList)) setNewReadings([])
       else {
+        // Өмнөх сар дээр модал дотор оруулсан (хадгалаагүй) эцсийн заалтыг энэ удаагийн сарны эхний заалт болгохын тулд override хийнэ.
+        // Жишээ: 3-р сарын эцсийн заалтыг бичээд (хадгалахгүй) 4-р сар руу шилжихэд 4-р сарын start/end автоматаар 3-р сарын end болно.
+        const prevMonth = m === 1 ? 12 : m - 1
+        const prevYear = m === 1 ? y - 1 : y
+        const prevKey = `${prevYear}-${prevMonth}`
+        const inModalOverrides: Map<string, number> = new Map()
+        for (const r of newReadings) {
+          if (!r._isNew || !r.meterId) continue
+          if (r.month === prevMonth && r.year === prevYear) {
+            // start/end дээр нэг утга тавьсан байгаа ч энд хамгийн түрүүнд хэрэглэгч бичсэн endValue-г авч хэрэглэнэ.
+            inModalOverrides.set(r.meterId, r.endValue ?? r.startValue ?? 0)
+          }
+        }
+
         const needPrevKeys: { year: number; month: number }[] = []
         for (const month of months) {
           const prevMonth = month === 1 ? 12 : month - 1
@@ -658,6 +675,28 @@ export default function ReadingsContent() {
           const data = res.ok ? await res.json() : []
           prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
         }))
+
+        // API-аас ирсэн previous сарын жагсаалт дээр модал дотор бичсэн endValue-г override хийнэ.
+        if (inModalOverrides.size > 0) {
+          const prevList = prevReadingsByKey[prevKey] ? [...prevReadingsByKey[prevKey]] : []
+          for (const [meterId, endValue] of inModalOverrides) {
+            const idx = prevList.findIndex((x) => x.meterId === meterId)
+            if (idx >= 0) {
+              prevList[idx] = { ...prevList[idx], endValue }
+            } else {
+              prevList.push({
+                _isNew: false,
+                meterId,
+                month: prevMonth,
+                year: prevYear,
+                startValue: endValue,
+                endValue,
+              } as Reading)
+            }
+          }
+          prevReadingsByKey[prevKey] = prevList
+        }
+
         const currentReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(months.map(async (month) => {
           const res = await fetchWithAuth(`/api/readings?month=${month}&year=${y}`)
@@ -672,7 +711,7 @@ export default function ReadingsContent() {
     } finally {
       setLoading(false)
     }
-  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths])
+  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths, newReadings])
 
   const handleCloseAddModal = () => {
     setShowAddModal(false)

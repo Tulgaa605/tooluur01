@@ -1,5 +1,9 @@
+const path = require('path')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Олон lockfile (жишээ нь Desktop болон эцэг хавтас) байхад Next.js буруу root сонгохоос сэргийлнэ
+  outputFileTracingRoot: path.join(__dirname),
   reactStrictMode: true,
   // Windows дээр .next дотор permission/lock асуудал үүсэж байвал distDir-ийг тусад нь салгаж өгнө
   distDir: '.next-build',

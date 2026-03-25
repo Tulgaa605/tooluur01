@@ -13,15 +13,23 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url)
     const categoryFilter = searchParams.get('category')
+    const customersOnly = searchParams.get('customersOnly') === '1'
 
     // Нягтлан/захирал: өөрийн албан байгууллага + түүний бүртгэсэн харилцагчид л.
     // Энгийн хэрэглэгч (USER): зөвхөн өөрийн нэг байгууллага.
     const isStaff =
       user.role === Role.ACCOUNTANT || user.role === Role.MANAGER
-    const where: { id?: { in: string[] }; category?: string } = {}
+    const where: {
+      id?: { in: string[] }
+      category?: string
+      managedByOrganizationId?: string
+    } = {}
     if (!isStaff) {
       if (!user.organizationId) return NextResponse.json([])
       where.id = { in: [user.organizationId] }
+    } else if (customersOnly && user.organizationId) {
+      // Заалт оруулах модал зэрэг: зөвхөн бүртгэсэн харилцагч (албан өөрийг оруулахгүй)
+      where.managedByOrganizationId = user.organizationId
     } else {
       const scoped = await getScopedOrganizationIds(user)
       if (scoped.length === 0) return NextResponse.json([])
@@ -29,6 +37,13 @@ export async function GET(request: NextRequest) {
     }
     if (categoryFilter === 'HOUSEHOLD') {
       where.category = 'HOUSEHOLD'
+      // Нягтлан/захирал: зөвхөн энэ албаас бүртгэсэн харилцагч (хувь хүн). Өөрийн албан нэр HOUSEHOLD байсан ч энд бүү ор.
+      if (isStaff && user.organizationId) {
+        where.managedByOrganizationId = user.organizationId
+        // `where.id` дээр getScopedOrganizationIds (raw scope) ашиглаж байж болзошгүй буруу id орохыг арилгахын тулд
+        // зөвхөн `managedByOrganizationId`-ээр шүүж үзүүлнэ.
+        delete (where as any).id
+      }
     }
     const organizations = await prisma.organization.findMany({
       where,
@@ -64,9 +79,7 @@ export async function POST(request: NextRequest) {
 
     // Customer category (organization type)
     const allowedCategories = [
-      'HOUSEHOLD',          // Хувь хүн
       'ORGANIZATION',       // Байгууллага
-      'BUSINESS',           // Аж ахуйн нэгж
       'TRANSPORT_DISPOSAL', // Зөөврөөр татан зайлуулах
       'TRANSPORT_RECEPTION',// Зөөврүүд хүлээн авах
       'WATER_POINT',        // Ус түгээх байр

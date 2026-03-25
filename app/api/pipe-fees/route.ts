@@ -5,7 +5,7 @@ import { Role } from '@/lib/role'
 
 export async function GET(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    const user = requireAuth(request, [Role.ACCOUNTANT])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const fees = await prisma.pipeFee.findMany({

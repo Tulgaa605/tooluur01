@@ -39,7 +39,8 @@ export default function MetersContent() {
 
   useEffect(() => {
     loadMeters()
-    fetchWithAuth('/api/organizations', { credentials: 'include' })
+    // Тоолуур нэмэх модал дээр «албан өөрийн байгууллага» биш зөвхөн харилцагчуудыг харуулах
+    fetchWithAuth('/api/organizations?customersOnly=1', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : []))
       .then(data => {
         if (Array.isArray(data)) {
@@ -49,7 +50,7 @@ export default function MetersContent() {
         }
       })
       .catch(() => setOrganizations([]))
-    fetchWithAuth('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
+    fetchWithAuth('/api/organizations?category=HOUSEHOLD&customersOnly=1', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : []))
       .then(data => {
         if (Array.isArray(data)) {
@@ -206,9 +207,6 @@ export default function MetersContent() {
                 </div>
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Байгууллага эсвэл Хувь хүн (заавал сонгоно)
-                    </label>
                     <div className="flex gap-6 mb-3">
                       <label className="inline-flex items-center gap-2 cursor-pointer">
                         <input
@@ -228,7 +226,7 @@ export default function MetersContent() {
                           onChange={() => setForm(prev => ({ ...prev, ownerType: 'household', organizationId: '' }))}
                           className="text-primary-600 border-gray-300"
                         />
-                        <span>Хувь хүн</span>
+                        <span>Иргэн, хувь хүн</span>
                       </label>
                     </div>
                     {(form.ownerType === 'organization' || form.ownerType === 'household') && (

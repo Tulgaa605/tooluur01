@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { getManagedCustomerOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,9 +10,9 @@ export async function GET(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const where: any = {}
     if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      const scoped = await getScopedOrganizationIds(user)
-      if (scoped.length === 0) return NextResponse.json([])
-      where.organizationId = { in: scoped }
+      const customerIds = await getManagedCustomerOrganizationIds(user)
+      if (customerIds.length === 0) return NextResponse.json([])
+      where.organizationId = { in: customerIds }
     }
 
     const meters = await prisma.meter.findMany({

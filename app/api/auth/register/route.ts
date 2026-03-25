@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { hashPassword, generateToken } from '@/lib/auth'
 import { Role } from '@/lib/role'
+import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,13 +27,26 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
-
-    // Нээлттэй бүртгэл: бүх шинэ хэрэглэгч нягтлан эрхтэй (клиентээс role илгээхийг хүлээн авахгүй)
+    
     const userRole = Role.ACCOUNTANT
 
     const hashedPassword = await hashPassword(password)
 
     const currentYear = new Date().getFullYear()
+
+    let orgId: string | null =
+      organizationId != null && String(organizationId).trim() !== ''
+        ? String(organizationId).trim()
+        : null
+    if (orgId) {
+      const orgExists = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { id: true },
+      })
+      if (!orgExists) {
+        return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+      }
+    }
 
     const user = await prisma.user.create({
       data: {
@@ -40,27 +54,57 @@ export async function POST(request: NextRequest) {
         password: hashedPassword,
         name,
         role: userRole,
-        organizationId: organizationId || null,
+        organizationId: orgId,
         year: currentYear,
       },
       include: { organization: true },
     })
+
+    // Байгууллага заагаагүй бол автоматаар нэг байгууллага үүсгэж холбоно — эсвэл тоолуур/заалт нэмэгдэхгүй
+    if (!orgId) {
+      const orgName = `${name.trim()} (${email})`
+      const org = await prisma.organization.create({
+        data: {
+          name: orgName,
+          // USER хэрэглэгчийн өөрийн харилцагч/иргэн байгууллага
+          category: 'HOUSEHOLD',
+          baseCleanFee: 0,
+          baseDirtyFee: 0,
+          year: currentYear,
+        },
+      })
+      await applyCategoryTariffsToOrganization(org.id)
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { organizationId: org.id },
+      })
+      orgId = org.id
+    }
+
+    const userOut = await prisma.user.findUnique({
+      where: { id: user.id },
+      include: { organization: true },
+    })
+    if (!userOut) {
+      return NextResponse.json({ error: 'Бүртгэлд алдаа гарлаа' }, { status: 500 })
+    }
+
     const token = generateToken({
-      userId: user.id,
-      email: user.email,
+      userId: userOut.id,
+      email: userOut.email,
       role: userRole,
-      organizationId: user.organizationId,
+      organizationId: userOut.organizationId,
     })
 
     const response = NextResponse.json({
       success: true,
       token,
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        organizationId: user.organizationId,
+        id: userOut.id,
+        email: userOut.email,
+        name: userOut.name,
+        role: userOut.role,
+        organizationId: userOut.organizationId,
       },
     })
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAuthUser } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getScopedOrganizationIds } from '@/lib/org-scope'
+import { getManagedCustomerOrganizationIds } from '@/lib/org-scope'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,9 +24,8 @@ export async function GET(request: NextRequest) {
     const previousMonth = currentMonth === 1 ? 12 : currentMonth - 1
     const previousYear = currentMonth === 1 ? currentYear - 1 : currentYear
 
-    const scoped = await getScopedOrganizationIds(user)
-    if (scoped.length === 0) {
-      return NextResponse.json({
+    const emptyDashboard = () =>
+      NextResponse.json({
         currentMonthUsage: 0,
         previousMonthUsage: 0,
         usageChange: 0,
@@ -35,8 +34,19 @@ export async function GET(request: NextRequest) {
         topOrganizations: [],
         organizationData: [],
       })
+
+    const roleStr = String(user.role)
+    let whereClause: { organizationId: string | { in: string[] } }
+    if (roleStr === Role.USER) {
+      if (!user.organizationId) return emptyDashboard()
+      whereClause = { organizationId: user.organizationId }
+    } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+      const customerIds = await getManagedCustomerOrganizationIds(user)
+      if (customerIds.length === 0) return emptyDashboard()
+      whereClause = { organizationId: { in: customerIds } }
+    } else {
+      return emptyDashboard()
     }
-    const whereClause: any = { organizationId: { in: scoped } }
 
     // Get current month usage
     const currentMonthReadings = await prisma.meterReading.findMany({
@@ -99,8 +109,8 @@ export async function GET(request: NextRequest) {
         const topWhere: any = {
           month: currentMonth,
           year: currentYear,
+          ...whereClause,
         }
-        topWhere.organizationId = { in: scoped }
         const orgUsage = await prisma.meterReading.groupBy({
           by: ['organizationId'],
           where: topWhere,

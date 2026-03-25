@@ -54,7 +54,6 @@ export default function UsersContent() {
     phone: '',
     role: 'USER',
     organizationId: '',
-    password: '',
     code: '',
     address: '',
     connectionNumber: '15',
@@ -77,7 +76,8 @@ export default function UsersContent() {
     email: '',
     connectionNumber: '',
     year: String(new Date().getFullYear()),
-    category: 'HOUSEHOLD' as OrganizationCategory,
+    // «Бусад» таб дээрх шинэ байгууллага — анхны утга HOUSEHOLD биш
+    category: 'ORGANIZATION' as OrganizationCategory,
   })
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'user' | 'org'; id: string } | null>(null)
@@ -86,7 +86,7 @@ export default function UsersContent() {
     loadUsers()
     loadOrganizations()
     loadHouseholds()
-    fetchWithAuth('/api/organizations', { credentials: 'include' })
+    fetchWithAuth('/api/organizations?customersOnly=1', { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -98,7 +98,7 @@ export default function UsersContent() {
 
   const loadHouseholds = () => {
     setHouseholdsLoading(true)
-    fetchWithAuth('/api/organizations?category=HOUSEHOLD', { credentials: 'include' })
+    fetchWithAuth('/api/organizations?category=HOUSEHOLD&customersOnly=1', { credentials: 'include' })
       .then(res => {
         if (!res.ok) return res.json().then(() => ({ error: true }))
         return res.json()
@@ -144,7 +144,8 @@ export default function UsersContent() {
   }
 
   const loadOrganizations = () => {
-    fetchWithAuth('/api/organizations')
+    // «Бусад» таб дээр зөвхөн харилцагч байгууллагууд харагдана (албан өөрийгөө оруулахгүй)
+    fetchWithAuth('/api/organizations?customersOnly=1')
       .then(res => {
         if (!res.ok) {
           return res.json().then(err => {
@@ -179,7 +180,6 @@ export default function UsersContent() {
       phone: user.phone || '',
       role: user.role,
       organizationId: user.organizationId || '',
-      password: '',
       code: '',
       address: '',
       connectionNumber: '15',
@@ -224,15 +224,15 @@ export default function UsersContent() {
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       } else {
-        const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Хувь хүн'
+        const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Иргэн, хувь хүн'
         const orgRes = await fetchWithAuth('/api/organizations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-            body: JSON.stringify({
-              name: fullName,
-              ovog: userForm.ovog?.trim() || null,
-              code: userForm.code?.trim() || null,
+          body: JSON.stringify({
+            name: fullName,
+            ovog: userForm.ovog?.trim() || null,
+            code: userForm.code?.trim() || null,
             address: userForm.address?.trim() || null,
             phone: userForm.phone?.trim() || null,
             email: userForm.email?.trim() || null,
@@ -246,7 +246,7 @@ export default function UsersContent() {
       }
       setShowUserForm(false)
       setEditingUserId(null)
-      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '', code: '', address: '', connectionNumber: '15' })
+      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
       loadUsers()
       loadOrganizations()
       loadHouseholds()
@@ -265,7 +265,7 @@ export default function UsersContent() {
       email: org.email || '',
       connectionNumber: org.connectionNumber || '',
       year: String(org.year),
-      category: (org.category || 'HOUSEHOLD') as OrganizationCategory,
+      category: (org.category || 'ORGANIZATION') as OrganizationCategory,
     })
     setShowOrgForm(true)
   }
@@ -314,8 +314,18 @@ export default function UsersContent() {
 
       setShowOrgForm(false)
       setEditingOrgId(null)
-      setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: String(new Date().getFullYear()), category: 'HOUSEHOLD' as OrganizationCategory })
+      setOrgForm({
+        name: '',
+        code: '',
+        address: '',
+        phone: '',
+        email: '',
+        connectionNumber: '',
+        year: String(new Date().getFullYear()),
+        category: 'ORGANIZATION' as OrganizationCategory,
+      })
       loadOrganizations()
+      loadHouseholds()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     }
@@ -346,7 +356,7 @@ export default function UsersContent() {
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              Хувь хүн
+              Иргэн, хувь хүн
             </button>
             <button
               onClick={() => setActiveTab('organizations')}
@@ -369,7 +379,7 @@ export default function UsersContent() {
               onClick={() => {
                 if (!showUserForm) {
                   setEditingUserId(null)
-                  setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', password: '', code: '', address: '', connectionNumber: '15' })
+                  setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
                 }
                 setShowUserForm(!showUserForm)
               }}
@@ -586,7 +596,16 @@ export default function UsersContent() {
               onClick={() => {
                 if (!showOrgForm) {
                   setEditingOrgId(null)
-                  setOrgForm({ name: '', code: '', address: '', phone: '', email: '', connectionNumber: '', year: String(new Date().getFullYear()), category: 'HOUSEHOLD' as OrganizationCategory })
+                  setOrgForm({
+                    name: '',
+                    code: '',
+                    address: '',
+                    phone: '',
+                    email: '',
+                    connectionNumber: '',
+                    year: String(new Date().getFullYear()),
+                    category: 'ORGANIZATION' as OrganizationCategory,
+                  })
                 }
                 setShowOrgForm(!showOrgForm)
               }}
@@ -704,9 +723,7 @@ export default function UsersContent() {
                           onChange={(e) => setOrgForm(prev => ({ ...prev, category: e.target.value as OrganizationCategory }))}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md"
                         >
-                          <option value="HOUSEHOLD">Хувь хүн</option>
-                          <option value="ORGANIZATION">Байгууллага</option>
-                          <option value="BUSINESS">Аж ахуйн нэгж</option>
+                          <option value="ORGANIZATION">Төсөв, аж ахуйн нэгж</option>
                           <option value="TRANSPORT_DISPOSAL">Зөөврөөр татан зайлуулах</option>
                           <option value="TRANSPORT_RECEPTION">Зөөврүүд хүлээн авах</option>
                           <option value="WATER_POINT">Ус түгээх байр</option>

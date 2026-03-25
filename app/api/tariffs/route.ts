@@ -67,7 +67,7 @@ async function upsertCategoryTariff(params: {
 
 export async function GET(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    const user = requireAuth(request, [Role.ACCOUNTANT])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    const user = requireAuth(request, [Role.ACCOUNTANT])
     if (!user) return NextResponse.json({ error: 'Нэвтрэх эрх шаардлагатай' }, { status: 401 })
 
     const data = await request.json()
@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Бүх байгууллагад төрлийн тариф тараах — зөвхөн нягтлан (захирал бусадын өгөгдөлд нөлөөлөхгүй)
+    // Бүх байгууллагад төрлийн тариф тараах — зөвхөн нягтлан
     if (String(user.role) !== Role.ACCOUNTANT) {
       return NextResponse.json(
         { error: 'Энэ үйлдлийг зөвхөн нягтлан хийнэ' },
