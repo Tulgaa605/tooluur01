@@ -63,6 +63,9 @@ export default function TariffsContent() {
   const [selectedCategory, setSelectedCategory] = useState<OrganizationCategory | ''>('')
   const [showTariffModal, setShowTariffModal] = useState(false)
   const [showPipeModal, setShowPipeModal] = useState(false)
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [historyCategory, setHistoryCategory] = useState<OrganizationCategory | null>(null)
+  const [historyRows, setHistoryRows] = useState<Array<{ year: number; month: number; cleanPerM3: number; dirtyPerM3: number }>>([])
   // Category тариф нэмэх үед сонгосон он/сар-г хадгалж тухайн period дээр organization мөрүүдийг нуух, мөн category мөрийн Он-Сарыг зөв харуулахад ашиглана.
   const [appliedCategoryPeriod, setAppliedCategoryPeriod] = useState<{
     category: OrganizationCategory
@@ -174,6 +177,96 @@ export default function TariffsContent() {
       return true
     })
   }, [tariffs, categoryTariffCategories, current.year, current.month, appliedCategoryPeriod])
+
+  const getTariffPeriod = (t: Tariff): { year: number; month: number } => {
+    if (t.kind === 'category') {
+      const cat = t.category as OrganizationCategory | undefined
+      if (cat && appliedCategoryPeriod && appliedCategoryPeriod.category === cat) {
+        return { year: appliedCategoryPeriod.year, month: appliedCategoryPeriod.month }
+      }
+      return { year: current.year, month: current.month }
+    }
+    return {
+      year: Number(t.year) || 0,
+      month: Number(t.month) || 0,
+    }
+  }
+
+  const sortedVisibleTariffs = useMemo(() => {
+    const list = [...visibleTariffs]
+    list.sort((a, b) => {
+      const ap = getTariffPeriod(a)
+      const bp = getTariffPeriod(b)
+      if (bp.year !== ap.year) return bp.year - ap.year
+      if (bp.month !== ap.month) return bp.month - ap.month
+      const aUpdated = a.updatedAt ? new Date(a.updatedAt).getTime() : 0
+      const bUpdated = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
+      if (bUpdated !== aUpdated) return bUpdated - aUpdated
+      return String(b.id).localeCompare(String(a.id))
+    })
+    return list
+  }, [visibleTariffs, appliedCategoryPeriod, current.year, current.month])
+
+  const latestTariffsOnly = useMemo(() => {
+    const picked = new Map<string, Tariff>()
+    for (const t of sortedVisibleTariffs) {
+      const category =
+        t.kind === 'category'
+          ? (t.category as OrganizationCategory | undefined)
+          : (t.organization?.category as OrganizationCategory | undefined)
+      if (!category) {
+        picked.set(`id:${t.id}`, t)
+        continue
+      }
+      const key = `cat:${category}`
+      if (!picked.has(key)) {
+        picked.set(key, t)
+      }
+    }
+    return Array.from(picked.values())
+  }, [sortedVisibleTariffs])
+
+  const openTariffHistory = (t: Tariff) => {
+    const category =
+      t.kind === 'category'
+        ? (t.category as OrganizationCategory | undefined)
+        : (t.organization?.category as OrganizationCategory | undefined)
+    if (!category) return
+
+    const clickedPeriod = getTariffPeriod(t)
+    const grouped = new Map<string, { year: number; month: number; cleanPerM3: number; dirtyPerM3: number; updatedAt: number }>()
+    for (const row of tariffs) {
+      if (row.kind === 'category') continue
+      const rowCategory = row.organization?.category as OrganizationCategory | undefined
+      if (!rowCategory || rowCategory !== category) continue
+      const year = Number(row.year) || 0
+      const month = Number(row.month) || 0
+      if (!year || !month) continue
+      // "өмнөх сарууд" тул дарсан мөртэй ижил period-ийг алгасна
+      if (year === clickedPeriod.year && month === clickedPeriod.month) continue
+
+      const key = `${year}-${month}`
+      const updatedAt = row.updatedAt ? new Date(row.updatedAt).getTime() : 0
+      const existing = grouped.get(key)
+      if (!existing || updatedAt > existing.updatedAt) {
+        grouped.set(key, {
+          year,
+          month,
+          cleanPerM3: row.cleanPerM3 ?? 0,
+          dirtyPerM3: row.dirtyPerM3 ?? 0,
+          updatedAt,
+        })
+      }
+    }
+
+    const rows = Array.from(grouped.values())
+      .sort((a, b) => (b.year - a.year) || (b.month - a.month) || (b.updatedAt - a.updatedAt))
+      .map(({ year, month, cleanPerM3, dirtyPerM3 }) => ({ year, month, cleanPerM3, dirtyPerM3 }))
+
+    setHistoryCategory(category)
+    setHistoryRows(rows)
+    setShowHistoryModal(true)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -381,8 +474,13 @@ export default function TariffsContent() {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {visibleTariffs.map((t) => (
-              <tr key={t.id}>
+            {latestTariffsOnly.map((t) => (
+              <tr
+                key={t.id}
+                className="cursor-pointer hover:bg-gray-50"
+                onClick={() => openTariffHistory(t)}
+                title="Дарж өмнөх саруудын тариф харах"
+              >
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {t.kind === 'category' ? (
                     (() => {
@@ -422,7 +520,10 @@ export default function TariffsContent() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => handleDelete(t.id)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDelete(t.id)
+                      }}
                       disabled={saving}
                       className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
                       title="Устгах"
@@ -435,7 +536,7 @@ export default function TariffsContent() {
             ))}
           </tbody>
         </table>
-        {tariffs.length === 0 && (
+        {latestTariffsOnly.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             Тариф олдсонгүй
           </div>
@@ -753,6 +854,64 @@ export default function TariffsContent() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div
+            className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+            onClick={() => setShowHistoryModal(false)}
+          />
+          <div className="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all max-w-2xl w-full">
+            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-semibold text-gray-900">
+                  Өмнөх саруудын тариф{historyCategory ? ` — ${CATEGORY_LABELS[historyCategory] ?? historyCategory}` : ''}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowHistoryModal(false)}
+                  className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                >
+                  <span className="sr-only">Хаах</span>
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {historyRows.length === 0 ? (
+                <div className="text-sm text-gray-600 py-6">Өмнөх сарын тариф олдсонгүй.</div>
+              ) : (
+                <div className="overflow-x-auto border border-gray-200 rounded-md">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Он-Сар</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Ц (₮/м³)</th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Б (₮/м³)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {historyRows.map((r) => (
+                        <tr key={`${r.year}-${r.month}`}>
+                          <td className="px-4 py-2 text-sm text-gray-900">
+                            {r.year}-{String(r.month).padStart(2, '0')}
+                          </td>
+                          <td className="px-4 py-2 text-sm text-right text-gray-900">
+                            {(r.cleanPerM3 ?? 0).toFixed(2)}
+                          </td>
+                          <td className="px-4 py-2 text-sm text-right text-gray-900">
+                            {(r.dirtyPerM3 ?? 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>

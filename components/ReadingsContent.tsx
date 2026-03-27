@@ -458,6 +458,48 @@ export default function ReadingsContent() {
     }
   }, [fetchReadings, showAddModal])
 
+  const latestOrgTariffByOrgId = useMemo(() => {
+    const byOrg = new Map<string, OrganizationTariff>()
+    const score = (t: OrganizationTariff) =>
+      (Number(t.year) || 0) * 100 +
+      (Number(t.month) || 0)
+    for (const t of tariffs) {
+      const orgId = t.organizationId
+      if (!orgId) continue
+      const existing = byOrg.get(orgId)
+      if (!existing || score(t) > score(existing)) {
+        byOrg.set(orgId, t)
+      }
+    }
+    return byOrg
+  }, [tariffs])
+
+  const latestOrgTariffByCategory = useMemo(() => {
+    const byCategory = new Map<string, OrganizationTariff>()
+    const score = (t: OrganizationTariff) =>
+      (Number(t.year) || 0) * 100 +
+      (Number(t.month) || 0)
+    for (const t of tariffs) {
+      const category = t.organization?.category
+      if (!category) continue
+      const existing = byCategory.get(category)
+      if (!existing || score(t) > score(existing)) {
+        byCategory.set(category, t)
+      }
+    }
+    return byCategory
+  }, [tariffs])
+
+  const latestCategoryTariffByCategory = useMemo(() => {
+    const byCategory = new Map<string, CategoryTariff>()
+    for (const t of categoryTariffs) {
+      if (t.category && !byCategory.has(t.category)) {
+        byCategory.set(t.category, t)
+      }
+    }
+    return byCategory
+  }, [categoryTariffs])
+
   const handleDeleteReading = (id: string) => {
     setDeleteConfirm({ open: true, id })
   }
@@ -497,28 +539,16 @@ export default function ReadingsContent() {
       baseClean = pipeFee.baseCleanFee ?? 0
       baseDirty = pipeFee.baseDirtyFee ?? 0
     }
-    let tariffForPeriod = tariffs.find(
-      (t) => t.organizationId === org.id && t.year === year && t.month === month
-    )
+    // Тооцоололд тухайн үеийн бус, хамгийн сүүлийн тариф ашиглана.
+    let tariffForPeriod: OrganizationTariff | CategoryTariff | undefined =
+      latestOrgTariffByOrgId.get(org.id)
+
     if (!tariffForPeriod && org?.category) {
-      const cat = categoryTariffs.find((t) => t.category === org.category)
-      if (cat) {
-        tariffForPeriod = {
-          id: cat.id,
-          organizationId: org.id,
-          year,
-          month,
-          baseCleanFee: cat.baseCleanFee,
-          baseDirtyFee: cat.baseDirtyFee,
-          cleanPerM3: cat.cleanPerM3,
-          dirtyPerM3: cat.dirtyPerM3,
-          organization: { id: org.id, category: org.category },
-        }
+      const latestCat = latestCategoryTariffByCategory.get(org.category)
+      if (latestCat) {
+        tariffForPeriod = latestCat
       } else {
-        tariffForPeriod = tariffs.find(
-          (t) =>
-            t.organization?.category === org.category && t.year === year && t.month === month
-        )
+        tariffForPeriod = latestOrgTariffByCategory.get(org.category)
       }
     }
     if (tariffForPeriod) {
@@ -558,7 +588,7 @@ export default function ReadingsContent() {
       vat: 0,
       total: 0,
     }
-  }, [tariffs, categoryTariffs])
+  }, [latestOrgTariffByOrgId, latestCategoryTariffByCategory, latestOrgTariffByCategory])
 
   const buildRowsForYearAndMonths = useCallback((
     orgList: Organization[],
