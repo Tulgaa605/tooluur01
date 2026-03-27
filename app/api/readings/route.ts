@@ -12,6 +12,11 @@ function extractMongoBatch(result: any): any[] {
   return []
 }
 
+function getNextPeriod(year: number, month: number): { year: number; month: number } {
+  if (month === 12) return { year: year + 1, month: 1 }
+  return { year, month: month + 1 }
+}
+
 /** Байгууллагын тухайн сарын тарифын утгыг олно: шугамын голч (PipeFee), organization tariff, төрлийн тариф эсвэл байгууллагын суурь. */
 async function getTariffRatesForPeriod(
   organizationId: string,
@@ -366,6 +371,69 @@ export async function PUT(request: NextRequest) {
         },
       },
     })
+
+    // Өмнөх сарын эцсийн заалт өөрчлөгдвөл дараагийн сарын эхний/эцсийн заалтыг автоматаар дагуулж шинэчилнэ.
+    const periodChanged =
+      Number(existingReading.year) !== Number(data.year) ||
+      Number(existingReading.month) !== Number(data.month)
+    const endChanged = Number(existingReading.endValue) !== Number(data.endValue)
+    if (!periodChanged && endChanged) {
+      const nextPeriod = getNextPeriod(Number(data.year), Number(data.month))
+      const nextReading = await prisma.meterReading.findUnique({
+        where: {
+          meterId_month_year: {
+            meterId: existingReading.meterId,
+            month: nextPeriod.month,
+            year: nextPeriod.year,
+          },
+        },
+        select: { id: true, organizationId: true, startValue: true, endValue: true, usage: true },
+      })
+
+      if (nextReading) {
+        const nextStartValue = Number(data.endValue) || 0
+        // Дараагийн сарын эцсийн заалтыг зөвхөн автоматаар (start=end, usage=0) байсан үед л дагуулж шинэчилнэ.
+        // Хэрэглэгч өөрөө эцсийн заалт оруулсан бол хадгалж үлдээнэ.
+        const wasAutoFilled =
+          Number(nextReading.usage ?? 0) === 0 &&
+          Number(nextReading.endValue ?? 0) === Number(nextReading.startValue ?? 0)
+        const preservedEnd = Number(nextReading.endValue ?? 0)
+        let nextEndValue = wasAutoFilled ? nextStartValue : preservedEnd
+        // start нэмэгдсэнээс болж end < start болох эрсдэлийг арилгана.
+        if (nextEndValue < nextStartValue) {
+          nextEndValue = nextStartValue
+        }
+        const nextUsage = nextEndValue - nextStartValue
+        const nextTariff = await getTariffRatesForPeriod(
+          nextReading.organizationId,
+          nextPeriod.year,
+          nextPeriod.month
+        )
+        const nextCleanAmount = nextUsage * nextTariff.cleanPerM3 + nextTariff.baseClean
+        const nextDirtyAmount = nextUsage * nextTariff.dirtyPerM3 + nextTariff.baseDirty
+        const nextSubtotal = nextCleanAmount + nextDirtyAmount
+        const nextVat = nextSubtotal * 0.1
+        const nextTotal = nextSubtotal + nextVat
+
+        await prisma.meterReading.update({
+          where: { id: nextReading.id },
+          data: {
+            startValue: nextStartValue,
+            endValue: nextEndValue,
+            usage: nextUsage,
+            baseClean: nextTariff.baseClean,
+            baseDirty: nextTariff.baseDirty,
+            cleanPerM3: nextTariff.cleanPerM3,
+            dirtyPerM3: nextTariff.dirtyPerM3,
+            cleanAmount: nextCleanAmount,
+            dirtyAmount: nextDirtyAmount,
+            subtotal: nextSubtotal,
+            vat: nextVat,
+            total: nextTotal,
+          },
+        })
+      }
+    }
 
     return NextResponse.json(reading)
   } catch (error: any) {
