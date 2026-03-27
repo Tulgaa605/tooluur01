@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownTrayIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline'
 import { fetchWithAuth } from '@/lib/api'
 
@@ -24,6 +24,17 @@ export default function BillingContent() {
   const [readings, setReadings] = useState<Reading[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState<string | null>(null)
+
+  const footerTotals = useMemo(() => {
+    return readings.reduce(
+      (acc, reading) => {
+        acc.usage += Number(reading.usage ?? 0) || 0
+        acc.total += Number(reading.total ?? 0) || 0
+        return acc
+      },
+      { usage: 0, total: 0 }
+    )
+  }, [readings])
 
   useEffect(() => {
     fetchWithAuth('/api/readings')
@@ -105,10 +116,10 @@ export default function BillingContent() {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Он
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Сар
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -117,10 +128,10 @@ export default function BillingContent() {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Тоолуур
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Хэрэглээ (м³)
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Төлбөр (₮)
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -134,10 +145,10 @@ export default function BillingContent() {
           <tbody className="bg-white divide-y divide-gray-200">
             {readings.map((reading) => (
               <tr key={reading.id}>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                   {reading.year}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                   {String(reading.month).padStart(2, '0')}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -146,10 +157,10 @@ export default function BillingContent() {
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {reading.meter?.meterNumber || '-'}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                   {(reading.usage ?? 0).toFixed(2)}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                   {(reading.total ?? 0).toFixed(2)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
@@ -187,6 +198,20 @@ export default function BillingContent() {
               </tr>
             ))}
           </tbody>
+          <tfoot className="bg-gray-50 border-t border-gray-200">
+            <tr>
+              <td colSpan={4} className="px-6 py-3 text-sm font-semibold text-gray-900">
+                Хөл дүн
+              </td>
+              <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
+                {footerTotals.usage.toFixed(2)}
+              </td>
+              <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
+                {footerTotals.total.toFixed(2)}
+              </td>
+              <td colSpan={2} className="px-6 py-3" />
+            </tr>
+          </tfoot>
         </table>
         {readings.length === 0 && (
           <div className="text-center py-12 text-gray-500">

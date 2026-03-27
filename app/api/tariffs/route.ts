@@ -28,12 +28,85 @@ type CategoryTariffDoc = {
   updatedAt?: Date
 }
 
+/** Prisma MongoDB $runCommandRaw заримдаа { result: { cursor } } гэж давхаргатай ирнэ */
+function unwrapMongoCommandResult(result: any): any {
+  let r = result
+  for (let i = 0; i < 6; i++) {
+    if (r && typeof r === 'object' && r.result != null && typeof r.result === 'object') {
+      r = r.result
+    } else {
+      break
+    }
+  }
+  return r
+}
+
 function extractMongoBatch(result: any): any[] {
   if (!result) return []
-  const cursor = result.cursor
+  const root = unwrapMongoCommandResult(result)
+  // MongoDB raw command-ын хариу өөр өөр shape-тэй ирж болдог (cursor доторх эсвэл шууд firstBatch/nextBatch).
+  const cursor = root.cursor
   if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) return cursor.firstBatch
   if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) return cursor.nextBatch
+
+  // Зарим тохиолдолд cursor байхгүй, firstBatch/nextBatch шууд root дээр ирдэг байж болно.
+  if (root.firstBatch && Array.isArray(root.firstBatch)) return root.firstBatch
+  if (root.nextBatch && Array.isArray(root.nextBatch)) return root.nextBatch
+
+  // Зарим драйвер/хувилбарт batch documents өөр нэрээр ирж болно.
+  if (Array.isArray(cursor?.batch)) return cursor.batch
+  if (Array.isArray((root as any)?.batch)) return (root as any).batch
+  if (Array.isArray((root as any)?.documents)) return (root as any).documents
+  if (Array.isArray((root as any)?.data)) return (root as any).data
   return []
+}
+
+const tariffOrgSelect = {
+  id: true,
+  name: true,
+  code: true,
+  connectionNumber: true,
+  category: true,
+} as const
+
+type OrgForTariff = {
+  id: string
+  name: string
+  code: string | null
+  connectionNumber: string | null
+  category: string | null
+}
+
+/**
+ * `include: { organization }` нь FK-д тохирох байгууллага үгүй (устгагдсан) үед Prisma
+ * "Inconsistent query result" алдаа өгдөг. Тарифыг тусдаа уншаад байгууллагыг нэгтгэнэ.
+ */
+async function attachOrganizationsToTariffs<T extends { organizationId: string }>(
+  rows: T[]
+): Promise<Array<T & { organization: OrgForTariff }>> {
+  const ids = [...new Set(rows.map((r) => r.organizationId))]
+  const orgs =
+    ids.length === 0
+      ? []
+      : await prisma.organization.findMany({
+          where: { id: { in: ids } },
+          select: tariffOrgSelect,
+        })
+  const byId = new Map<string, OrgForTariff>(orgs.map((o) => [o.id, o]))
+  const missing: OrgForTariff = {
+    id: '',
+    name: '(Байгууллага олдсонгүй)',
+    code: null,
+    connectionNumber: null,
+    category: null,
+  }
+  return rows.map((t) => {
+    const o = byId.get(t.organizationId)
+    return {
+      ...t,
+      organization: o ?? { ...missing, id: t.organizationId },
+    }
+  })
 }
 
 async function upsertCategoryTariff(params: {
@@ -74,22 +147,19 @@ export async function GET(request: NextRequest) {
     const year = searchParams.get('year') ? parseInt(searchParams.get('year') as string, 10) : undefined
 
     const scoped = await getScopedOrganizationIds(user)
-    if (scoped.length === 0) {
-      return NextResponse.json([])
-    }
-
+    // Хоосон scoped (organizationId байхгүй гэх мэт) үед ч доорх category_tariffs-ийг унших ёстой —
+    // урьд нь шууд [] буцааж төрлийн тарифыг алдаж байсан.
     const where: any = { organizationId: { in: scoped } }
     if (year) where.year = year
 
-    const tariffs = await prisma.organizationTariff.findMany({
-      where,
-      include: {
-        organization: {
-          select: { id: true, name: true, code: true, connectionNumber: true, category: true },
-        },
-      },
-      orderBy: [{ year: 'desc' }, { month: 'desc' }, { updatedAt: 'desc' }],
-    })
+    const rawTariffs =
+      scoped.length === 0
+        ? []
+        : await prisma.organizationTariff.findMany({
+            where,
+            orderBy: [{ year: 'desc' }, { month: 'desc' }, { updatedAt: 'desc' }],
+          })
+    const tariffs = await attachOrganizationsToTariffs(rawTariffs)
 
     const includeCategory = searchParams.get('includeCategory') === '1'
     if (!includeCategory) return NextResponse.json(tariffs)
@@ -143,13 +213,15 @@ export async function POST(request: NextRequest) {
       )
     }
     if (user.organizationId && !category) organizationId = user.organizationId
-    const year = organizationId ? parseInt(String(data.year), 10) : 0
-    const month = organizationId ? parseInt(String(data.month), 10) : 0
-    if (organizationId) {
-      const validationError = validateMonthYear(month, year)
-      if (validationError) {
-        return NextResponse.json({ error: validationError }, { status: 400 })
-      }
+    // Он/сар-г үргэлж тооцоолж validate хийнэ (category болон organization тариф аль алинд нь хэрэгтэй)
+    const now = new Date()
+    const defaultYear = now.getFullYear()
+    const defaultMonth = now.getMonth() + 1
+    const year = Number.isFinite(parseInt(String(data.year), 10)) ? parseInt(String(data.year), 10) : defaultYear
+    const month = Number.isFinite(parseInt(String(data.month), 10)) ? parseInt(String(data.month), 10) : defaultMonth
+    const validationError = validateMonthYear(month, year)
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 })
     }
 
     let baseCleanFee = parseNumberOrDefault(data.baseCleanFee, 0)
@@ -189,15 +261,10 @@ export async function POST(request: NextRequest) {
         select: { id: true },
       })
 
-      const tariff = existing
+      const tariffRaw = existing
         ? await prisma.organizationTariff.update({
             where: { organizationId_year_month: { organizationId, year, month } },
             data: { baseCleanFee, baseDirtyFee, cleanPerM3, dirtyPerM3 },
-            include: {
-              organization: {
-                select: { id: true, name: true, code: true, connectionNumber: true, category: true },
-              },
-            },
           })
         : await prisma.organizationTariff.create({
             data: {
@@ -209,12 +276,8 @@ export async function POST(request: NextRequest) {
               cleanPerM3,
               dirtyPerM3,
             },
-            include: {
-              organization: {
-                select: { id: true, name: true, code: true, connectionNumber: true, category: true },
-              },
-            },
           })
+      const [tariff] = await attachOrganizationsToTariffs([tariffRaw])
 
       return NextResponse.json({
         success: true,
@@ -250,9 +313,6 @@ export async function POST(request: NextRequest) {
     })
 
     // Байгууллага бүрт тухайн сарын тариф бичлэг үүсгэж, уншилтанд хэрэглэгдэнэ
-    const now = new Date()
-    const currentYear = now.getFullYear()
-    const currentMonth = now.getMonth() + 1
     const orgs = await prisma.organization.findMany({
       where: { category },
       select: { id: true, name: true, connectionNumber: true },
@@ -263,7 +323,7 @@ export async function POST(request: NextRequest) {
       const pipeBase = getBaseFromPipe(org.connectionNumber)
       const orgBaseClean = pipeBase ? pipeBase.baseCleanFee : baseCleanFee
       const orgBaseDirty = pipeBase ? pipeBase.baseDirtyFee : baseDirtyFee
-      const key = { organizationId: org.id, year: currentYear, month: currentMonth }
+      const key = { organizationId: org.id, year, month }
       const existing = await prisma.organizationTariff.findUnique({
         where: { organizationId_year_month: key },
         select: { id: true },
@@ -283,8 +343,8 @@ export async function POST(request: NextRequest) {
         await prisma.organizationTariff.create({
           data: {
             organizationId: org.id,
-            year: currentYear,
-            month: currentMonth,
+            year,
+            month,
             baseCleanFee: orgBaseClean,
             baseDirtyFee: orgBaseDirty,
             cleanPerM3,
@@ -365,13 +425,11 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    const updated = await prisma.organizationTariff.update({
+    const updatedRaw = await prisma.organizationTariff.update({
       where: { id: data.id },
       data: patch,
-      include: {
-        organization: { select: { id: true, name: true, code: true, connectionNumber: true, category: true } },
-      },
     })
+    const [updated] = await attachOrganizationsToTariffs([updatedRaw])
 
     return NextResponse.json(updated)
   } catch (error: any) {

@@ -2,15 +2,35 @@ import { prisma } from '@/lib/prisma'
 import { TokenPayload } from '@/lib/auth'
 import { Role } from '@/lib/role'
 
+function unwrapMongoCommandResult(result: unknown): Record<string, unknown> | null {
+  let r: unknown = result
+  for (let i = 0; i < 6; i++) {
+    if (r && typeof r === 'object' && 'result' in (r as object)) {
+      const inner = (r as { result?: unknown }).result
+      if (inner != null && typeof inner === 'object') {
+        r = inner
+      } else {
+        break
+      }
+    } else {
+      break
+    }
+  }
+  return r && typeof r === 'object' ? (r as Record<string, unknown>) : null
+}
+
 function extractMongoFindBatch(result: unknown): { _id?: unknown }[] {
-  if (!result || typeof result !== 'object') return []
-  const r = result as { cursor?: { firstBatch?: unknown[]; nextBatch?: unknown[] } }
-  if (r.cursor?.firstBatch && Array.isArray(r.cursor.firstBatch)) {
-    return r.cursor.firstBatch as { _id?: unknown }[]
+  const root = unwrapMongoCommandResult(result)
+  if (!root) return []
+  const cursor = root.cursor as { firstBatch?: unknown[]; nextBatch?: unknown[] } | undefined
+  if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) {
+    return cursor.firstBatch as { _id?: unknown }[]
   }
-  if (r.cursor?.nextBatch && Array.isArray(r.cursor.nextBatch)) {
-    return r.cursor.nextBatch as { _id?: unknown }[]
+  if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) {
+    return cursor.nextBatch as { _id?: unknown }[]
   }
+  const fb = root.firstBatch
+  if (Array.isArray(fb)) return fb as { _id?: unknown }[]
   return []
 }
 

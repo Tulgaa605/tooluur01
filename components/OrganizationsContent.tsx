@@ -325,7 +325,9 @@ export default function OrganizationsContent() {
                     onChange={(e) => setForm(prev => ({ ...prev, category: e.target.value }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md"
                   >
-                    <option value="ORGANIZATION">Төсөв, аж ахуйн нэгж</option>
+                    <option value="HOUSEHOLD">Иргэн,увь хүн</option>
+                    <option value="ORGANIZATION">Төсөвт байгууллага</option>
+                    <option value="BUSINESS">Аж ахуйн нэгж</option>
                     <option value="TRANSPORT_DISPOSAL">Зөөврөөр татан зайлуулах</option>
                     <option value="TRANSPORT_RECEPTION">Зөөврүүд хүлээн авах</option>
                     <option value="WATER_POINT">Ус түгээх байр</option>

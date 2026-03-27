@@ -66,8 +66,8 @@ export async function POST(request: NextRequest) {
       const org = await prisma.organization.create({
         data: {
           name: orgName,
-          // USER хэрэглэгчийн өөрийн харилцагч/иргэн байгууллага
-          category: 'HOUSEHOLD',
+          // Шинэ бүртгэл ACCOUNTANT эрхтэй тул албан байгууллага ангиллаар үүсгэнэ.
+          category: 'ORGANIZATION',
           baseCleanFee: 0,
           baseDirtyFee: 0,
           year: currentYear,

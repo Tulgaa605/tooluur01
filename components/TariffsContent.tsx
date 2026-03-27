@@ -6,13 +6,17 @@ import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
 
 type OrganizationCategory =
+  | 'HOUSEHOLD'
   | 'ORGANIZATION'
+  | 'BUSINESS'
   | 'TRANSPORT_DISPOSAL'
   | 'TRANSPORT_RECEPTION'
   | 'WATER_POINT'
 
 const CATEGORY_LABELS: Record<OrganizationCategory, string> = {
-  ORGANIZATION: 'Төсөв, аж ахуйн нэгж',
+  HOUSEHOLD: 'Иргэн,увь хүн',
+  ORGANIZATION: 'Төсөвт байгууллага',
+  BUSINESS: 'Аж ахуйн нэгж',
   TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
   TRANSPORT_RECEPTION: 'Зөөврөөр хүлээн авах',
   WATER_POINT: 'Ус түгээх байр',
@@ -59,6 +63,12 @@ export default function TariffsContent() {
   const [selectedCategory, setSelectedCategory] = useState<OrganizationCategory | ''>('')
   const [showTariffModal, setShowTariffModal] = useState(false)
   const [showPipeModal, setShowPipeModal] = useState(false)
+  // Category тариф нэмэх үед сонгосон он/сар-г хадгалж тухайн period дээр organization мөрүүдийг нуух, мөн category мөрийн Он-Сарыг зөв харуулахад ашиглана.
+  const [appliedCategoryPeriod, setAppliedCategoryPeriod] = useState<{
+    category: OrganizationCategory
+    year: number
+    month: number
+  } | null>(null)
   const [pipeForm, setPipeForm] = useState<{
     id: string
     diameterMm: string
@@ -99,8 +109,18 @@ export default function TariffsContent() {
       const tariffData = await tariffRes.json()
       const pipeData = await pipeRes.json()
 
+      if (!tariffRes.ok) {
+        const errText =
+          typeof tariffData?.error === 'string'
+            ? tariffData.error
+            : 'Тарифын мэдээлэл ачааллахад алдаа гарлаа'
+        setMessage({ type: 'error', text: errText })
+        setTariffs([])
+      } else {
+        setTariffs(Array.isArray(tariffData) ? tariffData : [])
+      }
+
       setOrganizations(Array.isArray(orgData) ? orgData : [])
-      setTariffs(Array.isArray(tariffData) ? tariffData : [])
       setPipeFees(Array.isArray(pipeData) ? pipeData : [])
     } catch (e) {
       setOrganizations([])
@@ -135,13 +155,25 @@ export default function TariffsContent() {
       const orgCategory = t.organization?.category
       if (!orgCategory) return true
 
-      // Current month дээр category тариф байгаа бол organization мөрүүдийг нуух
-      if (t.year === current.year && t.month === current.month) {
-        return !categoryTariffCategories.has(orgCategory as OrganizationCategory)
+      const orgCat = orgCategory as OrganizationCategory
+      const isAppliedPeriod =
+        appliedCategoryPeriod &&
+        appliedCategoryPeriod.category === orgCat &&
+        t.year === appliedCategoryPeriod.year &&
+        t.month === appliedCategoryPeriod.month
+
+      // Хэрэв саяхан category тариф дээр он/сар сонгож хадгалсан бол тэр period дээрх organization мөрүүдийг нуух.
+      if (isAppliedPeriod) {
+        return !categoryTariffCategories.has(orgCat)
+      }
+
+      // Өмнөх зангилаа: current month дээр category тариф байгаа бол organization мөрүүдийг нуух.
+      if (!appliedCategoryPeriod && t.year === current.year && t.month === current.month) {
+        return !categoryTariffCategories.has(orgCat)
       }
       return true
     })
-  }, [tariffs, categoryTariffCategories, current.year, current.month])
+  }, [tariffs, categoryTariffCategories, current.year, current.month, appliedCategoryPeriod])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -154,11 +186,15 @@ export default function TariffsContent() {
     setSaving(true)
     setMessage(null)
     try {
+      const year = Number(form.year) || current.year
+      const month = Number(form.month) || current.month
       const res = await fetchWithAuth('/api/tariffs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category: selectedCategory,
+          year,
+          month,
           // Суурь хураамж: шугамын голчийн хүснэг + байгууллагын хоолойн мм-ээр API автоматаар тохируулна
           baseCleanFee: 0,
           baseDirtyFee: 0,
@@ -170,6 +206,11 @@ export default function TariffsContent() {
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
 
       setShowTariffModal(false)
+      setAppliedCategoryPeriod({
+        category: selectedCategory,
+        year,
+        month,
+      })
       await loadAll()
       setMessage({ type: 'success', text: data.message || 'Тариф амжилттай хадгаллаа' })
     } catch (e) {
@@ -209,6 +250,7 @@ export default function TariffsContent() {
 
   const handlePipeSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setDeleteConfirm(null)
     setSaving(true)
     setMessage(null)
     try {
@@ -229,8 +271,11 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
 
+      // Хадгалсны дараа модалийг хаах
+      setShowPipeModal(false)
       setPipeForm({ id: '', diameterMm: '', baseCleanFee: '', baseDirtyFee: '' })
       await loadAll()
+      setMessage({ type: 'success', text: 'Шугамын суурь хураамж амжилттай хадгалагдлаа' })
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
@@ -339,9 +384,26 @@ export default function TariffsContent() {
             {visibleTariffs.map((t) => (
               <tr key={t.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.kind === 'category'
-                    ? `${current.year}-${String(current.month).padStart(2, '0')}`
-                    : `${t.year}-${String(t.month).padStart(2, '0')}`}
+                  {t.kind === 'category' ? (
+                    (() => {
+                      const cat = t.category as OrganizationCategory | undefined
+                      const year =
+                        appliedCategoryPeriod &&
+                        cat &&
+                        appliedCategoryPeriod.category === cat
+                          ? appliedCategoryPeriod.year
+                          : current.year
+                      const month =
+                        appliedCategoryPeriod &&
+                        cat &&
+                        appliedCategoryPeriod.category === cat
+                          ? appliedCategoryPeriod.month
+                          : current.month
+                      return `${year}-${String(month).padStart(2, '0')}`
+                    })()
+                  ) : (
+                    `${t.year}-${String(t.month).padStart(2, '0')}`
+                  )}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {t.kind === 'category'
@@ -507,6 +569,41 @@ export default function TariffsContent() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Он
+                    </label>
+                    <input
+                      type="number"
+                      min={2000}
+                      max={2100}
+                      step={1}
+                      value={form.year}
+                      onChange={(e) => setForm((p) => ({ ...p, year: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder={String(current.year)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Сар
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      step={1}
+                      value={form.month}
+                      onChange={(e) => setForm((p) => ({ ...p, month: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder={String(current.month)}
+                      required
+                    />
                   </div>
                 </div>
 

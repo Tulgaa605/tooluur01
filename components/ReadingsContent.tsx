@@ -197,6 +197,13 @@ export default function ReadingsContent() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const gridRef = useRef<AgGridReact>(null)
   const modalGridRef = useRef<AgGridReact>(null)
+  const numberColStyle = useMemo(
+    () => ({
+      cellClass: 'ag-right-aligned-cell',
+      headerClass: 'ag-right-aligned-header',
+    }),
+    []
+  )
 
   useEffect(() => {
     fetchWithAuth('/api/organizations?customersOnly=1')
@@ -922,6 +929,7 @@ export default function ReadingsContent() {
       width: 130,
       colId: 'startValue',
       field: 'startValue',
+      ...numberColStyle,
       editable: true,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
@@ -949,6 +957,7 @@ export default function ReadingsContent() {
       width: 130,
       colId: 'endValue',
       field: 'endValue',
+      ...numberColStyle,
       editable: true,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
@@ -975,6 +984,7 @@ export default function ReadingsContent() {
       headerName: 'Зөрүү',
       width: 100,
       field: 'usage',
+      ...numberColStyle,
       editable: false,
       valueGetter: (params: any) => {
         const start = params.data?.startValue || 0
@@ -990,6 +1000,7 @@ export default function ReadingsContent() {
       headerName: 'Б/Суурь хураамж',
       width: 150,
       field: 'baseDirty',
+      ...numberColStyle,
       editable: true,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
@@ -1005,6 +1016,7 @@ export default function ReadingsContent() {
       headerName: 'Ц/Суурь хураамж',
       width: 150,
       field: 'baseClean',
+      ...numberColStyle,
       editable: true,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
@@ -1020,6 +1032,7 @@ export default function ReadingsContent() {
       headerName: 'Бохир',
       width: 120,
       field: 'dirtyAmount',
+      ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1029,6 +1042,7 @@ export default function ReadingsContent() {
       headerName: 'Цэвэр',
       width: 120,
       field: 'cleanAmount',
+      ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1038,6 +1052,7 @@ export default function ReadingsContent() {
       headerName: 'Нийт',
       width: 120,
       field: 'subtotal',
+      ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1047,6 +1062,7 @@ export default function ReadingsContent() {
       headerName: 'НӨАТ',
       width: 120,
       field: 'vat',
+      ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1056,6 +1072,7 @@ export default function ReadingsContent() {
       headerName: 'Нийт',
       width: 120,
       field: 'total',
+      ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1096,7 +1113,28 @@ export default function ReadingsContent() {
         )
       },
     },
-  ], [allMeters, organizations, MeterCellEditor, showAddModal])
+  ], [allMeters, organizations, MeterCellEditor, showAddModal, numberColStyle])
+
+  const pinnedBottomRowData = useMemo(() => {
+    const sum = (field: keyof Reading) =>
+      readings.reduce((acc, row) => acc + (Number(row[field] ?? 0) || 0), 0)
+    return [
+      {
+        meterId: '',
+        organization: { name: 'Хөл дүн', id: 'footer', code: null },
+        startValue: 0,
+        endValue: 0,
+        usage: sum('usage'),
+        baseDirty: sum('baseDirty'),
+        baseClean: sum('baseClean'),
+        dirtyAmount: sum('dirtyAmount'),
+        cleanAmount: sum('cleanAmount'),
+        subtotal: sum('subtotal'),
+        vat: sum('vat'),
+        total: sum('total'),
+      } as Reading,
+    ]
+  }, [readings])
 
   const modalColumnDefs: ColDef<Reading>[] = useMemo(() => {
     const filtered = columnDefs.filter((col) =>
@@ -1353,6 +1391,7 @@ export default function ReadingsContent() {
                 reactiveCustomComponents
                 ref={gridRef}
                 rowData={readings}
+                pinnedBottomRowData={pinnedBottomRowData}
                 columnDefs={columnDefs}
                 getRowId={(params: any) =>
                   params.data?.id ??
@@ -1375,6 +1414,11 @@ export default function ReadingsContent() {
                 enterNavigatesVerticallyAfterEdit={false}
                 overlayNoRowsTemplate={
                   '<div style="padding: 20px; text-align: center;"><p style="font-size: 16px; margin-bottom: 8px;">Заалтын мэдээлэл олдсонгүй</p><p style="font-size: 14px; color: #666;">Шүүлт өөрчлөх эсвэл шинэ заалт оруулна уу</p></div>'
+                }
+                getRowStyle={(params) =>
+                  params.node.rowPinned
+                    ? { fontWeight: 700, backgroundColor: '#f9fafb' }
+                    : undefined
                 }
               />
             )}
