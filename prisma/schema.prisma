@@ -33,12 +33,10 @@ model Organization {
   phone           String?
   email           String?
   connectionNumber String?
-  /// Хэрэглэгчийн төрөл (жишээ: Хувь хүн, Байгууллага, ААН, Зөөврөөр татан зайлуулах, Зөөврүүд хүлээн авах, Ус түгээх байр)
   category        String   @default("HOUSEHOLD")
   baseCleanFee    Float    @default(0)
   baseDirtyFee    Float    @default(0)
   year            Int      @default(2026)
-  /// Албан байгууллага (нягтлан/усны компани) — энэ харилцагчийг хэн бүртгэсэн, хэнд харьяалагдахыг заана
   managedByOrganizationId String? @db.ObjectId
   managedByOrganization     Organization?  @relation("ManagedCustomers", fields: [managedByOrganizationId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   managedCustomers          Organization[] @relation("ManagedCustomers")

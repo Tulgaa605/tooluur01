@@ -389,6 +389,12 @@ export default function ReadingsContent() {
 
       return
     }
+
+    // Modal дээр ямар ч мөрийг автоматаар хадгалахгүй.
+    // Зөвхөн "Хадгалах" товчоор POST хийх урсгал ажиллана.
+    if (showAddModal) {
+      return
+    }
     
     // If it's a new row in main grid (shouldn't happen now, but keep for safety)
     if (reading._isNew) {
@@ -960,7 +966,7 @@ export default function ReadingsContent() {
       colId: 'startValue',
       field: 'startValue',
       ...numberColStyle,
-      editable: true,
+      editable: (params: any) => params.data?._isNew === true,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -988,7 +994,7 @@ export default function ReadingsContent() {
       colId: 'endValue',
       field: 'endValue',
       ...numberColStyle,
-      editable: true,
+      editable: (params: any) => params.data?._isNew === true,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1031,7 +1037,7 @@ export default function ReadingsContent() {
       width: 150,
       field: 'baseDirty',
       ...numberColStyle,
-      editable: true,
+      editable: (params: any) => params.data?._isNew === true,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1047,7 +1053,7 @@ export default function ReadingsContent() {
       width: 150,
       field: 'baseClean',
       ...numberColStyle,
-      editable: true,
+      editable: (params: any) => params.data?._isNew === true,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1131,16 +1137,7 @@ export default function ReadingsContent() {
             </button>
           )
         }
-        return (
-          <button
-            type="button"
-            onClick={() => handleDeleteReading(params.data.id)}
-            className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
-            title="Устгах"
-          >
-            <TrashIcon className="h-5 w-5" />
-          </button>
-        )
+        return null
       },
     },
   ], [allMeters, organizations, MeterCellEditor, showAddModal, numberColStyle])
@@ -1333,10 +1330,7 @@ export default function ReadingsContent() {
                   <button
                     type="button"
                     onClick={handleSaveNewReadings}
-                    disabled={
-                      loading ||
-                      newReadings.filter((r) => r._isNew && r.meterId).length === 0
-                    }
+                    disabled={loading}
                     className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
                   >
                     {loading ? 'Хадгалж байна...' : 'Хадгалах'}
