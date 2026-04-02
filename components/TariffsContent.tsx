@@ -103,7 +103,7 @@ export default function TariffsContent() {
     setMessage(null)
     try {
       const [orgRes, tariffRes, pipeRes] = await Promise.all([
-        fetchWithAuth('/api/organizations'),
+        fetchWithAuth('/api/organizations?customersOnly=1'),
         fetchWithAuth('/api/tariffs?includeCategory=1'),
         fetchWithAuth('/api/pipe-fees'),
       ])

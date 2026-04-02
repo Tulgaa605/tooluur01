@@ -211,6 +211,23 @@ export async function GET(request: NextRequest) {
       where.year = parseInt(year)
     }
     
+    const organizationId = searchParams.get('organizationId')
+    if (organizationId) {
+      // USER үед where.organizationId нь аль хэдийн string байна; энэ тохиолдолд зөвхөн өөрийнхөө ID таарсан үед үр дүнтэй.
+      if (typeof where.organizationId === 'string') {
+        if (where.organizationId !== organizationId) return NextResponse.json([])
+      } else {
+        where.organizationId = organizationId
+      }
+    }
+
+    const limitParam = Number(searchParams.get('limit') || 0)
+    const take = Number.isFinite(limitParam) && limitParam > 0
+      ? Math.min(Math.trunc(limitParam), 500)
+      : undefined
+
+    const shouldRecalculate = searchParams.get('recalculate') === '1'
+
     const readings = await prisma.meterReading.findMany({
       where,
       include: {
@@ -231,12 +248,24 @@ export async function GET(request: NextRequest) {
         { year: 'desc' },
         { month: 'desc' },
       ],
+      ...(take ? { take } : {}),
     })
 
-    // Одоогийн тарифаар дүнг дахин тооцоолж буцаана (зөрүү × ₮/м³ + суурь)
+    // Хурдны үндсэн горим: хадгалсан дүнг шууд буцаана.
+    if (!shouldRecalculate) {
+      return NextResponse.json(readings)
+    }
+
+    // Сонголтоор (recalculate=1) тарифаар дүнг дахин тооцоолж буцаана.
+    const tariffCache = new Map<string, Awaited<ReturnType<typeof getTariffRatesForPeriod>>>()
     const result = await Promise.all(
       readings.map(async (r) => {
-        const tariff = await getTariffRatesForPeriod(r.organizationId, r.year, r.month)
+        const cacheKey = `${r.organizationId}-${r.year}-${r.month}`
+        let tariff = tariffCache.get(cacheKey)
+        if (!tariff) {
+          tariff = await getTariffRatesForPeriod(r.organizationId, r.year, r.month)
+          tariffCache.set(cacheKey, tariff)
+        }
         const usage = r.usage ?? 0
         const cleanAmount = usage * tariff.cleanPerM3 + tariff.baseClean
         const dirtyAmount = usage * tariff.dirtyPerM3 + tariff.baseDirty

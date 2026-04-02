@@ -176,7 +176,6 @@ interface Reading {
 
 export default function ReadingsContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
-  const [meters, setMeters] = useState<Meter[]>([])
   const [allMeters, setAllMeters] = useState<Meter[]>([])
   const [tariffs, setTariffs] = useState<OrganizationTariff[]>([])
   const [categoryTariffs, setCategoryTariffs] = useState<CategoryTariff[]>([])
@@ -190,10 +189,10 @@ export default function ReadingsContent() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
-  const [latestMeterReadings, setLatestMeterReadings] = useState<Reading[]>([])
   const [newReadings, setNewReadings] = useState<Reading[]>([])
   const gridRef = useRef<AgGridReact>(null)
   const modalGridRef = useRef<AgGridReact>(null)
+  const modalOriginalRowsRef = useRef<Map<string, { startValue: number; endValue: number; meterId?: string; baseClean: number; baseDirty: number }>>(new Map())
   const numberColStyle = useMemo(
     () => ({
       cellClass: 'ag-right-aligned-cell',
@@ -205,6 +204,23 @@ export default function ReadingsContent() {
     const currentYear = new Date().getFullYear()
     return [currentYear + 1, currentYear, currentYear - 1, currentYear - 2]
   }, [])
+  const getRowSnapshotKey = useCallback((r: Reading) => {
+    if (r.id) return `id:${r.id}`
+    return `new:${r.organizationId ?? 'x'}-${r.year}-${r.month}`
+  }, [])
+  const snapshotRows = useCallback((rows: Reading[]) => {
+    const m = new Map<string, { startValue: number; endValue: number; meterId?: string; baseClean: number; baseDirty: number }>()
+    for (const r of rows) {
+      m.set(getRowSnapshotKey(r), {
+        startValue: Number(r.startValue || 0),
+        endValue: Number(r.endValue || 0),
+        meterId: r.meterId,
+        baseClean: Number(r.baseClean || 0),
+        baseDirty: Number(r.baseDirty || 0),
+      })
+    }
+    modalOriginalRowsRef.current = m
+  }, [getRowSnapshotKey])
 
   useEffect(() => {
     fetchWithAuth('/api/organizations?customersOnly=1')
@@ -285,6 +301,7 @@ export default function ReadingsContent() {
       if (filterMonth.trim()) params.append('month', filterMonth.trim())
       if (filterYear.trim()) params.append('year', filterYear.trim())
 
+      params.append('limit', '300')
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
       let data: any = null
       try {
@@ -326,13 +343,6 @@ export default function ReadingsContent() {
   useEffect(() => {
     fetchReadings()
   }, [fetchReadings])
-
-  // Auto-refresh when filters change
-  useEffect(() => {
-    if (filterMonth !== undefined || filterYear !== undefined) {
-      fetchReadings()
-    }
-  }, [filterMonth, filterYear, fetchReadings])
 
   const handleCellValueChanged = useCallback(async (params: any) => {
     const reading = params.data as Reading
@@ -705,7 +715,6 @@ export default function ReadingsContent() {
       const prevReadings: Reading[] = Array.isArray(prevReadingsData) ? prevReadingsData : []
       const currentReadingsData = currentRes.ok ? await currentRes.json() : []
       const currentReadings: Reading[] = Array.isArray(currentReadingsData) ? currentReadingsData : []
-      setLatestMeterReadings(prevReadings)
       const prevReadingsByKey: Record<string, Reading[]> = {
         [`${prevYear}-${prevMonth}`]: prevReadings,
       }
@@ -714,8 +723,8 @@ export default function ReadingsContent() {
       }
       const rows = buildRowsForYearAndMonths(orgList, metersList, currentYear, [currentMonth], prevReadingsByKey, pipes, currentReadingsByKey)
       setNewReadings(rows)
+      snapshotRows(rows)
     } catch (error) {
-      setLatestMeterReadings([])
       setNewReadings([])
     } finally {
       setLoading(false)
@@ -790,22 +799,35 @@ export default function ReadingsContent() {
         }))
         const rows = buildRowsForYearAndMonths(orgList, metersList, y, months, prevReadingsByKey, undefined, currentReadingsByKey)
         setNewReadings(rows)
+        snapshotRows(rows)
       }
     } catch (e) {
       setNewReadings([])
     } finally {
       setLoading(false)
     }
-  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths, newReadings])
+  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths, newReadings, snapshotRows])
 
   const handleCloseAddModal = () => {
     setShowAddModal(false)
     setNewReadings([])
+    modalOriginalRowsRef.current = new Map()
     setMessage(null)
   }
 
   const handleSaveNewReadings = async () => {
-    const rowsToSave = newReadings.filter((r) => r.meterId && (r._isNew || !!r.id))
+    const isDirty = (r: Reading) => {
+      const snap = modalOriginalRowsRef.current.get(getRowSnapshotKey(r))
+      if (!snap) return true
+      return (
+        Number(r.startValue || 0) !== snap.startValue ||
+        Number(r.endValue || 0) !== snap.endValue ||
+        Number(r.baseClean || 0) !== snap.baseClean ||
+        Number(r.baseDirty || 0) !== snap.baseDirty ||
+        (r.meterId || '') !== (snap.meterId || '')
+      )
+    }
+    const rowsToSave = newReadings.filter((r) => r.meterId && (r._isNew || !!r.id) && isDirty(r))
 
     const rowsWithDataButNoMeter = newReadings.filter((r) => {
       if (!r._isNew || !r.organizationId) return false
@@ -834,40 +856,7 @@ export default function ReadingsContent() {
     setMessage(null)
 
     try {
-      const syncNextMonthForExistingRow = async (reading: Reading) => {
-        if (!reading.meterId || !reading.year || !reading.month) return
-        const nextMonth = reading.month === 12 ? 1 : reading.month + 1
-        const nextYear = reading.month === 12 ? reading.year + 1 : reading.year
-        const nextRes = await fetchWithAuth(`/api/readings?month=${nextMonth}&year=${nextYear}`)
-        if (!nextRes.ok) return
-        const nextData = await nextRes.json()
-        if (!Array.isArray(nextData)) return
-        const nextRow = nextData.find((r: any) => r?.meterId === reading.meterId || r?.meter?.id === reading.meterId)
-        if (!nextRow?.id) return
-
-        const carriedStart = Number(reading.endValue || 0)
-        const currentNextStart = Number(nextRow.startValue ?? nextRow.start_value ?? 0)
-        const currentNextEnd = Number(nextRow.endValue ?? nextRow.end_value ?? 0)
-        const currentNextUsage = Number(nextRow.usage ?? 0)
-        const wasAutoFilled = currentNextUsage === 0 && currentNextEnd === currentNextStart
-        let nextEnd = wasAutoFilled ? carriedStart : currentNextEnd
-        if (nextEnd < carriedStart) nextEnd = carriedStart
-
-        await fetchWithAuth(`/api/readings?id=${nextRow.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            month: nextMonth,
-            year: nextYear,
-            startValue: carriedStart,
-            endValue: nextEnd,
-            baseClean: Number(nextRow.baseClean || 0),
-            baseDirty: Number(nextRow.baseDirty || 0),
-          }),
-        })
-      }
-
-      for (const reading of rowsToSave) {
+      const saveOne = async (reading: Reading) => {
         const meterId = reading.meterId!
         const body = {
           meterId,
@@ -900,20 +889,18 @@ export default function ReadingsContent() {
             })
 
         const data = await res.json()
-        if (!res.ok) {
-          throw new Error(data.error || 'Алдаа гарлаа')
-        }
-        if (!reading._isNew && reading.id) {
-          await syncNextMonthForExistingRow(reading)
-        }
+        if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
+      }
+
+      const concurrency = 10
+      for (let i = 0; i < rowsToSave.length; i += concurrency) {
+        const chunk = rowsToSave.slice(i, i + concurrency)
+        await Promise.all(chunk.map((r) => saveOne(r)))
       }
 
       setMessage({ type: 'success', text: 'Амжилттай хадгаллаа' })
-      setTimeout(() => {
-        handleCloseAddModal()
-        fetchReadings()
-        setMessage(null)
-      }, 1500)
+      handleCloseAddModal()
+      fetchReadings()
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Алдаа гарлаа' })
     } finally {
