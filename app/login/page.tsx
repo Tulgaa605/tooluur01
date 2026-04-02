@@ -41,9 +41,7 @@ export default function LoginPage() {
         sessionStorage.setItem('token', data.token)
       }
 
-      setTimeout(() => {
-        window.location.replace('/dashboard')
-      }, 100)
+      window.location.replace('/dashboard')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Нэвтрэхэд алдаа гарлаа')
     } finally {
