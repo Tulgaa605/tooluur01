@@ -6,8 +6,7 @@ import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
-import { TrashIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
-import ConfirmModal from './ConfirmModal'
+import { PlusIcon } from '@heroicons/react/24/outline'
 
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -188,13 +187,11 @@ export default function ReadingsContent() {
   const [readingsLoading, setReadingsLoading] = useState(false)
   const [filterMonth, setFilterMonth] = useState('')
   const [filterYear, setFilterYear] = useState('')
-  const [filterOrgId, setFilterOrgId] = useState<string>('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
   const [latestMeterReadings, setLatestMeterReadings] = useState<Reading[]>([])
   const [newReadings, setNewReadings] = useState<Reading[]>([])
-  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const gridRef = useRef<AgGridReact>(null)
   const modalGridRef = useRef<AgGridReact>(null)
   const numberColStyle = useMemo(
@@ -204,6 +201,10 @@ export default function ReadingsContent() {
     }),
     []
   )
+  const yearOptions = useMemo(() => {
+    const currentYear = new Date().getFullYear()
+    return [currentYear + 1, currentYear, currentYear - 1, currentYear - 2]
+  }, [])
 
   useEffect(() => {
     fetchWithAuth('/api/organizations?customersOnly=1')
@@ -283,10 +284,14 @@ export default function ReadingsContent() {
       const params = new URLSearchParams()
       if (filterMonth.trim()) params.append('month', filterMonth.trim())
       if (filterYear.trim()) params.append('year', filterYear.trim())
-      if (filterOrgId) params.append('organizationId', filterOrgId)
 
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
-      const data = await res.json()
+      let data: any = null
+      try {
+        data = await res.json()
+      } catch {
+        data = null
+      }
 
       if (res.ok && Array.isArray(data)) {
         const normalized = data.map((r: any) => {
@@ -299,8 +304,15 @@ export default function ReadingsContent() {
           }
         })
         setReadings(normalized as Reading[])
+      } else if (res.ok) {
+        // Амжилттай хариу боловч массив биш (жишээ: {} / null) бол хоосон жагсаалт гэж үзнэ.
+        setReadings([])
       } else {
-        console.error('Error fetching readings:', data)
+        if (data?.error) {
+          console.error('Error fetching readings:', data.error)
+        } else {
+          console.error('Error fetching readings: request failed', res.status)
+        }
         setReadings([])
       }
     } catch (error) {
@@ -309,7 +321,7 @@ export default function ReadingsContent() {
     } finally {
       if (showLoading) setReadingsLoading(false)
     }
-  }, [filterMonth, filterYear, filterOrgId])
+  }, [filterMonth, filterYear])
 
   useEffect(() => {
     fetchReadings()
@@ -317,17 +329,18 @@ export default function ReadingsContent() {
 
   // Auto-refresh when filters change
   useEffect(() => {
-    if (filterOrgId !== undefined || filterMonth !== undefined || filterYear !== undefined) {
+    if (filterMonth !== undefined || filterYear !== undefined) {
       fetchReadings()
     }
-  }, [filterOrgId, filterMonth, filterYear, fetchReadings])
+  }, [filterMonth, filterYear, fetchReadings])
 
   const handleCellValueChanged = useCallback(async (params: any) => {
     const reading = params.data as Reading
     const changedField = params.colDef?.field as string | undefined
 
-    // If it's a new row in the modal, calculate all values and update display
-    if (reading._isNew && showAddModal) {
+    // Modal дотор засварласан мөр бүр дээр тооцооллыг local байдлаар шинэчилнэ.
+    // Сервер рүү автоматаар хадгалахгүй, зөвхөн "Хадгалах" товчоор хадгална.
+    if (showAddModal) {
       // Өмнөх сараас эхний заалт татахыг зөвхөн «Эхний заалт» нүд засагдсан үед хийнэ.
       // Эцсийн заалтыг эхэнд оруулаад Enter дарвал async дүүргэлт эхний заалтыг дарж алдаж болно.
       if (
@@ -374,12 +387,59 @@ export default function ReadingsContent() {
       // Дараагийн тикт refresh — commit дуусахаас өмнө refreshCells зарим тохиолдолд утга алдагдуулна
       const api = params.api
       const node = params.node
+
+      // Өмнөх сарын эцсийн заалтыг өөрчилбөл дараагийн сарын эхний/эцсийн заалтыг дагуулж шинэчилнэ.
+      let nextRowNode: any = null
+      if (changedField === 'endValue' && reading.meterId && reading.month && reading.year) {
+        const nextMonth = reading.month === 12 ? 1 : reading.month + 1
+        const nextYear = reading.month === 12 ? reading.year + 1 : reading.year
+        const nextRow = newReadings.find(
+          (r) =>
+            r.meterId === reading.meterId &&
+            r.month === nextMonth &&
+            r.year === nextYear
+        )
+
+        if (nextRow) {
+          const carried = reading.endValue || 0
+          const hadManualNextEnd = Number(nextRow.endValue || 0) !== Number(nextRow.startValue || 0)
+          nextRow.startValue = carried
+          if (!hadManualNextEnd) {
+            // Дараагийн сарын end өмнө нь бөглөгдөөгүй бол start/end-ийг хоёуланг нь carry хийнэ.
+            nextRow.endValue = carried
+          }
+          nextRow.usage =
+            (nextRow.endValue || 0) > (nextRow.startValue || 0)
+              ? (nextRow.endValue || 0) - (nextRow.startValue || 0)
+              : 0
+          const nextCleanPerM3 = nextRow.cleanPerM3 || 0
+          const nextDirtyPerM3 = nextRow.dirtyPerM3 || 0
+          nextRow.cleanAmount = nextRow.usage * nextCleanPerM3 + (nextRow.baseClean || 0)
+          nextRow.dirtyAmount = nextRow.usage * nextDirtyPerM3 + (nextRow.baseDirty || 0)
+          nextRow.subtotal = nextRow.cleanAmount + nextRow.dirtyAmount
+          nextRow.vat = nextRow.subtotal * 0.1
+          nextRow.total = nextRow.subtotal + nextRow.vat
+
+          api?.forEachNode?.((n: any) => {
+            if (
+              !nextRowNode &&
+              n?.data?.meterId === nextRow.meterId &&
+              n?.data?.month === nextRow.month &&
+              n?.data?.year === nextRow.year
+            ) {
+              nextRowNode = n
+            }
+          })
+        }
+      }
+
       queueMicrotask(() => {
         try {
           if (!api?.isDestroyed?.()) {
             api.refreshCells({
-              rowNodes: [node],
-              columns: ['usage', 'cleanAmount', 'dirtyAmount', 'subtotal', 'vat', 'total'],
+              force: true,
+              rowNodes: nextRowNode ? [node, nextRowNode] : [node],
+              columns: ['startValue', 'endValue', 'usage', 'cleanAmount', 'dirtyAmount', 'subtotal', 'vat', 'total'],
             })
           }
         } catch {
@@ -505,24 +565,6 @@ export default function ReadingsContent() {
     }
     return byCategory
   }, [categoryTariffs])
-
-  const handleDeleteReading = (id: string) => {
-    setDeleteConfirm({ open: true, id })
-  }
-
-  const doDeleteReading = async () => {
-    const id = deleteConfirm.id
-    if (!id) return
-    setDeleteConfirm({ open: false, id: null })
-    try {
-      const res = await fetchWithAuth(`/api/readings?id=${id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
-      fetchReadings()
-    } catch (err: any) {
-      alert(err.message || 'Алдаа гарлаа')
-    }
-  }
 
   // Өмнөх сарын заалтаас эхний заалт авч, нэг (org, month, year) мөр үүсгэнэ
   const buildOneRow = useCallback((
@@ -763,7 +805,7 @@ export default function ReadingsContent() {
   }
 
   const handleSaveNewReadings = async () => {
-    const rowsToSave = newReadings.filter((r) => r._isNew && r.meterId)
+    const rowsToSave = newReadings.filter((r) => r.meterId && (r._isNew || !!r.id))
 
     const rowsWithDataButNoMeter = newReadings.filter((r) => {
       if (!r._isNew || !r.organizationId) return false
@@ -783,7 +825,7 @@ export default function ReadingsContent() {
     }
 
     if (rowsToSave.length === 0) {
-      setMessage({ type: 'error', text: 'Хадгалах заалт олдсонгүй. Тоолуур сонгосон мөрөнд эцсийн заалт оруулж хадгална уу.' })
+      setMessage({ type: 'error', text: 'Хадгалах мөр олдсонгүй. Тоолуур сонгоод дахин оролдоно уу.' })
       setTimeout(() => setMessage(null), 3000)
       return
     }
@@ -792,27 +834,77 @@ export default function ReadingsContent() {
     setMessage(null)
 
     try {
-      for (const reading of rowsToSave) {
-        const meterId = reading.meterId!
-        const res = await fetchWithAuth('/api/readings', {
-          method: 'POST',
+      const syncNextMonthForExistingRow = async (reading: Reading) => {
+        if (!reading.meterId || !reading.year || !reading.month) return
+        const nextMonth = reading.month === 12 ? 1 : reading.month + 1
+        const nextYear = reading.month === 12 ? reading.year + 1 : reading.year
+        const nextRes = await fetchWithAuth(`/api/readings?month=${nextMonth}&year=${nextYear}`)
+        if (!nextRes.ok) return
+        const nextData = await nextRes.json()
+        if (!Array.isArray(nextData)) return
+        const nextRow = nextData.find((r: any) => r?.meterId === reading.meterId || r?.meter?.id === reading.meterId)
+        if (!nextRow?.id) return
+
+        const carriedStart = Number(reading.endValue || 0)
+        const currentNextStart = Number(nextRow.startValue ?? nextRow.start_value ?? 0)
+        const currentNextEnd = Number(nextRow.endValue ?? nextRow.end_value ?? 0)
+        const currentNextUsage = Number(nextRow.usage ?? 0)
+        const wasAutoFilled = currentNextUsage === 0 && currentNextEnd === currentNextStart
+        let nextEnd = wasAutoFilled ? carriedStart : currentNextEnd
+        if (nextEnd < carriedStart) nextEnd = carriedStart
+
+        await fetchWithAuth(`/api/readings?id=${nextRow.id}`, {
+          method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            meterId,
-            month: reading.month,
-            year: reading.year,
-            startValue: reading.startValue,
-            endValue: reading.endValue,
-            baseClean: reading.baseClean || 0,
-            baseDirty: reading.baseDirty || 0,
-            cleanPerM3: reading.cleanPerM3 || 0,
-            dirtyPerM3: reading.dirtyPerM3 || 0,
+            month: nextMonth,
+            year: nextYear,
+            startValue: carriedStart,
+            endValue: nextEnd,
+            baseClean: Number(nextRow.baseClean || 0),
+            baseDirty: Number(nextRow.baseDirty || 0),
           }),
         })
+      }
+
+      for (const reading of rowsToSave) {
+        const meterId = reading.meterId!
+        const body = {
+          meterId,
+          month: reading.month,
+          year: reading.year,
+          startValue: reading.startValue,
+          endValue: reading.endValue,
+          baseClean: reading.baseClean || 0,
+          baseDirty: reading.baseDirty || 0,
+          cleanPerM3: reading.cleanPerM3 || 0,
+          dirtyPerM3: reading.dirtyPerM3 || 0,
+        }
+        const res = reading._isNew
+          ? await fetchWithAuth('/api/readings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+          : await fetchWithAuth(`/api/readings?id=${reading.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                month: reading.month,
+                year: reading.year,
+                startValue: reading.startValue,
+                endValue: reading.endValue,
+                baseClean: reading.baseClean || 0,
+                baseDirty: reading.baseDirty || 0,
+              }),
+            })
 
         const data = await res.json()
         if (!res.ok) {
           throw new Error(data.error || 'Алдаа гарлаа')
+        }
+        if (!reading._isNew && reading.id) {
+          await syncNextMonthForExistingRow(reading)
         }
       }
 
@@ -914,10 +1006,7 @@ export default function ReadingsContent() {
       headerName: 'Т/дугаар',
       width: 150,
       field: 'meterId',
-      editable: (params: any) => {
-        // Only allow editing for new rows
-        return params.data?._isNew === true
-      },
+      editable: () => showAddModal,
       cellEditor: MeterCellEditor,
       cellEditorParams: {
         suppressKeyboardEvent: (params: any) => {
@@ -936,8 +1025,7 @@ export default function ReadingsContent() {
         return '-'
       },
       onCellClicked: (params: any) => {
-        // Only allow editing new rows
-        if (params.data?._isNew === true && params.colDef.field === 'meterId') {
+        if (showAddModal && params.colDef.field === 'meterId') {
           params.api.startEditingCell({
             rowIndex: params.rowIndex,
             colKey: 'meterId',
@@ -970,7 +1058,7 @@ export default function ReadingsContent() {
       colId: 'startValue',
       field: 'startValue',
       ...numberColStyle,
-      editable: (params: any) => params.data?._isNew === true,
+      editable: () => showAddModal,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -998,7 +1086,7 @@ export default function ReadingsContent() {
       colId: 'endValue',
       field: 'endValue',
       ...numberColStyle,
-      editable: (params: any) => params.data?._isNew === true,
+      editable: () => showAddModal,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1041,7 +1129,7 @@ export default function ReadingsContent() {
       width: 150,
       field: 'baseDirty',
       ...numberColStyle,
-      editable: (params: any) => params.data?._isNew === true,
+      editable: () => showAddModal,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1057,7 +1145,7 @@ export default function ReadingsContent() {
       width: 150,
       field: 'baseClean',
       ...numberColStyle,
-      editable: (params: any) => params.data?._isNew === true,
+      editable: () => showAddModal,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1118,32 +1206,6 @@ export default function ReadingsContent() {
         return Number(params.value).toFixed(2)
       },
     },
-    {
-      headerName: 'Үйлдэл',
-      width: 100,
-      editable: false,
-      cellRenderer: (params: any) => {
-        if (params.data?._isNew) {
-          return (
-            <button
-              type="button"
-              onClick={() => {
-                if (showAddModal) {
-                  setNewReadings(prev => prev.filter(r => r !== params.data))
-                } else {
-                  setReadings(prev => prev.filter(r => r !== params.data))
-                }
-              }}
-              className="text-gray-600 hover:text-gray-900 p-1 rounded hover:bg-gray-50 transition-colors"
-              title="Цуцлах"
-            >
-              <XMarkIcon className="h-5 w-5" />
-            </button>
-          )
-        }
-        return null
-      },
-    },
   ], [allMeters, organizations, MeterCellEditor, showAddModal, numberColStyle])
 
   const pinnedBottomRowData = useMemo(() => {
@@ -1169,7 +1231,7 @@ export default function ReadingsContent() {
 
   const modalColumnDefs: ColDef<Reading>[] = useMemo(() => {
     const filtered = columnDefs.filter((col) =>
-      !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ', 'Үйлдэл'].includes(
+      !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ'].includes(
         (col.headerName as string) || ''
       )
     )
@@ -1349,49 +1411,41 @@ export default function ReadingsContent() {
       <div className="mt-8">
         <div className="mb-6">
           <div className="bg-white p-4 rounded-lg border border-gray-200 mb-4">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Хэрэглэгч
+                  Сар
                 </label>
                 <select
-                  value={filterOrgId}
-                  onChange={(e) => setFilterOrgId(e.target.value)}
+                  value={filterMonth}
+                  onChange={(e) => setFilterMonth(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
                 >
                   <option value="">Бүгд</option>
-                  {organizations.map(org => (
-                    <option key={org.id} value={org.id}>{org.name}</option>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                    <option key={m} value={String(m)}>
+                      {m}
+                    </option>
                   ))}
                 </select>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Сар
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={12}
-                  value={filterMonth}
-                  onChange={(e) => setFilterMonth(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="0"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
                   Он
                 </label>
-                <input
-                  type="number"
+                <select
                   value={filterYear}
                   onChange={(e) => setFilterYear(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="0"
-                />
+                >
+                  <option value="">Бүгд</option>
+                  {yearOptions.map((y) => (
+                    <option key={y} value={String(y)}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="flex items-end">
@@ -1453,13 +1507,6 @@ export default function ReadingsContent() {
           </div>
         </div>
       </div>
-      <ConfirmModal
-        open={deleteConfirm.open}
-        title="Заалт устгах"
-        message="Та энэ заалтыг устгахдаа итгэлтэй байна уу?"
-        onConfirm={doDeleteReading}
-        onCancel={() => setDeleteConfirm({ open: false, id: null })}
-      />
     </div>
   )
 }
