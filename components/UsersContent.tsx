@@ -47,6 +47,7 @@ export default function UsersContent() {
   const [organizations, setOrganizations] = useState<Array<{ id: string; name: string }>>([])
   const [showUserForm, setShowUserForm] = useState(false)
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
+  const [editingHouseholdId, setEditingHouseholdId] = useState<string | null>(null)
   const [userForm, setUserForm] = useState({
     ovog: '',
     name: '',
@@ -80,7 +81,7 @@ export default function UsersContent() {
     category: 'ORGANIZATION' as OrganizationCategory,
   })
 
-  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'user' | 'org'; id: string } | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'user' | 'org' | 'household'; id: string } | null>(null)
 
   useEffect(() => {
     loadUsers()
@@ -191,6 +192,27 @@ export default function UsersContent() {
     setDeleteConfirm({ type: 'user', id })
   }
 
+  const handleEditHousehold = (household: Organization) => {
+    setEditingUserId(null)
+    setEditingHouseholdId(household.id)
+    setUserForm({
+      ovog: household.ovog || '',
+      name: household.name || '',
+      email: household.email || '',
+      phone: household.phone || '',
+      role: 'USER',
+      organizationId: '',
+      code: household.code || '',
+      address: household.address || '',
+      connectionNumber: household.connectionNumber || '15',
+    })
+    setShowUserForm(true)
+  }
+
+  const handleDeleteHousehold = (id: string) => {
+    setDeleteConfirm({ type: 'household', id })
+  }
+
   const doDeleteUser = async () => {
     if (!deleteConfirm || deleteConfirm.type !== 'user') return
     const id = deleteConfirm.id
@@ -208,7 +230,27 @@ export default function UsersContent() {
   const handleSubmitUser = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      if (editingUserId) {
+      if (editingHouseholdId) {
+        const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Иргэн, хувь хүн'
+        const orgRes = await fetchWithAuth('/api/organizations', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            id: editingHouseholdId,
+            name: fullName,
+            ovog: userForm.ovog?.trim() || null,
+            code: userForm.code?.trim() || null,
+            address: userForm.address?.trim() || null,
+            phone: userForm.phone?.trim() || null,
+            email: userForm.email?.trim() || null,
+            connectionNumber: (userForm.connectionNumber || '15').trim() || '15',
+            category: 'HOUSEHOLD',
+          }),
+        })
+        const orgData = await orgRes.json()
+        if (!orgRes.ok) throw new Error(orgData.error || orgData.message || 'Хувь хүн засахад алдаа гарлаа')
+      } else if (editingUserId) {
         const res = await fetchWithAuth('/api/users', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -246,6 +288,7 @@ export default function UsersContent() {
       }
       setShowUserForm(false)
       setEditingUserId(null)
+      setEditingHouseholdId(null)
       setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
       loadUsers()
       loadOrganizations()
@@ -275,7 +318,7 @@ export default function UsersContent() {
   }
 
   const doDeleteOrg = async () => {
-    if (!deleteConfirm || deleteConfirm.type !== 'org') return
+    if (!deleteConfirm || (deleteConfirm.type !== 'org' && deleteConfirm.type !== 'household')) return
     const id = deleteConfirm.id
     setDeleteConfirm(null)
     try {
@@ -284,6 +327,7 @@ export default function UsersContent() {
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
       loadOrganizations()
       loadUsers()
+      loadHouseholds()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     }
@@ -379,6 +423,7 @@ export default function UsersContent() {
               onClick={() => {
                 if (!showUserForm) {
                   setEditingUserId(null)
+                  setEditingHouseholdId(null)
                   setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
                 }
                 setShowUserForm(!showUserForm)
@@ -401,8 +446,9 @@ export default function UsersContent() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хэрэглэгчийн код</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хаяг</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Утас</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Имэйл</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Шугамын хоолой</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Имэйл</th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Шугамын хоолой</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Үйлдэл</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -413,8 +459,26 @@ export default function UsersContent() {
                       <td className="px-4 py-3 text-sm text-gray-900">{h.code || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.address || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.phone || '-'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-900">{h.email || '-'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-900">{h.connectionNumber || '-'}</td>
+                      <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">{h.email || '-'}</td>
+                      <td className="px-3 py-2 text-sm text-gray-900 text-center">{h.connectionNumber || '-'}</td>
+                      <td className="px-4 py-3 text-sm">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEditHousehold(h)}
+                            className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors"
+                            title="Засах"
+                          >
+                            <PencilIcon className="h-5 w-5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteHousehold(h.id)}
+                            className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
+                            title="Устгах"
+                          >
+                            <TrashIcon className="h-5 w-5" />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -437,7 +501,7 @@ export default function UsersContent() {
                   <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
                     <div className="flex justify-between items-center mb-4">
                       <h3 className="text-xl font-semibold text-gray-900">
-                        {editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хэрэглэгч бүртгэх'}
+                        {editingHouseholdId ? 'Хувь хүн засах' : editingUserId ? 'Хэрэглэгч засах' : 'Шинэ хэрэглэгч бүртгэх'}
                       </h3>
                       <button
                         onClick={() => setShowUserForm(false)}
@@ -574,7 +638,7 @@ export default function UsersContent() {
                           type="submit"
                           className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
                         >
-                          {editingUserId ? 'Шинэчлэх' : 'Хадгалах'}
+                          {editingUserId || editingHouseholdId ? 'Шинэчлэх' : 'Хадгалах'}
                         </button>
                       </div>
                     </form>
@@ -784,10 +848,10 @@ export default function UsersContent() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Утас
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
                       Имэйл
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
                       Шугамын хоолой
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -811,10 +875,10 @@ export default function UsersContent() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {org.phone || '-'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
                         {org.email || '-'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 text-center">
                         {org.connectionNumber || '-'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -854,11 +918,19 @@ export default function UsersContent() {
       {deleteConfirm && (
         <ConfirmModal
           open={true}
-          title={deleteConfirm.type === 'user' ? 'Хэрэглэгч устгах' : 'Байгууллага устгах'}
+          title={
+            deleteConfirm.type === 'user'
+              ? 'Хэрэглэгч устгах'
+              : deleteConfirm.type === 'household'
+                ? 'Хувь хүн устгах'
+                : 'Байгууллага устгах'
+          }
           message={
             deleteConfirm.type === 'user'
               ? 'Та энэ хэрэглэгчийг устгахдаа итгэлтэй байна уу?'
-              : 'Та энэ байгууллагыг устгахдаа итгэлтэй байна уу?'
+              : deleteConfirm.type === 'household'
+                ? 'Та энэ хувь хүнийг устгахдаа итгэлтэй байна уу?'
+                : 'Та энэ байгууллагыг устгахдаа итгэлтэй байна уу?'
           }
           onConfirm={deleteConfirm.type === 'user' ? doDeleteUser : doDeleteOrg}
           onCancel={() => setDeleteConfirm(null)}

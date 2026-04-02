@@ -866,7 +866,12 @@ export default function ReadingsContent() {
           autoFocus
           value={selectVal}
           onChange={(e) => applySelection(e.target.value)}
-          onBlur={() => stopEditing()}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              stopEditing(true)
+            }
+          }}
           style={{
             width: '100%',
             height: '100%',
@@ -875,7 +880,6 @@ export default function ReadingsContent() {
             fontSize: '14px',
             backgroundColor: 'white',
           }}
-          onClick={(e) => e.stopPropagation()}
         >
           <option value="">Сонгох</option>
           {allMeters.map((meter) => (
