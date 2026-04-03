@@ -204,6 +204,13 @@ export default function ReadingsContent() {
     const currentYear = new Date().getFullYear()
     return [currentYear + 1, currentYear, currentYear - 1, currentYear - 2]
   }, [])
+
+  // Modal-ийн дотор зөвхөн сонгосон (Он,Сар)-ын мөрүүдийг л харуулна.
+  // Гэхдээ data/тооцоололд бүх period-үүд ашиглагдана (save үед serialize).
+  const visibleModalRows = useMemo(() => {
+    if (!showAddModal) return []
+    return newReadings.filter((r) => r.year === addModalYear && r.month === addModalMonth)
+  }, [showAddModal, newReadings, addModalYear, addModalMonth])
   const getRowSnapshotKey = useCallback((r: Reading) => {
     if (r.id) return `id:${r.id}`
     return `new:${r.organizationId ?? 'x'}-${r.year}-${r.month}`
@@ -399,29 +406,47 @@ export default function ReadingsContent() {
       const node = params.node
 
       // Өмнөх сарын эцсийн заалтыг өөрчилбөл дараагийн сарын эхний/эцсийн заалтыг дагуулж шинэчилнэ.
-      let nextRowNode: any = null
+      let updatedNodes: any[] = []
       if (changedField === 'endValue' && reading.meterId && reading.month && reading.year) {
-        const nextMonth = reading.month === 12 ? 1 : reading.month + 1
-        const nextYear = reading.month === 12 ? reading.year + 1 : reading.year
-        const nextRow = newReadings.find(
-          (r) =>
-            r.meterId === reading.meterId &&
-            r.month === nextMonth &&
-            r.year === nextYear
-        )
+        const meterId = reading.meterId
+        const nodesByKey = new Map<string, any>()
+        api?.forEachNode?.((n: any) => {
+          const d = n?.data
+          if (!d) return
+          if (!d.meterId || !d.month || !d.year) return
+          nodesByKey.set(
+            `${d.meterId}-${Number(d.year)}-${Number(d.month)}`,
+            n
+          )
+        })
 
-        if (nextRow) {
-          const carried = reading.endValue || 0
+        let carried = Number(reading.endValue || 0)
+        let curYear = Number(reading.year)
+        let curMonth = Number(reading.month)
+
+        while (true) {
+          const nextMonth = curMonth === 12 ? 1 : curMonth + 1
+          const nextYear = curMonth === 12 ? curYear + 1 : curYear
+
+          const nextRow = newReadings.find((r) => r.meterId === meterId && r.month === nextMonth && r.year === nextYear)
+          if (!nextRow) break
+
           const hadManualNextEnd = Number(nextRow.endValue || 0) !== Number(nextRow.startValue || 0)
           nextRow.startValue = carried
+
           if (!hadManualNextEnd) {
             // Дараагийн сарын end өмнө нь бөглөгдөөгүй бол start/end-ийг хоёуланг нь carry хийнэ.
             nextRow.endValue = carried
           }
+
+          // start-оос бага end болохоос сэргийлнэ.
+          if (Number(nextRow.endValue || 0) < carried) nextRow.endValue = carried
+
           nextRow.usage =
             (nextRow.endValue || 0) > (nextRow.startValue || 0)
               ? (nextRow.endValue || 0) - (nextRow.startValue || 0)
               : 0
+
           const nextCleanPerM3 = nextRow.cleanPerM3 || 0
           const nextDirtyPerM3 = nextRow.dirtyPerM3 || 0
           nextRow.cleanAmount = nextRow.usage * nextCleanPerM3 + (nextRow.baseClean || 0)
@@ -430,25 +455,24 @@ export default function ReadingsContent() {
           nextRow.vat = nextRow.subtotal * 0.1
           nextRow.total = nextRow.subtotal + nextRow.vat
 
-          api?.forEachNode?.((n: any) => {
-            if (
-              !nextRowNode &&
-              n?.data?.meterId === nextRow.meterId &&
-              n?.data?.month === nextRow.month &&
-              n?.data?.year === nextRow.year
-            ) {
-              nextRowNode = n
-            }
-          })
+          const key = `${meterId}-${Number(nextRow.year)}-${Number(nextRow.month)}`
+          const nodeForNext = nodesByKey.get(key)
+          if (nodeForNext) updatedNodes.push(nodeForNext)
+
+          // Дараагийн алхам end дээр суурилна.
+          carried = Number(nextRow.endValue || 0)
+          curYear = nextYear
+          curMonth = nextMonth
         }
       }
 
       queueMicrotask(() => {
         try {
           if (!api?.isDestroyed?.()) {
+            const rowNodesToRefresh = [...new Set([node, ...updatedNodes])].filter(Boolean)
             api.refreshCells({
               force: true,
-              rowNodes: nextRowNode ? [node, nextRowNode] : [node],
+              rowNodes: rowNodesToRefresh,
               columns: ['startValue', 'endValue', 'usage', 'cleanAmount', 'dirtyAmount', 'subtotal', 'vat', 'total'],
             })
           }
@@ -651,8 +675,7 @@ export default function ReadingsContent() {
   const buildRowsForYearAndMonths = useCallback((
     orgList: Organization[],
     metersList: Meter[],
-    year: number,
-    months: number[],
+    periods: Array<{ year: number; month: number }>,
     prevReadingsByKey: Record<string, Reading[]>,
     pipesOverride?: PipeFee[],
     currentReadingsByKey?: Record<string, Reading[]>,
@@ -661,21 +684,21 @@ export default function ReadingsContent() {
     const rows: Reading[] = []
     for (const org of orgList) {
       const meter = metersList.find((m) => m.organizationId === org.id)
-      for (const month of months) {
-        const currentKey = `${year}-${month}`
+      for (const period of periods) {
+        const currentKey = `${period.year}-${period.month}`
         const currentList = currentReadingsByKey?.[currentKey] ?? []
         const existingForMeter = meter ? currentList.find((r) => r.meterId === meter.id) : undefined
         if (existingForMeter) {
           rows.push({ ...existingForMeter, _isNew: false })
           continue
         }
-        const prevMonth = month === 1 ? 12 : month - 1
-        const prevYear = month === 1 ? year - 1 : year
+        const prevMonth = period.month === 1 ? 12 : period.month - 1
+        const prevYear = period.month === 1 ? period.year - 1 : period.year
         const key = `${prevYear}-${prevMonth}`
         const prevList = prevReadingsByKey[key] ?? []
         const prevForMeter = meter ? prevList.find((r) => r.meterId === meter.id) : undefined
         const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
-        rows.push(buildOneRow(org, meter, month, year, startValue, pipes))
+        rows.push(buildOneRow(org, meter, period.month, period.year, startValue, pipes))
       }
     }
     return rows
@@ -705,23 +728,93 @@ export default function ReadingsContent() {
       const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
       const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
 
-      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1
-      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear
-      const [prevRes, currentRes] = await Promise.all([
-        fetchWithAuth(`/api/readings?month=${prevMonth}&year=${prevYear}`),
-        fetchWithAuth(`/api/readings?month=${currentMonth}&year=${currentYear}`),
-      ])
-      const prevReadingsData = prevRes.ok ? await prevRes.json() : []
-      const prevReadings: Reading[] = Array.isArray(prevReadingsData) ? prevReadingsData : []
-      const currentReadingsData = currentRes.ok ? await currentRes.json() : []
-      const currentReadings: Reading[] = Array.isArray(currentReadingsData) ? currentReadingsData : []
-      const prevReadingsByKey: Record<string, Reading[]> = {
-        [`${prevYear}-${prevMonth}`]: prevReadings,
+      // Modal дээр сонгосон (year, month)-оос 12 сар хүртэл + дараагийн оны 1 сар хүртэлх бүх period-ийг харуулна.
+      const periods: Array<{ year: number; month: number }> = []
+      for (let mm = currentMonth; mm <= 12; mm++) {
+        periods.push({ year: currentYear, month: mm })
       }
-      const currentReadingsByKey: Record<string, Reading[]> = {
-        [`${currentYear}-${currentMonth}`]: currentReadings,
+      periods.push({ year: currentYear + 1, month: 1 })
+
+      const prevKeysNeeded = new Map<string, { year: number; month: number }>()
+      for (const p of periods) {
+        const pm = p.month === 1 ? 12 : p.month - 1
+        const py = p.month === 1 ? p.year - 1 : p.year
+        prevKeysNeeded.set(`${py}-${pm}`, { year: py, month: pm })
       }
-      const rows = buildRowsForYearAndMonths(orgList, metersList, currentYear, [currentMonth], prevReadingsByKey, pipes, currentReadingsByKey)
+
+      const currentKeysNeeded = new Map<string, { year: number; month: number }>()
+      for (const p of periods) {
+        currentKeysNeeded.set(`${p.year}-${p.month}`, p)
+      }
+
+      const prevReadingsByKey: Record<string, Reading[]> = {}
+      await Promise.all(
+        Array.from(prevKeysNeeded.values()).map(async (p) => {
+          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
+          const data = res.ok ? await res.json() : []
+          prevReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
+        })
+      )
+
+      // Сар алгассан үед өмнөх сарын бичлэг байхгүй бол "хамгийн сүүлийн өмнөх" заалтаас эхний заалтыг авна.
+      // Энэ нь зөвхөн эхний period (currentYear,currentMonth)-д хэрэгжинэ.
+      const prevMonthForFirst = currentMonth === 1 ? 12 : currentMonth - 1
+      const prevYearForFirst = currentMonth === 1 ? currentYear - 1 : currentYear
+      const firstPrevKey = `${prevYearForFirst}-${prevMonthForFirst}`
+      const firstPrevList = prevReadingsByKey[firstPrevKey] ? [...prevReadingsByKey[firstPrevKey]] : []
+      const hasPrevForMeter = new Set<string>()
+      for (const r of firstPrevList) {
+        if (r?.meterId) hasPrevForMeter.add(String(r.meterId))
+      }
+
+      const meterIds = metersList.map((m) => m.id).filter(Boolean)
+      const concurrency = 10
+      for (let i = 0; i < meterIds.length; i += concurrency) {
+        const chunk = meterIds.slice(i, i + concurrency)
+        const results = await Promise.all(
+          chunk.map(async (meterId) => {
+            if (hasPrevForMeter.has(meterId)) return null
+            try {
+              const res = await fetchWithAuth(
+                `/api/readings/previous?meterId=${meterId}&month=${currentMonth}&year=${currentYear}`
+              )
+              if (!res.ok) return null
+              const data = await res.json().catch(() => null)
+              if (!data || data.error) return null
+              const endValue = typeof data.endValue === 'number' ? data.endValue : Number(data.endValue)
+              if (!Number.isFinite(endValue)) return null
+              return { meterId, endValue }
+            } catch {
+              return null
+            }
+          })
+        )
+
+        for (const r of results) {
+          if (!r) continue
+          firstPrevList.push({
+            _isNew: false,
+            meterId: r.meterId,
+            month: prevMonthForFirst,
+            year: prevYearForFirst,
+            startValue: r.endValue,
+            endValue: r.endValue,
+          } as Reading)
+          hasPrevForMeter.add(r.meterId)
+        }
+      }
+      prevReadingsByKey[firstPrevKey] = firstPrevList
+
+      const currentReadingsByKey: Record<string, Reading[]> = {}
+      await Promise.all(
+        Array.from(currentKeysNeeded.values()).map(async (p) => {
+          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
+          const data = res.ok ? await res.json() : []
+          currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
+        })
+      )
+
+      const rows = buildRowsForYearAndMonths(orgList, metersList, periods, prevReadingsByKey, pipes, currentReadingsByKey)
       setNewReadings(rows)
       snapshotRows(rows)
     } catch (error) {
@@ -734,7 +827,13 @@ export default function ReadingsContent() {
   const handleAddModalApplyMonths = useCallback(async (yearOverride?: number, monthOverride?: number) => {
     const y = yearOverride ?? addModalYear
     const m = monthOverride ?? addModalMonth
-    const months = [m]
+    // Сонгосон (y,m)-оос 12 сар хүртэл + дараагийн оны 1 сар хүртэл
+    const periods: Array<{ year: number; month: number }> = []
+    for (let mm = m; mm <= 12; mm++) {
+      periods.push({ year: y, month: mm })
+    }
+    periods.push({ year: y + 1, month: 1 })
+
     setLoading(true)
     setMessage(null)
     try {
@@ -742,62 +841,118 @@ export default function ReadingsContent() {
       const metersList = allMeters.length ? allMeters : await fetchWithAuth('/api/meters').then(r => r.ok ? r.json() : []).catch(() => [])
       if (!Array.isArray(orgList)) setNewReadings([])
       else {
-        // Өмнөх сар дээр модал дотор оруулсан (хадгалаагүй) эцсийн заалтыг энэ удаагийн сарны эхний заалт болгохын тулд override хийнэ.
-        // Жишээ: 3-р сарын эцсийн заалтыг бичээд (хадгалахгүй) 4-р сар руу шилжихэд 4-р сарын start/end автоматаар 3-р сарын end болно.
-        const prevMonth = m === 1 ? 12 : m - 1
-        const prevYear = m === 1 ? y - 1 : y
-        const prevKey = `${prevYear}-${prevMonth}`
+        // Эхний period (y,m)-ийн previous period-ийн endValue-г override хийнэ.
+        const prevMonthForFirst = m === 1 ? 12 : m - 1
+        const prevYearForFirst = m === 1 ? y - 1 : y
+        const firstPrevKey = `${prevYearForFirst}-${prevMonthForFirst}`
+
+        // Өмнөх сар одоогийн periods-д байхгүй бол newReadings-д үлдсэн тухайн сарын мөрүүд
+        // (өөр эхний сараас үүссэн үлдэгдэл) — жинхэнэ өгөгдөл биш; эндээс override хийвэл
+        // сар алгасан сонгоход зөв fetch/previous-ийг 0-ээр дарна.
+        const prevMonthIsInPeriods = periods.some(
+          (p) => p.year === prevYearForFirst && p.month === prevMonthForFirst
+        )
         const inModalOverrides: Map<string, number> = new Map()
-        for (const r of newReadings) {
-          if (!r._isNew || !r.meterId) continue
-          if (r.month === prevMonth && r.year === prevYear) {
-            // start/end дээр нэг утга тавьсан байгаа ч энд хамгийн түрүүнд хэрэглэгч бичсэн endValue-г авч хэрэглэнэ.
-            inModalOverrides.set(r.meterId, r.endValue ?? r.startValue ?? 0)
+        if (prevMonthIsInPeriods) {
+          for (const r of newReadings) {
+            if (!r.meterId) continue
+            if (r.month === prevMonthForFirst && r.year === prevYearForFirst) {
+              inModalOverrides.set(r.meterId, Number(r.endValue ?? r.startValue ?? 0))
+            }
           }
         }
 
-        const needPrevKeys: { year: number; month: number }[] = []
-        for (const month of months) {
-          const prevMonth = month === 1 ? 12 : month - 1
-          const prevYear = month === 1 ? y - 1 : y
-          needPrevKeys.push({ year: prevYear, month: prevMonth })
+        // Хэрэгтэй бүх previous/current period-үүдийг fetch хийнэ.
+        const prevKeysNeeded = new Map<string, { year: number; month: number }>()
+        for (const p of periods) {
+          const pm = p.month === 1 ? 12 : p.month - 1
+          const py = p.month === 1 ? p.year - 1 : p.year
+          prevKeysNeeded.set(`${py}-${pm}`, { year: py, month: pm })
         }
-        const uniq = needPrevKeys.filter((a, i) => needPrevKeys.findIndex(b => b.year === a.year && b.month === a.month) === i)
-        const prevReadingsByKey: Record<string, Reading[]> = {}
-        await Promise.all(uniq.map(async ({ year: py, month: pm }) => {
-          const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}`)
-          const data = res.ok ? await res.json() : []
-          prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
-        }))
 
-        // API-аас ирсэн previous сарын жагсаалт дээр модал дотор бичсэн endValue-г override хийнэ.
+        const prevReadingsByKey: Record<string, Reading[]> = {}
+        await Promise.all(
+          Array.from(prevKeysNeeded.values()).map(async ({ year: py, month: pm }) => {
+            const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}`)
+            const data = res.ok ? await res.json() : []
+            prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
+          })
+        )
+
+        // Сар алгассан үед эхний сонгосон period (y,m)-ийн startValue-г "хамгийн сүүлийн өмнөх" заалтаас авна.
+        // (prevMonthForFirst, prevYearForFirst) сард бичлэг байхгүй тоолуурт `/api/readings/previous` ашиглана.
+        const firstPrevList0 = prevReadingsByKey[firstPrevKey] ? [...prevReadingsByKey[firstPrevKey]] : []
+        const hasPrevForMeter0 = new Set<string>()
+        for (const r of firstPrevList0) {
+          if (r?.meterId) hasPrevForMeter0.add(String(r.meterId))
+        }
+        const meterIds0 = (metersList as Meter[]).map((mm) => mm.id).filter(Boolean)
+        const concurrency0 = 10
+        for (let i = 0; i < meterIds0.length; i += concurrency0) {
+          const chunk = meterIds0.slice(i, i + concurrency0)
+          const results = await Promise.all(
+            chunk.map(async (meterId) => {
+              if (hasPrevForMeter0.has(meterId)) return null
+              try {
+                const res = await fetchWithAuth(
+                  `/api/readings/previous?meterId=${meterId}&month=${m}&year=${y}`
+                )
+                if (!res.ok) return null
+                const data = await res.json().catch(() => null)
+                if (!data || data.error) return null
+                const endValue = typeof data.endValue === 'number' ? data.endValue : Number(data.endValue)
+                if (!Number.isFinite(endValue)) return null
+                return { meterId, endValue }
+              } catch {
+                return null
+              }
+            })
+          )
+          for (const r of results) {
+            if (!r) continue
+            firstPrevList0.push({
+              _isNew: false,
+              meterId: r.meterId,
+              month: prevMonthForFirst,
+              year: prevYearForFirst,
+              startValue: r.endValue,
+              endValue: r.endValue,
+            } as Reading)
+            hasPrevForMeter0.add(r.meterId)
+          }
+        }
+        prevReadingsByKey[firstPrevKey] = firstPrevList0
+
         if (inModalOverrides.size > 0) {
-          const prevList = prevReadingsByKey[prevKey] ? [...prevReadingsByKey[prevKey]] : []
+          const prevList = prevReadingsByKey[firstPrevKey] ? [...prevReadingsByKey[firstPrevKey]] : []
           for (const [meterId, endValue] of inModalOverrides) {
             const idx = prevList.findIndex((x) => x.meterId === meterId)
             if (idx >= 0) {
-              prevList[idx] = { ...prevList[idx], endValue }
+              prevList[idx] = { ...prevList[idx], startValue: endValue, endValue }
             } else {
               prevList.push({
                 _isNew: false,
                 meterId,
-                month: prevMonth,
-                year: prevYear,
+                month: prevMonthForFirst,
+                year: prevYearForFirst,
                 startValue: endValue,
                 endValue,
               } as Reading)
             }
           }
-          prevReadingsByKey[prevKey] = prevList
+          prevReadingsByKey[firstPrevKey] = prevList
         }
 
         const currentReadingsByKey: Record<string, Reading[]> = {}
-        await Promise.all(months.map(async (month) => {
-          const res = await fetchWithAuth(`/api/readings?month=${month}&year=${y}`)
-          const data = res.ok ? await res.json() : []
-          currentReadingsByKey[`${y}-${month}`] = Array.isArray(data) ? data : []
-        }))
-        const rows = buildRowsForYearAndMonths(orgList, metersList, y, months, prevReadingsByKey, undefined, currentReadingsByKey)
+        await Promise.all(
+          periods.map(async (p) => {
+            const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
+            const data = res.ok ? await res.json() : []
+            currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
+          })
+        )
+
+        const rows = buildRowsForYearAndMonths(orgList, metersList, periods, prevReadingsByKey, undefined, currentReadingsByKey)
         setNewReadings(rows)
         snapshotRows(rows)
       }
@@ -993,7 +1148,10 @@ export default function ReadingsContent() {
       headerName: 'Т/дугаар',
       width: 150,
       field: 'meterId',
-      editable: () => showAddModal,
+      editable: (params: any) =>
+        showAddModal &&
+        params.data?.year === addModalYear &&
+        params.data?.month === addModalMonth,
       cellEditor: MeterCellEditor,
       cellEditorParams: {
         suppressKeyboardEvent: (params: any) => {
@@ -1045,7 +1203,10 @@ export default function ReadingsContent() {
       colId: 'startValue',
       field: 'startValue',
       ...numberColStyle,
-      editable: () => showAddModal,
+      editable: (params: any) =>
+        showAddModal &&
+        params.data?.year === addModalYear &&
+        params.data?.month === addModalMonth,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1073,7 +1234,10 @@ export default function ReadingsContent() {
       colId: 'endValue',
       field: 'endValue',
       ...numberColStyle,
-      editable: () => showAddModal,
+      editable: (params: any) =>
+        showAddModal &&
+        params.data?.year === addModalYear &&
+        params.data?.month === addModalMonth,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1116,7 +1280,10 @@ export default function ReadingsContent() {
       width: 150,
       field: 'baseDirty',
       ...numberColStyle,
-      editable: () => showAddModal,
+      editable: (params: any) =>
+        showAddModal &&
+        params.data?.year === addModalYear &&
+        params.data?.month === addModalMonth,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1132,7 +1299,10 @@ export default function ReadingsContent() {
       width: 150,
       field: 'baseClean',
       ...numberColStyle,
-      editable: () => showAddModal,
+      editable: (params: any) =>
+        showAddModal &&
+        params.data?.year === addModalYear &&
+        params.data?.month === addModalMonth,
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1193,7 +1363,7 @@ export default function ReadingsContent() {
         return Number(params.value).toFixed(2)
       },
     },
-  ], [allMeters, organizations, MeterCellEditor, showAddModal, numberColStyle])
+  ], [allMeters, organizations, MeterCellEditor, showAddModal, addModalYear, addModalMonth, numberColStyle])
 
   const pinnedBottomRowData = useMemo(() => {
     const sum = (field: keyof Reading) =>
@@ -1347,7 +1517,7 @@ export default function ReadingsContent() {
                       theme="legacy"
                       reactiveCustomComponents
                       ref={modalGridRef}
-                      rowData={newReadings}
+                      rowData={visibleModalRows}
                       columnDefs={modalColumnDefs}
                       getRowId={(params: any) =>
                         params.data?.id ?? `new-${params.data?.organizationId}-${params.data?.year}-${params.data?.month}`

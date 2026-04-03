@@ -80,6 +80,7 @@ export async function POST(request: NextRequest) {
     // Customer category (organization type)
     const allowedCategories = [
       'ORGANIZATION',       // Байгууллага
+      'BUSINESS',          // Аж ахуйн нэгж
       'TRANSPORT_DISPOSAL', // Зөөврөөр татан зайлуулах
       'TRANSPORT_RECEPTION',// Зөөврүүд хүлээн авах
       'WATER_POINT',        // Ус түгээх байр

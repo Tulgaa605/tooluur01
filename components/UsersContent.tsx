@@ -35,6 +35,24 @@ const CATEGORY_LABELS: Record<OrganizationCategory, string> = {
   WATER_POINT: 'Ус түгээх байр',
 }
 
+/** DB `name` нь ихэвчлэн «овог нэр» нэгтгэсэн; `ovog`-оос давхардах нэрийг хасна */
+function householdGivenName(name: string | null | undefined, ovog: string | null | undefined): string {
+  const n = (name ?? '').trim()
+  const o = (ovog ?? '').trim()
+  if (!o) return n
+  const prefix = `${o} `
+  if (n.startsWith(prefix)) return n.slice(prefix.length).trim()
+  return n
+}
+
+/** Хадгалахдаа овог нэрийг нэг мөр болгоно; нэр талбарт овог давтагдсан бол нэг удаа хасна */
+function householdFullNameForSave(ovog: string, givenName: string): string {
+  const o = ovog.trim()
+  let g = givenName.trim()
+  if (o && g.startsWith(`${o} `)) g = g.slice(o.length + 1).trim()
+  return [o, g].filter(Boolean).join(' ').trim() || 'Иргэн, хувь хүн'
+}
+
 export default function UsersContent() {
   const [activeTab, setActiveTab] = useState<'users' | 'organizations'>('users')
   
@@ -142,7 +160,7 @@ export default function UsersContent() {
     setEditingHouseholdId(household.id)
     setUserForm({
       ovog: household.ovog || '',
-      name: household.name || '',
+      name: householdGivenName(household.name, household.ovog),
       email: household.email || '',
       phone: household.phone || '',
       role: 'USER',
@@ -162,7 +180,7 @@ export default function UsersContent() {
     e.preventDefault()
     try {
       if (editingHouseholdId) {
-        const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Иргэн, хувь хүн'
+        const fullName = householdFullNameForSave(userForm.ovog || '', userForm.name || '')
         const orgRes = await fetchWithAuth('/api/organizations', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -182,7 +200,7 @@ export default function UsersContent() {
         const orgData = await orgRes.json()
         if (!orgRes.ok) throw new Error(orgData.error || orgData.message || 'Хувь хүн засахад алдаа гарлаа')
       } else {
-        const fullName = [userForm.ovog, userForm.name].filter(Boolean).join(' ').trim() || 'Иргэн, хувь хүн'
+        const fullName = householdFullNameForSave(userForm.ovog || '', userForm.name || '')
         const orgRes = await fetchWithAuth('/api/organizations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -358,7 +376,9 @@ export default function UsersContent() {
                   {households.map((h) => (
                     <tr key={h.id}>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.ovog ?? '-'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-900">{h.name || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">
+                        {householdGivenName(h.name, h.ovog) || '-'}
+                      </td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.code || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.address || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.phone || '-'}</td>
@@ -501,7 +521,7 @@ export default function UsersContent() {
                           type="submit"
                           className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
                         >
-                          {editingHouseholdId ? 'Шинэчлэх' : 'Хадгалах'}
+                          {editingHouseholdId ? 'Хадгалах' : 'Хадгалах'}
                         </button>
                       </div>
                     </form>

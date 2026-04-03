@@ -52,6 +52,11 @@ interface PipeFee {
   baseDirtyFee: number
 }
 
+type TariffEditTarget =
+  | { mode: 'new' }
+  | { mode: 'category'; tariff: Tariff }
+  | { mode: 'org'; tariff: Tariff }
+
 export default function TariffsContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [tariffs, setTariffs] = useState<Tariff[]>([])
@@ -95,8 +100,11 @@ export default function TariffsContent() {
     month: String(current.month),
     cleanPerM3: '',
     dirtyPerM3: '',
+    baseCleanFee: '',
+    baseDirtyFee: '',
   })
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'tariff' | 'pipe'; id: string } | null>(null)
+  const [tariffEditTarget, setTariffEditTarget] = useState<TariffEditTarget>({ mode: 'new' })
 
   const loadAll = async () => {
     setLoading(true)
@@ -268,17 +276,91 @@ export default function TariffsContent() {
     setShowHistoryModal(true)
   }
 
+  const closeTariffModal = () => {
+    setShowTariffModal(false)
+    setTariffEditTarget({ mode: 'new' })
+  }
+
+  const openNewTariffModal = () => {
+    setTariffEditTarget({ mode: 'new' })
+    setForm({
+      organizationId: '',
+      year: String(current.year),
+      month: String(current.month),
+      cleanPerM3: '',
+      dirtyPerM3: '',
+      baseCleanFee: '',
+      baseDirtyFee: '',
+    })
+    setSelectedCategory('')
+    setShowTariffModal(true)
+  }
+
+  const handleEditTariff = (t: Tariff, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (t.kind === 'category' && t.category) {
+      const p = getTariffPeriod(t)
+      setTariffEditTarget({ mode: 'category', tariff: t })
+      setSelectedCategory(t.category)
+      setForm({
+        organizationId: '',
+        year: String(p.year),
+        month: String(p.month),
+        cleanPerM3: String(t.cleanPerM3 ?? 0),
+        dirtyPerM3: String(t.dirtyPerM3 ?? 0),
+        baseCleanFee: '',
+        baseDirtyFee: '',
+      })
+    } else {
+      setTariffEditTarget({ mode: 'org', tariff: t })
+      setSelectedCategory('')
+      setForm({
+        organizationId: t.organizationId || '',
+        year: String(t.year ?? current.year),
+        month: String(t.month ?? current.month),
+        cleanPerM3: String(t.cleanPerM3 ?? 0),
+        dirtyPerM3: String(t.dirtyPerM3 ?? 0),
+        baseCleanFee: String(t.baseCleanFee ?? 0),
+        baseDirtyFee: String(t.baseDirtyFee ?? 0),
+      })
+    }
+    setShowTariffModal(true)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedCategory) {
-      setMessage({ type: 'error', text: 'Хэрэглэгчийн төрлийг эхлээд сонгоно уу' })
-      return
-    }
     if (savingRef.current) return
     savingRef.current = true
     setSaving(true)
     setMessage(null)
     try {
+      if (tariffEditTarget.mode === 'org') {
+        const t = tariffEditTarget.tariff
+        const res = await fetchWithAuth('/api/tariffs', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: t.id,
+            cleanPerM3: Number(form.cleanPerM3) || 0,
+            dirtyPerM3: Number(form.dirtyPerM3) || 0,
+            baseCleanFee: Number(form.baseCleanFee) || 0,
+            baseDirtyFee: Number(form.baseDirtyFee) || 0,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
+        closeTariffModal()
+        await loadAll()
+        setMessage({ type: 'success', text: 'Тариф амжилттай шинэчлэгдлээ' })
+        return
+      }
+
+      if (!selectedCategory) {
+        setMessage({ type: 'error', text: 'Хэрэглэгчийн төрлийг эхлээд сонгоно уу' })
+        setSaving(false)
+        savingRef.current = false
+        return
+      }
       const year = Number(form.year) || current.year
       const month = Number(form.month) || current.month
       const res = await fetchWithAuth('/api/tariffs', {
@@ -288,7 +370,6 @@ export default function TariffsContent() {
           category: selectedCategory,
           year,
           month,
-          // Суурь хураамж: шугамын голчийн хүснэг + байгууллагын хоолойн мм-ээр API автоматаар тохируулна
           baseCleanFee: 0,
           baseDirtyFee: 0,
           cleanPerM3: Number(form.cleanPerM3) || 0,
@@ -298,7 +379,7 @@ export default function TariffsContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
 
-      setShowTariffModal(false)
+      closeTariffModal()
       setAppliedCategoryPeriod({
         category: selectedCategory,
         year,
@@ -330,7 +411,7 @@ export default function TariffsContent() {
         t?.kind === 'category' && t.category
           ? `/api/tariffs?kind=category&category=${encodeURIComponent(t.category)}`
           : `/api/tariffs?id=${id}`
-      const res = await fetch(url, { method: 'DELETE' })
+      const res = await fetchWithAuth(url, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
       await loadAll()
@@ -356,7 +437,7 @@ export default function TariffsContent() {
         ? { id: pipeForm.id, diameterMm, baseCleanFee, baseDirtyFee }
         : { diameterMm, baseCleanFee, baseDirtyFee }
 
-      const res = await fetch(url, {
+      const res = await fetchWithAuth(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -397,7 +478,7 @@ export default function TariffsContent() {
     setSaving(true)
     setMessage(null)
     try {
-      const res = await fetch(`/api/pipe-fees?id=${id}`, { method: 'DELETE' })
+      const res = await fetchWithAuth(`/api/pipe-fees?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
       await loadAll()
@@ -423,17 +504,7 @@ export default function TariffsContent() {
         </div>
         <button
           type="button"
-          onClick={() => {
-            setForm({
-              organizationId: '',
-              year: String(current.year),
-              month: String(current.month),
-              cleanPerM3: '',
-              dirtyPerM3: '',
-            })
-            setSelectedCategory('')
-            setShowTariffModal(true)
-          }}
+          onClick={openNewTariffModal}
           className="shrink-0 px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
           Шинэ тариф нэмэх
@@ -518,6 +589,15 @@ export default function TariffsContent() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => handleEditTariff(t, e)}
+                      disabled={saving}
+                      className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
+                      title="Засах"
+                    >
+                      <PencilIcon className="h-5 w-5" />
+                    </button>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -630,15 +710,17 @@ export default function TariffsContent() {
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
           <div
             className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-            onClick={() => setShowTariffModal(false)}
+            onClick={closeTariffModal}
           />
           <div className="relative bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all max-w-3xl w-full">
             <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-semibold text-gray-900">Шинэ тариф нэмэх</h3>
+                <h3 className="text-xl font-semibold text-gray-900">
+                  {tariffEditTarget.mode === 'new' ? 'Шинэ тариф нэмэх' : 'Тариф засах'}
+                </h3>
                 <button
                   type="button"
-                  onClick={() => setShowTariffModal(false)}
+                  onClick={closeTariffModal}
                   className="text-gray-400 hover:text-gray-500 focus:outline-none"
                 >
                   <span className="sr-only">Хаах</span>
@@ -649,29 +731,48 @@ export default function TariffsContent() {
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Хэрэглэгчийн төрөл
-                    </label>
-                    <p className="text-xs text-gray-500 mb-2">
-                      Нэмэгдсэн тариф шинэчлэлт хийх хүртэл идэвхтэй байна.
-                    </p>
-                    <select
-                      value={selectedCategory}
-                      onChange={(e) => setSelectedCategory(e.target.value as OrganizationCategory | '')}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required
-                    >
-                      <option value="">Сонгох...</option>
-                      {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
+                {tariffEditTarget.mode === 'org' && (
+                  <p className="text-sm text-gray-700">
+                    <span className="font-medium">Байгууллага:</span>{' '}
+                    {tariffEditTarget.tariff.organization?.name ?? '-'}
+                    {tariffEditTarget.tariff.organization?.category ? (
+                      <span className="text-gray-500">
+                        {' '}
+                        (
+                        {CATEGORY_LABELS[
+                          tariffEditTarget.tariff.organization.category as OrganizationCategory
+                        ] ?? tariffEditTarget.tariff.organization.category}
+                        )
+                      </span>
+                    ) : null}
+                  </p>
+                )}
+                {tariffEditTarget.mode !== 'org' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Хэрэглэгчийн төрөл
+                      </label>
+                      <p className="text-xs text-gray-500 mb-2">
+                        Нэмэгдсэн тариф шинэчлэлт хийх хүртэл идэвхтэй байна.
+                      </p>
+                      <select
+                        value={selectedCategory}
+                        onChange={(e) => setSelectedCategory(e.target.value as OrganizationCategory | '')}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md disabled:bg-gray-100 disabled:text-gray-600"
+                        required
+                        disabled={tariffEditTarget.mode === 'category'}
+                      >
+                        <option value="">Сонгох...</option>
+                        {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -685,9 +786,10 @@ export default function TariffsContent() {
                       step={1}
                       value={form.year}
                       onChange={(e) => setForm((p) => ({ ...p, year: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md disabled:bg-gray-100"
                       placeholder={String(current.year)}
                       required
+                      disabled={tariffEditTarget.mode === 'org'}
                     />
                   </div>
                   <div>
@@ -701,12 +803,44 @@ export default function TariffsContent() {
                       step={1}
                       value={form.month}
                       onChange={(e) => setForm((p) => ({ ...p, month: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md disabled:bg-gray-100"
                       placeholder={String(current.month)}
                       required
+                      disabled={tariffEditTarget.mode === 'org'}
                     />
                   </div>
                 </div>
+
+                {tariffEditTarget.mode === 'org' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Цэвэр усны суурь (₮/сар)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={form.baseCleanFee}
+                        onChange={(e) => setForm((p) => ({ ...p, baseCleanFee: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Бохир усны суурь (₮/сар)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={form.baseDirtyFee}
+                        onChange={(e) => setForm((p) => ({ ...p, baseDirtyFee: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -742,7 +876,7 @@ export default function TariffsContent() {
                 <div className="flex justify-end gap-3 mt-4 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowTariffModal(false)}
+                    onClick={closeTariffModal}
                     className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                   >
                     Цуцлах
@@ -752,7 +886,7 @@ export default function TariffsContent() {
                     disabled={saving}
                     className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
                   >
-                    {saving ? 'Хадгалж байна...' : 'Хадгалах'}
+                    {saving ? 'Хадгалж байна...' : tariffEditTarget.mode === 'new' ? 'Хадгалах' : 'Шинэчлэх'}
                   </button>
                 </div>
               </form>

@@ -30,23 +30,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Calculate previous month
-    let prevMonth = month - 1
-    let prevYear = year
-    if (prevMonth === 0) {
-      prevMonth = 12
-      prevYear = year - 1
-    }
-
-    // Find previous month's reading
-    const previousReading = await prisma.meterReading.findUnique({
+    // Өгөгдсөн (year,month)-оос өмнөх хамгийн сүүлийн заалтыг олно.
+    // (өмнөх сар заавал байх албагүй — сар алгассан тохиолдлыг дэмжинэ)
+    const previousReading = await prisma.meterReading.findFirst({
       where: {
-        meterId_month_year: {
-          meterId,
-          month: prevMonth,
-          year: prevYear,
-        },
+        meterId,
+        OR: [
+          { year: { lt: year } },
+          { year, month: { lt: month } },
+        ],
       },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }],
     })
 
     if (previousReading) {
