@@ -213,7 +213,7 @@ export default function ReadingsContent() {
   }, [showAddModal, newReadings, addModalYear, addModalMonth])
   const getRowSnapshotKey = useCallback((r: Reading) => {
     if (r.id) return `id:${r.id}`
-    return `new:${r.organizationId ?? 'x'}-${r.year}-${r.month}`
+    return `new:${r.organizationId ?? 'x'}-${r.meterId ?? 'x'}-${r.year}-${r.month}`
   }, [])
   const snapshotRows = useCallback((rows: Reading[]) => {
     const m = new Map<string, { startValue: number; endValue: number; meterId?: string; baseClean: number; baseDirty: number }>()
@@ -685,22 +685,31 @@ export default function ReadingsContent() {
     const pipes = pipesOverride ?? pipeFees
     const rows: Reading[] = []
     for (const org of orgList) {
-      const meter = metersList.find((m) => m.organizationId === org.id)
-      for (const period of periods) {
-        const currentKey = `${period.year}-${period.month}`
-        const currentList = currentReadingsByKey?.[currentKey] ?? []
-        const existingForMeter = meter ? currentList.find((r) => r.meterId === meter.id) : undefined
-        if (existingForMeter) {
-          rows.push({ ...existingForMeter, _isNew: false })
-          continue
+      const metersForOrg = metersList.filter((m) => m.organizationId === org.id)
+      // Байгууллагад ямар нэг meter олдохгүй бол сонгох боломжтой байлгахын тулд meter-гүй нэг мөр үүсгэнэ.
+      const metersToRender: Array<Meter | undefined> =
+        metersForOrg.length > 0 ? metersForOrg : [undefined]
+
+      for (const meter of metersToRender) {
+        for (const period of periods) {
+          const currentKey = `${period.year}-${period.month}`
+          const currentList = currentReadingsByKey?.[currentKey] ?? []
+          const existingForMeter = meter
+            ? currentList.find((r) => r.meterId === meter.id)
+            : undefined
+          if (existingForMeter) {
+            rows.push({ ...existingForMeter, _isNew: false })
+            continue
+          }
+
+          const prevMonth = period.month === 1 ? 12 : period.month - 1
+          const prevYear = period.month === 1 ? period.year - 1 : period.year
+          const key = `${prevYear}-${prevMonth}`
+          const prevList = prevReadingsByKey[key] ?? []
+          const prevForMeter = meter ? prevList.find((r) => r.meterId === meter.id) : undefined
+          const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
+          rows.push(buildOneRow(org, meter, period.month, period.year, startValue, pipes))
         }
-        const prevMonth = period.month === 1 ? 12 : period.month - 1
-        const prevYear = period.month === 1 ? period.year - 1 : period.year
-        const key = `${prevYear}-${prevMonth}`
-        const prevList = prevReadingsByKey[key] ?? []
-        const prevForMeter = meter ? prevList.find((r) => r.meterId === meter.id) : undefined
-        const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
-        rows.push(buildOneRow(org, meter, period.month, period.year, startValue, pipes))
       }
     }
     return rows
@@ -1150,10 +1159,9 @@ export default function ReadingsContent() {
       headerName: 'Т/дугаар',
       width: 150,
       field: 'meterId',
-      editable: (params: any) =>
-        showAddModal &&
-        params.data?.year === addModalYear &&
-        params.data?.month === addModalMonth,
+      // Модал дотор `meterId` сонголт хийх шаардлагагүй (мөрүүд нь meter-ээр pre-render хийгдсэн).
+      // Тиймээс editor автоматаар нээгдэж dropdown гаргахгүй.
+      editable: false,
       cellEditor: MeterCellEditor,
       cellEditorParams: {
         suppressKeyboardEvent: (params: any) => {
@@ -1171,14 +1179,7 @@ export default function ReadingsContent() {
         }
         return '-'
       },
-      onCellClicked: (params: any) => {
-        if (showAddModal && params.colDef.field === 'meterId') {
-          params.api.startEditingCell({
-            rowIndex: params.rowIndex,
-            colKey: 'meterId',
-          })
-        }
-      },
+      onCellClicked: undefined,
     },
     {
       headerName: 'Хэрэглэгчийн нэр',
@@ -1530,7 +1531,8 @@ export default function ReadingsContent() {
                       rowData={visibleModalRows}
                       columnDefs={modalColumnDefs}
                       getRowId={(params: any) =>
-                        params.data?.id ?? `new-${params.data?.organizationId}-${params.data?.year}-${params.data?.month}`
+                        params.data?.id ??
+                        `new-${params.data?.organizationId}-${params.data?.meterId ?? 'x'}-${params.data?.year}-${params.data?.month}`
                       }
                       rowBuffer={15}
                       defaultColDef={{

@@ -50,42 +50,31 @@ export default function BillingContent() {
   }, [])
 
   const billingRows = useMemo<BillingRow[]>(() => {
-    const grouped = new Map<string, BillingRow>()
-    for (const r of readings) {
-      const normalizedYear = Number(r.year) || 0
-      const normalizedMonth = Number(r.month) || 0
-      const orgKey =
-        (r.organization?.id && String(r.organization.id).trim()) ||
-        (r.organization?.code && `code:${String(r.organization.code).trim()}`) ||
-        `name:${String(r.organization?.name || '-').trim().toLowerCase()}`
-      const key = `${orgKey}-${normalizedYear}-${normalizedMonth}`
-      const existing = grouped.get(key)
-      if (!existing) {
-        grouped.set(key, {
-          id: r.id,
-          month: normalizedMonth,
-          year: normalizedYear,
-          usage: Number(r.usage ?? 0) || 0,
-          total: Number(r.total ?? 0) || 0,
-          approved: !!r.approved,
-          meterNumber: r.meter?.meterNumber || '-',
-          organization: {
-            id: (r.organization?.id && String(r.organization.id).trim()) || orgKey,
-            name: r.organization?.name || '-',
-            code: r.organization?.code || null,
-          },
-        })
-      } else {
-        existing.usage += Number(r.usage ?? 0) || 0
-        existing.total += Number(r.total ?? 0) || 0
-        existing.approved = existing.approved && !!r.approved
-      }
-    }
-    return Array.from(grouped.values()).sort((a, b) => {
-      if (a.year !== b.year) return b.year - a.year
-      if (a.month !== b.month) return b.month - a.month
-      return a.organization.name.localeCompare(b.organization.name)
-    })
+    // Билл нь заалт/тоолуур тус бүрээр (meter тус бүрээр) гарах ёстой.
+    // Тиймээс бөөгнөрүүлэлгүй, `readings`-ийг шууд map хийж мөр тус бүрийн төлбөр гаргана.
+    return [...readings]
+      .map((r) => ({
+        id: r.id,
+        month: Number(r.month) || 0,
+        year: Number(r.year) || 0,
+        usage: Number(r.usage ?? 0) || 0,
+        total: Number(r.total ?? 0) || 0,
+        approved: !!r.approved,
+        meterNumber: r.meter?.meterNumber || '-',
+        organization: {
+          id: (r.organization?.id && String(r.organization.id).trim()) || '',
+          name: r.organization?.name || '-',
+          code: r.organization?.code || null,
+        },
+      }))
+      .sort((a, b) => {
+        if (a.year !== b.year) return b.year - a.year
+        if (a.month !== b.month) return b.month - a.month
+        // Байгууллага + тоолуурын дугаараар тогтвортой эрэмбэлнэ
+        const orgCmp = a.organization.name.localeCompare(b.organization.name)
+        if (orgCmp !== 0) return orgCmp
+        return String(a.meterNumber).localeCompare(String(b.meterNumber))
+      })
   }, [readings])
 
   const footerTotals = useMemo(() => {
@@ -294,7 +283,7 @@ export default function BillingContent() {
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {billingRows.map((row) => (
-              <tr key={`${row.organization.id}-${row.year}-${row.month}`}>
+              <tr key={row.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                   {row.year}
                 </td>
