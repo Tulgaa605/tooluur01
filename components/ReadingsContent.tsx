@@ -191,6 +191,10 @@ export default function ReadingsContent() {
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
   const [newReadings, setNewReadings] = useState<Reading[]>([])
   const gridRef = useRef<AgGridReact>(null)
+  // `mouse right` дарахад browser-ийн context menu гарч ирэхээс сэргийлж,
+  // grid доторх үед өөрийн жижиг menu харуулж Excel export хийхээр salt.
+  const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
   const modalGridRef = useRef<AgGridReact>(null)
   const modalOriginalRowsRef = useRef<Map<string, { startValue: number; endValue: number; meterId?: string; baseClean: number; baseDirty: number }>>(new Map())
   const numberColStyle = useMemo(
@@ -204,6 +208,18 @@ export default function ReadingsContent() {
     const currentYear = new Date().getFullYear()
     return [currentYear + 1, currentYear, currentYear - 1, currentYear - 2]
   }, [])
+
+  useEffect(() => {
+    if (!excelExportMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = excelExportMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setExcelExportMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [excelExportMenu])
 
   // Modal-ийн дотор зөвхөн сонгосон (Он,Сар)-ын мөрүүдийг л харуулна.
   // Гэхдээ data/тооцоололд бүх period-үүд ашиглагдана (save үед serialize).
@@ -352,6 +368,35 @@ export default function ReadingsContent() {
   useEffect(() => {
     fetchReadings()
   }, [fetchReadings])
+
+  const exportReadingsGrid = useCallback(() => {
+    const api = gridRef.current?.api as any
+    if (!api) {
+      setMessage({ type: 'error', text: 'Grid ачаалж дуусаагүй байна' })
+      return
+    }
+    const year = filterYear || 'all'
+    const month = filterMonth || 'all'
+    try {
+      if (typeof api.exportDataAsCsv === 'function') {
+        api.exportDataAsCsv({ fileName: `readings-${year}-${month}.csv` })
+        return
+      }
+      setMessage({ type: 'error', text: 'CSV export дэмжигдээгүй байна' })
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'CSV export алдаа гарлаа' })
+    }
+  }, [filterYear, filterMonth])
+
+  const handleCellContextMenu = useCallback(
+    (params: any) => {
+      // Browser-ийн default context menu-ийг унтраа.
+      params?.event?.preventDefault?.()
+      params?.event?.stopPropagation?.()
+      setExcelExportMenu({ x: params?.event?.clientX ?? 0, y: params?.event?.clientY ?? 0 })
+    },
+    [setExcelExportMenu]
+  )
 
   const handleCellValueChanged = useCallback(async (params: any) => {
     const reading = params.data as Reading
@@ -1637,6 +1682,7 @@ export default function ReadingsContent() {
                 Ачааллаж байна...
               </div>
             ) : (
+              <>
               <AgGridReact
                 theme="legacy"
                 reactiveCustomComponents
@@ -1644,6 +1690,9 @@ export default function ReadingsContent() {
                 rowData={readings}
                 pinnedBottomRowData={pinnedBottomRowData}
                 columnDefs={columnDefs}
+                    suppressContextMenu={true}
+                    preventDefaultOnContextMenu={true}
+                    onCellContextMenu={handleCellContextMenu}
                 getRowId={(params: any) =>
                   params.data?.id ??
                   `m-${params.data?.meterId ?? 'x'}-${params.data?.year ?? 0}-${params.data?.month ?? 0}`
@@ -1672,6 +1721,35 @@ export default function ReadingsContent() {
                     : undefined
                 }
               />
+              {excelExportMenu && (
+                <div
+                  ref={excelExportMenuRef}
+                  style={{
+                    position: 'fixed',
+                    top: excelExportMenu.y,
+                    left: excelExportMenu.x,
+                    zIndex: 99999,
+                    background: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 6,
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+                    padding: 6,
+                    minWidth: 220,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExcelExportMenu(null)
+                      exportReadingsGrid()
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
+                  >
+                    Excel файл болгох
+                  </button>
+                </div>
+              )}
+              </>
             )}
           </div>
         </div>
