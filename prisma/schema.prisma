@@ -44,6 +44,7 @@ model Organization {
   meters          Meter[]
   readings        MeterReading[]
   tariffs         OrganizationTariff[]
+  officePipeFees OfficePipeFee[]
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -122,4 +123,19 @@ model PipeFee {
 
   @@unique([diameterMm])
   @@map("pipe_fees")
+}
+
+// Албан байгууллага (нягтлан) бүр өөрийн шугамын суурь хураамжийг тусад нь тохируулна.
+model OfficePipeFee {
+  id                   String       @id @default(auto()) @map("_id") @db.ObjectId
+  officeOrganizationId String       @db.ObjectId
+  officeOrganization   Organization @relation(fields: [officeOrganizationId], references: [id])
+  diameterMm           Int
+  baseCleanFee         Float        @default(0)
+  baseDirtyFee         Float        @default(0)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@unique([officeOrganizationId, diameterMm])
+  @@map("office_pipe_fees")
 }
