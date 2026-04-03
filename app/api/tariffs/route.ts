@@ -312,46 +312,84 @@ export async function POST(request: NextRequest) {
       dirtyPerM3,
     })
 
-    // Байгууллага бүрт тухайн сарын тариф бичлэг үүсгэж, уншилтанд хэрэглэгдэнэ
+    // Байгууллага бүрт тухайн сарын тариф бичлэг үүсгэж, уншилтанд хэрэглэгдэнэ.
+    // Өмнө нь org бүрт find+write дарааллаар (2N query) удаан байсан тул:
+    // нэг findMany + createMany + update-уудыг багцаар параллель хийнэ.
     const orgs = await prisma.organization.findMany({
       where: { category },
       select: { id: true, name: true, connectionNumber: true },
     })
+
+    type RowPayload = {
+      baseCleanFee: number
+      baseDirtyFee: number
+      cleanPerM3: number
+      dirtyPerM3: number
+    }
+
     let created = 0
     let updated = 0
-    for (const org of orgs) {
-      const pipeBase = getBaseFromPipe(org.connectionNumber)
-      const orgBaseClean = pipeBase ? pipeBase.baseCleanFee : baseCleanFee
-      const orgBaseDirty = pipeBase ? pipeBase.baseDirtyFee : baseDirtyFee
-      const key = { organizationId: org.id, year, month }
-      const existing = await prisma.organizationTariff.findUnique({
-        where: { organizationId_year_month: key },
-        select: { id: true },
+
+    if (orgs.length > 0) {
+      const orgIds = orgs.map((o) => o.id)
+      const existingRows = await prisma.organizationTariff.findMany({
+        where: {
+          year,
+          month,
+          organizationId: { in: orgIds },
+        },
+        select: { id: true, organizationId: true },
       })
-      if (existing) {
-        await prisma.organizationTariff.update({
-          where: { organizationId_year_month: key },
-          data: {
-            baseCleanFee: orgBaseClean,
-            baseDirtyFee: orgBaseDirty,
-            cleanPerM3,
-            dirtyPerM3,
-          },
-        })
-        updated += 1
-      } else {
-        await prisma.organizationTariff.create({
-          data: {
+      const existingByOrgId = new Map(existingRows.map((r) => [r.organizationId, r]))
+
+      const toCreate: Array<{ organizationId: string; year: number; month: number } & RowPayload> = []
+      const toUpdate: Array<{ id: string } & RowPayload> = []
+
+      for (const org of orgs) {
+        const pipeBase = getBaseFromPipe(org.connectionNumber)
+        const orgBaseClean = pipeBase ? pipeBase.baseCleanFee : baseCleanFee
+        const orgBaseDirty = pipeBase ? pipeBase.baseDirtyFee : baseDirtyFee
+        const payload: RowPayload = {
+          baseCleanFee: orgBaseClean,
+          baseDirtyFee: orgBaseDirty,
+          cleanPerM3,
+          dirtyPerM3,
+        }
+        const ex = existingByOrgId.get(org.id)
+        if (ex) {
+          toUpdate.push({ id: ex.id, ...payload })
+        } else {
+          toCreate.push({
             organizationId: org.id,
             year,
             month,
-            baseCleanFee: orgBaseClean,
-            baseDirtyFee: orgBaseDirty,
-            cleanPerM3,
-            dirtyPerM3,
-          },
-        })
-        created += 1
+            ...payload,
+          })
+        }
+      }
+
+      if (toCreate.length > 0) {
+        await prisma.organizationTariff.createMany({ data: toCreate })
+        created = toCreate.length
+      }
+
+      const UPDATE_BATCH = 40
+      for (let i = 0; i < toUpdate.length; i += UPDATE_BATCH) {
+        const batch = toUpdate.slice(i, i + UPDATE_BATCH)
+        await Promise.all(
+          batch.map((row) =>
+            prisma.organizationTariff.update({
+              where: { id: row.id },
+              data: {
+                baseCleanFee: row.baseCleanFee,
+                baseDirtyFee: row.baseDirtyFee,
+                cleanPerM3: row.cleanPerM3,
+                dirtyPerM3: row.dirtyPerM3,
+              },
+            })
+          )
+        )
+        updated += batch.length
       }
     }
 
@@ -361,10 +399,6 @@ export async function POST(request: NextRequest) {
     const detail = parts.length ? ` (${parts.join(', ')})` : ''
     return NextResponse.json({
       success: true,
-      message:
-        orgs.length === 0
-          ? 'Төрлийн тариф хадгаллаа. Шинэчлэлт хийх хүртэл энэ тариф хүчинтэй байна.'
-          : `Төрлийн тариф хадгаллаа. ${orgs.length} байгууллагад тухайн сарын тариф хэрэглэгдлээ.${detail}`,
     })
   } catch (error: any) {
     if (error.code === 'P2002') {

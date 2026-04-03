@@ -104,6 +104,7 @@ export default function BillingContent() {
     if (filterYear) params.append('year', filterYear)
     if (filterMonth) params.append('month', filterMonth)
     params.append('limit', '500')
+    params.append('recalculate', '1')
     fetchWithAuth(`/api/readings?${params.toString()}`)
       .then(res => {
         if (!res.ok) {

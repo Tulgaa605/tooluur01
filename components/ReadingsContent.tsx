@@ -309,6 +309,8 @@ export default function ReadingsContent() {
       if (filterYear.trim()) params.append('year', filterYear.trim())
 
       params.append('limit', '300')
+      // Одоогийн тариф + шугамын суурь хураамжаар дүнг харуулна (хуучин хадгалсан snapshot биш)
+      params.append('recalculate', '1')
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
       let data: any = null
       try {
@@ -750,7 +752,7 @@ export default function ReadingsContent() {
       const prevReadingsByKey: Record<string, Reading[]> = {}
       await Promise.all(
         Array.from(prevKeysNeeded.values()).map(async (p) => {
-          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
+          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}&recalculate=1`)
           const data = res.ok ? await res.json() : []
           prevReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
         })
@@ -808,7 +810,7 @@ export default function ReadingsContent() {
       const currentReadingsByKey: Record<string, Reading[]> = {}
       await Promise.all(
         Array.from(currentKeysNeeded.values()).map(async (p) => {
-          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
+          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}&recalculate=1`)
           const data = res.ok ? await res.json() : []
           currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
         })
@@ -873,7 +875,7 @@ export default function ReadingsContent() {
         const prevReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(
           Array.from(prevKeysNeeded.values()).map(async ({ year: py, month: pm }) => {
-            const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}`)
+            const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}&recalculate=1`)
             const data = res.ok ? await res.json() : []
             prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
           })
@@ -946,7 +948,7 @@ export default function ReadingsContent() {
         const currentReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(
           periods.map(async (p) => {
-            const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
+            const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}&recalculate=1`)
             const data = res.ok ? await res.json() : []
             currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
           })
@@ -1206,7 +1208,7 @@ export default function ReadingsContent() {
       editable: (params: any) =>
         showAddModal &&
         params.data?.year === addModalYear &&
-        params.data?.month === addModalMonth,
+        params.data?.month === 1,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1363,7 +1365,15 @@ export default function ReadingsContent() {
         return Number(params.value).toFixed(2)
       },
     },
-  ], [allMeters, organizations, MeterCellEditor, showAddModal, addModalYear, addModalMonth, numberColStyle])
+  ], [
+    allMeters,
+    organizations,
+    MeterCellEditor,
+    showAddModal,
+    addModalYear,
+    addModalMonth,
+    numberColStyle,
+  ])
 
   const pinnedBottomRowData = useMemo(() => {
     const sum = (field: keyof Reading) =>

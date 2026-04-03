@@ -142,6 +142,35 @@ export default function TariffsContent() {
     }
   }
 
+  /** Хадгалах/устгасны дараа бүх хуудсыг ачаалахгүйгээр зөвхөн тариф (орг + төрөл) */
+  const reloadTariffsSilently = async () => {
+    try {
+      const tariffRes = await fetchWithAuth('/api/tariffs?includeCategory=1')
+      const tariffData = await tariffRes.json()
+      if (!tariffRes.ok) {
+        const errText =
+          typeof tariffData?.error === 'string'
+            ? tariffData.error
+            : 'Тарифын мэдээлэл ачааллахад алдаа гарлаа'
+        setMessage({ type: 'error', text: errText })
+        return
+      }
+      setTariffs(Array.isArray(tariffData) ? tariffData : [])
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
+    }
+  }
+
+  const reloadPipeFeesSilently = async () => {
+    try {
+      const pipeRes = await fetchWithAuth('/api/pipe-fees')
+      const pipeData = await pipeRes.json()
+      if (pipeRes.ok && Array.isArray(pipeData)) setPipeFees(pipeData)
+    } catch {
+      /* үл тоомсорлох — дараагийн loadAll-д засагдана */
+    }
+  }
+
   useEffect(() => {
     loadAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -350,7 +379,7 @@ export default function TariffsContent() {
         const data = await res.json()
         if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
         closeTariffModal()
-        await loadAll()
+        await reloadTariffsSilently()
         setMessage({ type: 'success', text: 'Тариф амжилттай шинэчлэгдлээ' })
         return
       }
@@ -385,7 +414,7 @@ export default function TariffsContent() {
         year,
         month,
       })
-      await loadAll()
+      await reloadTariffsSilently()
       setMessage({ type: 'success', text: data.message || 'Тариф амжилттай хадгаллаа' })
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
@@ -414,7 +443,7 @@ export default function TariffsContent() {
       const res = await fetchWithAuth(url, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
-      await loadAll()
+      await reloadTariffsSilently()
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
@@ -448,7 +477,7 @@ export default function TariffsContent() {
       // Хадгалсны дараа модалийг хаах
       setShowPipeModal(false)
       setPipeForm({ id: '', diameterMm: '', baseCleanFee: '', baseDirtyFee: '' })
-      await loadAll()
+      await reloadPipeFeesSilently()
       setMessage({ type: 'success', text: 'Шугамын суурь хураамж амжилттай хадгалагдлаа' })
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
@@ -481,7 +510,7 @@ export default function TariffsContent() {
       const res = await fetchWithAuth(`/api/pipe-fees?id=${id}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
-      await loadAll()
+      await reloadPipeFeesSilently()
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
     } finally {
