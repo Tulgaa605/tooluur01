@@ -1381,7 +1381,7 @@ export default function ReadingsContent() {
     return [
       {
         meterId: '',
-        organization: { name: 'Хөл дүн', id: 'footer', code: null },
+        organization: { name: 'Нийт дүн', id: '-', code: null },
         startValue: 0,
         endValue: 0,
         usage: sum('usage'),
