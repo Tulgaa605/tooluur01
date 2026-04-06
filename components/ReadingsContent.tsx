@@ -125,11 +125,17 @@ interface Meter {
   id: string
   meterNumber: string
   organizationId: string
+  serviceStatus?: string | null
   organization?: {
     name: string
     code?: string | null
     id?: string
   }
+}
+
+function isMeterEligibleForReadingModal(m: Pick<Meter, 'serviceStatus'>): boolean {
+  const s = String(m.serviceStatus ?? 'NORMAL').toUpperCase()
+  return s === 'NORMAL'
 }
 
 interface ReadingForm {
@@ -227,6 +233,12 @@ export default function ReadingsContent() {
     if (!showAddModal) return []
     return newReadings.filter((r) => r.year === addModalYear && r.month === addModalMonth)
   }, [showAddModal, newReadings, addModalYear, addModalMonth])
+
+  /** Заалт оруулах modal-д зөвхөн хэвийн тоолуурыг сонгох; үндсэн хүснэгтэд бүгдийг харуулна. */
+  const metersForMeterSelect = useMemo(() => {
+    if (!showAddModal) return allMeters
+    return allMeters.filter((m) => isMeterEligibleForReadingModal(m))
+  }, [allMeters, showAddModal])
   const getRowSnapshotKey = useCallback((r: Reading) => {
     if (r.id) return `id:${r.id}`
     return `new:${r.organizationId ?? 'x'}-${r.meterId ?? 'x'}-${r.year}-${r.month}`
@@ -726,14 +738,19 @@ export default function ReadingsContent() {
     prevReadingsByKey: Record<string, Reading[]>,
     pipesOverride?: PipeFee[],
     currentReadingsByKey?: Record<string, Reading[]>,
+    /** Бүх бүртгэлтэй тоолуур (төлөвөөр шүүсэн жагсаалтаас өмнөх жагсаалт) — зөвхөн modal-д placeholder мөр үүсгэхэд */
+    fullMetersForOrgCheck?: Meter[],
   ): Reading[] => {
     const pipes = pipesOverride ?? pipeFees
+    const fullRegistered = fullMetersForOrgCheck ?? metersList
     const rows: Reading[] = []
     for (const org of orgList) {
       const metersForOrg = metersList.filter((m) => m.organizationId === org.id)
-      // Байгууллагад ямар нэг meter олдохгүй бол сонгох боломжтой байлгахын тулд meter-гүй нэг мөр үүсгэнэ.
+      const orgHasRegisteredMeter = fullRegistered.some((m) => m.organizationId === org.id)
+      // Modal-д зөвхөн «хэвийн» тоолуур бүрт мөр үүсгэнэ. Бүх тоолуур эвдэрсэн/солигдсон бол мөр гаргахгүй.
+      // Байгууллагад огт тоолуур бүртгэлгүй бол сонголттой нэг placeholder мөр.
       const metersToRender: Array<Meter | undefined> =
-        metersForOrg.length > 0 ? metersForOrg : [undefined]
+        metersForOrg.length > 0 ? metersForOrg : orgHasRegisteredMeter ? [] : [undefined]
 
       for (const meter of metersToRender) {
         for (const period of periods) {
@@ -783,6 +800,7 @@ export default function ReadingsContent() {
       const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
       const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
       const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
+      const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
 
       // Modal дээр сонгосон (year, month)-оос 12 сар хүртэл + дараагийн оны 1 сар хүртэлх бүх period-ийг харуулна.
       const periods: Array<{ year: number; month: number }> = []
@@ -823,7 +841,7 @@ export default function ReadingsContent() {
         if (r?.meterId) hasPrevForMeter.add(String(r.meterId))
       }
 
-      const meterIds = metersList.map((m) => m.id).filter(Boolean)
+      const meterIds = eligibleMeters.map((m) => m.id).filter(Boolean)
       const concurrency = 10
       for (let i = 0; i < meterIds.length; i += concurrency) {
         const chunk = meterIds.slice(i, i + concurrency)
@@ -870,7 +888,15 @@ export default function ReadingsContent() {
         })
       )
 
-      const rows = buildRowsForYearAndMonths(orgList, metersList, periods, prevReadingsByKey, pipes, currentReadingsByKey)
+      const rows = buildRowsForYearAndMonths(
+        orgList,
+        eligibleMeters,
+        periods,
+        prevReadingsByKey,
+        pipes,
+        currentReadingsByKey,
+        metersList,
+      )
       setNewReadings(rows)
       snapshotRows(rows)
     } catch (error) {
@@ -894,7 +920,13 @@ export default function ReadingsContent() {
     setMessage(null)
     try {
       const orgList = organizations.length ? organizations : await fetchWithAuth('/api/organizations?customersOnly=1').then(r => r.ok ? r.json() : []).catch(() => [])
-      const metersList = allMeters.length ? allMeters : await fetchWithAuth('/api/meters').then(r => r.ok ? r.json() : []).catch(() => [])
+      let metersList: Meter[] = allMeters
+      if (!metersList.length) {
+        const mr = await fetchWithAuth('/api/meters')
+        const raw = mr.ok ? await mr.json() : []
+        metersList = Array.isArray(raw) ? raw : []
+      }
+      const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
       if (!Array.isArray(orgList)) setNewReadings([])
       else {
         // Эхний period (y,m)-ийн previous period-ийн endValue-г override хийнэ.
@@ -942,7 +974,7 @@ export default function ReadingsContent() {
         for (const r of firstPrevList0) {
           if (r?.meterId) hasPrevForMeter0.add(String(r.meterId))
         }
-        const meterIds0 = (metersList as Meter[]).map((mm) => mm.id).filter(Boolean)
+        const meterIds0 = eligibleMeters.map((mm) => mm.id).filter(Boolean)
         const concurrency0 = 10
         for (let i = 0; i < meterIds0.length; i += concurrency0) {
           const chunk = meterIds0.slice(i, i + concurrency0)
@@ -1008,7 +1040,15 @@ export default function ReadingsContent() {
           })
         )
 
-        const rows = buildRowsForYearAndMonths(orgList, metersList, periods, prevReadingsByKey, undefined, currentReadingsByKey)
+        const rows = buildRowsForYearAndMonths(
+          orgList,
+          eligibleMeters,
+          periods,
+          prevReadingsByKey,
+          undefined,
+          currentReadingsByKey,
+          metersList,
+        )
         setNewReadings(rows)
         snapshotRows(rows)
       }
@@ -1172,7 +1212,7 @@ export default function ReadingsContent() {
           }}
         >
           <option value="">Сонгох</option>
-          {allMeters.map((meter) => (
+          {metersForMeterSelect.map((meter) => (
             <option key={meter.id} value={meter.id}>
               {meter.meterNumber}
             </option>
@@ -1180,7 +1220,7 @@ export default function ReadingsContent() {
         </select>
       )
     }
-  }, [allMeters, organizations])
+  }, [allMeters, metersForMeterSelect, organizations])
 
   const columnDefs: ColDef<Reading>[] = useMemo(() => [
     {
@@ -1413,6 +1453,7 @@ export default function ReadingsContent() {
     },
   ], [
     allMeters,
+    metersForMeterSelect,
     organizations,
     MeterCellEditor,
     showAddModal,

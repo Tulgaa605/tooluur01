@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
         meterNumber: true,
         organizationId: true,
         year: true,
+        serviceStatus: true,
         organization: {
           select: {
             id: true,
@@ -82,11 +83,16 @@ export async function POST(request: NextRequest) {
     const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
       ? data.year
       : currentYear
+    const rawStatus =
+      typeof data.serviceStatus === 'string' ? data.serviceStatus.trim().toUpperCase() : 'NORMAL'
+    const serviceStatus =
+      rawStatus === 'DAMAGED' || rawStatus === 'REPLACED' ? rawStatus : 'NORMAL'
     const meter = await prisma.meter.create({
       data: {
         meterNumber,
         organizationId: orgId,
         year,
+        serviceStatus,
       },
     })
 
@@ -155,12 +161,22 @@ export async function PUT(request: NextRequest) {
       }
     }
 
+    const rawStatus =
+      typeof data.serviceStatus === 'string' ? data.serviceStatus.trim().toUpperCase() : undefined
+    const serviceStatus =
+      rawStatus === 'DAMAGED' || rawStatus === 'REPLACED'
+        ? rawStatus
+        : rawStatus === 'NORMAL'
+          ? 'NORMAL'
+          : undefined
+
     const meter = await prisma.meter.update({
       where: { id: data.id },
       data: {
         meterNumber: data.meterNumber.trim(),
         organizationId: nextOrgId,
         year,
+        ...(serviceStatus !== undefined ? { serviceStatus } : {}),
       },
     })
 

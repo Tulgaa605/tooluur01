@@ -10,11 +10,14 @@ interface Organization {
   name: string
 }
 
+type MeterServiceStatus = 'NORMAL' | 'DAMAGED' | 'REPLACED'
+
 interface Meter {
   id: string
   meterNumber: string
   year: number
   organizationId: string
+  serviceStatus?: MeterServiceStatus | string
   organization: {
     name: string
   }
@@ -35,6 +38,7 @@ export default function MetersContent() {
     meterNumber: '',
     organizationId: '',
     year: currentYear,
+    serviceStatus: 'NORMAL' as MeterServiceStatus,
   })
 
   useEffect(() => {
@@ -102,7 +106,12 @@ export default function MetersContent() {
       const method = editingId ? 'PUT' : 'POST'
       const body = editingId
         ? { ...form, id: editingId }
-        : { meterNumber: form.meterNumber, organizationId: form.organizationId, year: form.year }
+        : {
+            meterNumber: form.meterNumber,
+            organizationId: form.organizationId,
+            year: form.year,
+            serviceStatus: form.serviceStatus || 'NORMAL',
+          }
 
       const res = await fetchWithAuth('/api/meters', {
         method,
@@ -115,7 +124,7 @@ export default function MetersContent() {
 
       setShowForm(false)
       setEditingId(null)
-      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
       loadMeters()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -125,11 +134,15 @@ export default function MetersContent() {
   const handleEdit = (meter: Meter) => {
     setEditingId(meter.id)
     const inHousehold = households.some(h => h.id === meter.organizationId)
+    const st = String(meter.serviceStatus ?? 'NORMAL').toUpperCase()
+    const serviceStatus: MeterServiceStatus =
+      st === 'DAMAGED' || st === 'REPLACED' ? st : 'NORMAL'
     setForm({
       ownerType: inHousehold ? 'household' : 'organization',
       meterNumber: meter.meterNumber,
       organizationId: meter.organizationId,
       year: meter.year ?? currentYear,
+      serviceStatus,
     })
     setShowForm(true)
   }
@@ -164,7 +177,7 @@ export default function MetersContent() {
           onClick={() => {
             setShowForm(!showForm)
             setEditingId(null)
-            setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+            setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -180,7 +193,7 @@ export default function MetersContent() {
               onClick={() => {
                 setShowForm(false)
                 setEditingId(null)
-                setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+                setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
               }}
               aria-hidden="true"
             />
@@ -195,7 +208,7 @@ export default function MetersContent() {
                     onClick={() => {
                       setShowForm(false)
                       setEditingId(null)
-                      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+                      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
                   >
@@ -274,13 +287,33 @@ export default function MetersContent() {
                       ))}
                     </select>
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Төлөв
+                    </label>
+                    <select
+                      value={form.serviceStatus}
+                      onChange={(e) =>
+                        setForm((prev) => ({ ...prev, serviceStatus: e.target.value as MeterServiceStatus }))
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    >
+                      <option value="NORMAL">Хэвийн</option>
+                      <option value="DAMAGED">Эвдэрсэн</option>
+                      <option value="REPLACED">Солигдсон</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      «Эвдэрсэн», «Солигдсон» тоолуур нь заалтын үндсэн хүснэгтэнд харагдана; зөвхөн «заалт оруулах»
+                      цонхонд автоматаар орохгүй.
+                    </p>
+                  </div>
                   <div className="flex justify-end gap-3 mt-4 pt-2">
                     <button
                       type="button"
                       onClick={() => {
                         setShowForm(false)
                         setEditingId(null)
-                        setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear })
+                        setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                     >
@@ -314,6 +347,9 @@ export default function MetersContent() {
                 Он
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Төлөв
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Үйлдэл
               </th>
             </tr>
@@ -329,6 +365,13 @@ export default function MetersContent() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {meter.year || '-'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                  {String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'DAMAGED'
+                    ? 'Эвдэрсэн'
+                    : String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'REPLACED'
+                      ? 'Солигдсон'
+                      : 'Хэвийн'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex gap-2">
