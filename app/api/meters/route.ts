@@ -4,18 +4,37 @@ import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { getManagedCustomerOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
+type OrgMini = { id: string; name: string; code: string | null }
+
+async function attachOrganizationsToMeters<T extends { organizationId: string }>(
+  rows: T[]
+): Promise<Array<T & { organization: OrgMini }>> {
+  const ids = [...new Set(rows.map((r) => r.organizationId).filter(Boolean))]
+  const orgs =
+    ids.length === 0
+      ? []
+      : await prisma.organization.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, name: true, code: true },
+        })
+  const byId = new Map<string, OrgMini>(orgs.map((o) => [o.id, o]))
+  const missing: OrgMini = { id: '', name: '(Байгууллага олдсонгүй)', code: null }
+  return rows.map((m) => ({
+    ...m,
+    organization: byId.get(m.organizationId) ?? { ...missing, id: m.organizationId },
+  }))
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const where: any = {}
-    if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      const customerIds = await getManagedCustomerOrganizationIds(user)
-      if (customerIds.length === 0) return NextResponse.json([])
-      where.organizationId = { in: customerIds }
-    }
+    // Зөвхөн өөрийн бүртгэсэн харилцагч (managed customers)-ын тоолуурыг харуулна.
+    const customerIds = await getManagedCustomerOrganizationIds(user)
+    if (customerIds.length === 0) return NextResponse.json([])
+    const where: any = { organizationId: { in: customerIds } }
 
-    const meters = await prisma.meter.findMany({
+    const rawMeters = await prisma.meter.findMany({
       where,
       select: {
         id: true,
@@ -23,17 +42,11 @@ export async function GET(request: NextRequest) {
         organizationId: true,
         year: true,
         serviceStatus: true,
-        organization: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
       },
       orderBy: { meterNumber: 'asc' },
     })
 
+    const meters = await attachOrganizationsToMeters(rawMeters)
     return NextResponse.json(meters)
   } catch (error: any) {
     console.error('Meters GET error:', error)
@@ -61,6 +74,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Байгууллага сонгоно уу' }, { status: 400 })
     }
     const orgId = requested
+
+    // Зөвхөн өөрийн бүртгэсэн харилцагч дээр тоолуур нэмнэ (өөр хүнийх дээр нэмэхгүй).
+    const customerIds = await getManagedCustomerOrganizationIds(user)
+    if (!customerIds.includes(orgId)) {
+      return NextResponse.json({ error: 'Энэ байгууллагад тоолуур бүртгэх эрхгүй' }, { status: 403 })
+    }
 
     const orgExists = await prisma.organization.findUnique({
       where: { id: orgId },
@@ -148,12 +167,13 @@ export async function PUT(request: NextRequest) {
 
     let nextOrgId = existing.organizationId
     if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      if (!(await organizationIdInScope(user, existing.organizationId))) {
+      const customerIds = await getManagedCustomerOrganizationIds(user)
+      if (!customerIds.includes(existing.organizationId)) {
         return NextResponse.json({ error: 'Энэ тоолуурыг засах эрхгүй' }, { status: 403 })
       }
       if (data.organizationId != null && String(data.organizationId).trim() !== '') {
         const candidate = String(data.organizationId).trim()
-        if (!(await organizationIdInScope(user, candidate))) {
+        if (!customerIds.includes(candidate)) {
           return NextResponse.json({ error: 'Энэ байгууллагад шилжүүлэх эрхгүй' }, { status: 403 })
         }
         nextOrgId = candidate
@@ -228,7 +248,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      if (!(await organizationIdInScope(user, meter.organizationId))) {
+      const customerIds = await getManagedCustomerOrganizationIds(user)
+      if (!customerIds.includes(meter.organizationId)) {
         return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
       }
     }
