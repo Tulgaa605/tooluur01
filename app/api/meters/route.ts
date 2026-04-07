@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getManagedCustomerOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 type OrgMini = { id: string; name: string; code: string | null }
 
@@ -29,10 +29,10 @@ export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    // Зөвхөн өөрийн бүртгэсэн харилцагч (managed customers)-ын тоолуурыг харуулна.
-    const customerIds = await getManagedCustomerOrganizationIds(user)
-    if (customerIds.length === 0) return NextResponse.json([])
-    const where: any = { organizationId: { in: customerIds } }
+    // Нягтлан/захирал: зөвхөн өөрийн алба + өөрийн бүртгэсэн харилцагчдын тоолуурыг харна.
+    const scoped = await getScopedOrganizationIds(user)
+    if (scoped.length === 0) return NextResponse.json([])
+    const where: any = { organizationId: { in: scoped } }
 
     const rawMeters = await prisma.meter.findMany({
       where,
@@ -75,9 +75,8 @@ export async function POST(request: NextRequest) {
     }
     const orgId = requested
 
-    // Зөвхөн өөрийн бүртгэсэн харилцагч дээр тоолуур нэмнэ (өөр хүнийх дээр нэмэхгүй).
-    const customerIds = await getManagedCustomerOrganizationIds(user)
-    if (!customerIds.includes(orgId)) {
+    const scoped = await getScopedOrganizationIds(user)
+    if (!scoped.includes(orgId)) {
       return NextResponse.json({ error: 'Энэ байгууллагад тоолуур бүртгэх эрхгүй' }, { status: 403 })
     }
 
@@ -167,13 +166,13 @@ export async function PUT(request: NextRequest) {
 
     let nextOrgId = existing.organizationId
     if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      const customerIds = await getManagedCustomerOrganizationIds(user)
-      if (!customerIds.includes(existing.organizationId)) {
+      const scoped = await getScopedOrganizationIds(user)
+      if (!scoped.includes(existing.organizationId)) {
         return NextResponse.json({ error: 'Энэ тоолуурыг засах эрхгүй' }, { status: 403 })
       }
       if (data.organizationId != null && String(data.organizationId).trim() !== '') {
         const candidate = String(data.organizationId).trim()
-        if (!customerIds.includes(candidate)) {
+        if (!scoped.includes(candidate)) {
           return NextResponse.json({ error: 'Энэ байгууллагад шилжүүлэх эрхгүй' }, { status: 403 })
         }
         nextOrgId = candidate
@@ -247,11 +246,9 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      const customerIds = await getManagedCustomerOrganizationIds(user)
-      if (!customerIds.includes(meter.organizationId)) {
-        return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
-      }
+    const scoped = await getScopedOrganizationIds(user)
+    if (!scoped.includes(meter.organizationId)) {
+      return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
     }
     if (meter.readings.length > 0) {
       return NextResponse.json(
