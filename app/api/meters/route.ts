@@ -60,9 +60,6 @@ export async function POST(request: NextRequest) {
     if (!requested) {
       return NextResponse.json({ error: 'Байгууллага сонгоно уу' }, { status: 400 })
     }
-    if (!(await organizationIdInScope(user, requested))) {
-      return NextResponse.json({ error: 'Энэ байгууллагад тоолуур бүртгэх эрхгүй' }, { status: 403 })
-    }
     const orgId = requested
 
     const orgExists = await prisma.organization.findUnique({
