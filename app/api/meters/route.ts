@@ -93,6 +93,8 @@ export async function POST(request: NextRequest) {
         organizationId: orgId,
         year,
         serviceStatus,
+        createdByUserId: user.userId,
+        updatedByUserId: user.userId,
       },
     })
 
@@ -177,6 +179,7 @@ export async function PUT(request: NextRequest) {
         organizationId: nextOrgId,
         year,
         ...(serviceStatus !== undefined ? { serviceStatus } : {}),
+        updatedByUserId: user.userId,
       },
     })
 

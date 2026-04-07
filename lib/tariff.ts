@@ -1,28 +1,5 @@
 import { prisma } from '@/lib/prisma'
 
-function unwrapMongoCommandResult(result: any): any {
-  let r = result
-  for (let i = 0; i < 6; i++) {
-    if (r && typeof r === 'object' && r.result != null && typeof r.result === 'object') {
-      r = r.result
-    } else {
-      break
-    }
-  }
-  return r
-}
-
-function extractMongoBatch(result: any): any[] {
-  if (!result) return []
-  const root = unwrapMongoCommandResult(result)
-  const cursor = root.cursor
-  if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) return cursor.firstBatch
-  if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) return cursor.nextBatch
-  if (root.firstBatch && Array.isArray(root.firstBatch)) return root.firstBatch
-  if (root.nextBatch && Array.isArray(root.nextBatch)) return root.nextBatch
-  return []
-}
-
 type CategoryTariffDoc = {
   category?: string
   baseCleanFee?: number
@@ -48,12 +25,25 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
     return pipe ? { baseCleanFee: pipe.baseCleanFee, baseDirtyFee: pipe.baseDirtyFee } : null
   }
 
-  const catFind = await prisma.$runCommandRaw({
-    find: 'category_tariffs',
-    filter: { category: org.category },
-    limit: 1,
-  } as any)
-  const catDocs = extractMongoBatch(catFind) as CategoryTariffDoc[]
+  const catRow = await prisma.categoryTariff.findUnique({
+    where: { category: org.category },
+    select: {
+      baseCleanFee: true,
+      baseDirtyFee: true,
+      cleanPerM3: true,
+      dirtyPerM3: true,
+    },
+  })
+  const catDocs: CategoryTariffDoc[] = catRow
+    ? [
+        {
+          baseCleanFee: catRow.baseCleanFee,
+          baseDirtyFee: catRow.baseDirtyFee,
+          cleanPerM3: catRow.cleanPerM3,
+          dirtyPerM3: catRow.dirtyPerM3,
+        },
+      ]
+    : []
   const now = new Date()
   const year = now.getFullYear()
   const month = now.getMonth() + 1

@@ -3,13 +3,21 @@ import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { organizationIdInScope } from '@/lib/org-scope'
+import { sendTextSms } from '@/lib/sms'
+import { getDefaultSmsSender } from '@/lib/sms-senders'
+
+export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
-    const { readingId } = data
+    const { readingId, fromPhone: fromPhoneRaw } = data
+    const fromPhone =
+      typeof fromPhoneRaw === 'string' && fromPhoneRaw.trim()
+        ? fromPhoneRaw.trim()
+        : getDefaultSmsSender()
 
     if (!readingId) {
       return NextResponse.json(
@@ -96,25 +104,26 @@ export async function POST(request: NextRequest) {
 
 Энэ кодыг төлбөр төлөхдөө ашиглана уу.`
 
-    // TODO: Integrate with SMS service (e.g., Twilio, local SMS gateway)
-    // TODO: Integrate with Email service (e.g., SendGrid, Nodemailer)
-    
-    // For now, just return the message and code
-    // In production, you would send SMS to organization.phone and user phones
-    // and send email to organization.email and user emails
-    
-    // Example SMS sending (you need to implement actual SMS service):
-    // for (const recipient of recipients) {
-    //   if (recipient.phone) {
-    //     await sendSMS(recipient.phone, message)
-    //   }
-    // }
+    const rawPhones = recipients
+      .map((r) => r.phone)
+      .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+
+    const smsOutcome = await sendTextSms(rawPhones, message, fromPhone)
+    const smsOkCount = smsOutcome.results.filter((r) => r.ok).length
+    const smsFailCount = smsOutcome.results.filter((r) => !r.ok).length
 
     return NextResponse.json({
       success: true,
       message: 'Төлбөрийн мэдээлэл илгээгдлээ',
       paymentCode,
+      fromPhone,
       messageText: message,
+      sms: {
+        provider: smsOutcome.mode,
+        results: smsOutcome.results,
+        sentOk: smsOkCount,
+        sentFailed: smsFailCount,
+      },
       recipients: recipients,
       sentTo: {
         organization: {

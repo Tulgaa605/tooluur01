@@ -71,6 +71,8 @@ export async function POST(request: NextRequest) {
           baseCleanFee: 0,
           baseDirtyFee: 0,
           year: currentYear,
+          createdByUserId: user.id,
+          updatedByUserId: user.id,
         },
       })
       await applyCategoryTariffsToOrganization(org.id)

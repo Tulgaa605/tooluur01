@@ -4,14 +4,6 @@ import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { getManagedCustomerOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 
-function extractMongoBatch(result: any): any[] {
-  if (!result) return []
-  const cursor = result.cursor
-  if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) return cursor.firstBatch
-  if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) return cursor.nextBatch
-  return []
-}
-
 function getNextPeriod(year: number, month: number): { year: number; month: number } {
   if (month === 12) return { year: year + 1, month: 1 }
   return { year, month: month + 1 }
@@ -60,20 +52,17 @@ async function getTariffRatesForPeriod(
     return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
   }
 
-  const catFind = await prisma.$runCommandRaw({
-    find: 'category_tariffs',
-    filter: { category: org.category },
-    limit: 1,
-  } as any)
-  const catDocs = extractMongoBatch(catFind) as { baseCleanFee?: number; baseDirtyFee?: number; cleanPerM3?: number; dirtyPerM3?: number }[]
-  if (catDocs.length > 0) {
-    const d = catDocs[0]
+  const catRow = await prisma.categoryTariff.findUnique({
+    where: { category: org.category },
+    select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
+  })
+  if (catRow) {
     if (Number.isNaN(pipeDiam)) {
-      baseClean = d.baseCleanFee ?? 0
-      baseDirty = d.baseDirtyFee ?? 0
+      baseClean = catRow.baseCleanFee ?? 0
+      baseDirty = catRow.baseDirtyFee ?? 0
     }
-    cleanPerM3 = d.cleanPerM3 ?? 0
-    dirtyPerM3 = d.dirtyPerM3 ?? 0
+    cleanPerM3 = catRow.cleanPerM3 ?? 0
+    dirtyPerM3 = catRow.dirtyPerM3 ?? 0
     return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
   }
 
@@ -166,6 +155,7 @@ export async function POST(request: NextRequest) {
         vat,
         total,
         createdBy: user.userId,
+        createdByUserId: user.userId,
       },
     })
 
@@ -241,6 +231,13 @@ export async function GET(request: NextRequest) {
             id: true,
             name: true,
             code: true,
+            phone: true,
+            users: {
+              where: {
+                phone: { not: null },
+              },
+              select: { phone: true },
+            },
           },
         },
       },
@@ -384,6 +381,7 @@ export async function PUT(request: NextRequest) {
         subtotal,
         vat,
         total,
+        updatedByUserId: user.userId,
       },
       include: {
         meter: {
@@ -459,6 +457,7 @@ export async function PUT(request: NextRequest) {
             subtotal: nextSubtotal,
             vat: nextVat,
             total: nextTotal,
+            updatedByUserId: user.userId,
           },
         })
       }

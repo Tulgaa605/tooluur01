@@ -127,6 +127,8 @@ export async function POST(request: NextRequest) {
         baseDirtyFee,
         year: data.year || currentYear,
         ...(tagManagedByOffice ? { managedByOrganizationId: user.organizationId } : {}),
+        createdByUserId: user.userId,
+        updatedByUserId: user.userId,
       },
     })
 
@@ -278,6 +280,7 @@ export async function PUT(request: NextRequest) {
         ...(typeof baseCleanFeeRaw === 'number' ? { baseCleanFee: baseCleanFeeRaw } : {}),
         ...(typeof baseDirtyFeeRaw === 'number' ? { baseDirtyFee: baseDirtyFeeRaw } : {}),
         year: data.year || currentYear,
+        updatedByUserId: user.userId,
       },
     })
 

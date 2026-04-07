@@ -21,6 +21,21 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  pipeFeesCreated            PipeFee[]            @relation("PipeFeeCreatedBy")
+  pipeFeesUpdated            PipeFee[]            @relation("PipeFeeUpdatedBy")
+  organizationsCreated       Organization[]     @relation("OrganizationCreatedBy")
+  organizationsUpdated       Organization[]     @relation("OrganizationUpdatedBy")
+  organizationTariffsCreated OrganizationTariff[] @relation("OrgTariffCreatedBy")
+  organizationTariffsUpdated OrganizationTariff[] @relation("OrgTariffUpdatedBy")
+  metersCreated              Meter[]            @relation("MeterCreatedBy")
+  metersUpdated              Meter[]            @relation("MeterUpdatedBy")
+  meterReadingsCreated       MeterReading[]     @relation("MeterReadingCreatedBy")
+  meterReadingsUpdated       MeterReading[]     @relation("MeterReadingUpdatedBy")
+  officePipeFeesCreated      OfficePipeFee[]    @relation("OfficePipeCreatedBy")
+  officePipeFeesUpdated      OfficePipeFee[]    @relation("OfficePipeUpdatedBy")
+  categoryTariffsCreated     CategoryTariff[]   @relation("CategoryTariffCreatedBy")
+  categoryTariffsUpdated     CategoryTariff[]   @relation("CategoryTariffUpdatedBy")
+
   @@map("users")
 }
 
@@ -45,6 +60,10 @@ model Organization {
   readings        MeterReading[]
   tariffs         OrganizationTariff[]
   officePipeFees OfficePipeFee[]
+  createdByUserId String?  @db.ObjectId
+  updatedByUserId String?  @db.ObjectId
+  createdByUser   User?    @relation("OrganizationCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?    @relation("OrganizationUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -61,6 +80,10 @@ model OrganizationTariff {
   baseDirtyFee   Float        @default(0)
   cleanPerM3     Float        @default(0)
   dirtyPerM3     Float        @default(0)
+  createdByUserId String?     @db.ObjectId
+  updatedByUserId String?     @db.ObjectId
+  createdByUser   User?       @relation("OrgTariffCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?       @relation("OrgTariffUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -77,6 +100,10 @@ model Meter {
   /// NORMAL | DAMAGED | REPLACED — хоосон/null = хэвийн (хуучин баримттай нийцэх).
   serviceStatus  String?
   readings       MeterReading[]
+  createdByUserId String?      @db.ObjectId
+  updatedByUserId String?      @db.ObjectId
+  createdByUser   User?        @relation("MeterCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?        @relation("MeterUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
@@ -106,7 +133,12 @@ model MeterReading {
   approved       Boolean      @default(false)
   approvedBy     String?
   approvedAt     DateTime?
+  /// Хуучин баримт: зөвхөн текстээр хадгалсан user id (шүүлтэд ашиглана).
   createdBy      String
+  createdByUserId String?     @db.ObjectId
+  updatedByUserId String?     @db.ObjectId
+  createdByUser   User?       @relation("MeterReadingCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?       @relation("MeterReadingUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -120,6 +152,10 @@ model PipeFee {
   diameterMm   Int
   baseCleanFee Float    @default(0)
   baseDirtyFee Float    @default(0)
+  createdByUserId String? @db.ObjectId
+  updatedByUserId String? @db.ObjectId
+  createdByUser   User?  @relation("PipeFeeCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?  @relation("PipeFeeUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -135,9 +171,31 @@ model OfficePipeFee {
   diameterMm           Int
   baseCleanFee         Float        @default(0)
   baseDirtyFee         Float        @default(0)
+  createdByUserId String?          @db.ObjectId
+  updatedByUserId String?          @db.ObjectId
+  createdByUser   User?            @relation("OfficePipeCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?            @relation("OfficePipeUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
 
   @@unique([officeOrganizationId, diameterMm])
   @@map("office_pipe_fees")
+}
+
+/// Төрлийн (category) тариф — `category_tariffs` цуглуулга.
+model CategoryTariff {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  category        String   @unique
+  baseCleanFee    Float    @default(0)
+  baseDirtyFee    Float    @default(0)
+  cleanPerM3      Float    @default(0)
+  dirtyPerM3      Float    @default(0)
+  createdByUserId String?  @db.ObjectId
+  updatedByUserId String?  @db.ObjectId
+  createdByUser   User?    @relation("CategoryTariffCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?    @relation("CategoryTariffUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("category_tariffs")
 }

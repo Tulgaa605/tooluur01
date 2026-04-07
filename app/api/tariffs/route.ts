@@ -17,50 +17,6 @@ function validateMonthYear(month: number, year: number) {
   return null
 }
 
-type CategoryTariffDoc = {
-  _id: any
-  category: string
-  baseCleanFee: number
-  baseDirtyFee: number
-  cleanPerM3: number
-  dirtyPerM3: number
-  createdAt?: Date
-  updatedAt?: Date
-}
-
-/** Prisma MongoDB $runCommandRaw заримдаа { result: { cursor } } гэж давхаргатай ирнэ */
-function unwrapMongoCommandResult(result: any): any {
-  let r = result
-  for (let i = 0; i < 6; i++) {
-    if (r && typeof r === 'object' && r.result != null && typeof r.result === 'object') {
-      r = r.result
-    } else {
-      break
-    }
-  }
-  return r
-}
-
-function extractMongoBatch(result: any): any[] {
-  if (!result) return []
-  const root = unwrapMongoCommandResult(result)
-  // MongoDB raw command-ын хариу өөр өөр shape-тэй ирж болдог (cursor доторх эсвэл шууд firstBatch/nextBatch).
-  const cursor = root.cursor
-  if (cursor?.firstBatch && Array.isArray(cursor.firstBatch)) return cursor.firstBatch
-  if (cursor?.nextBatch && Array.isArray(cursor.nextBatch)) return cursor.nextBatch
-
-  // Зарим тохиолдолд cursor байхгүй, firstBatch/nextBatch шууд root дээр ирдэг байж болно.
-  if (root.firstBatch && Array.isArray(root.firstBatch)) return root.firstBatch
-  if (root.nextBatch && Array.isArray(root.nextBatch)) return root.nextBatch
-
-  // Зарим драйвер/хувилбарт batch documents өөр нэрээр ирж болно.
-  if (Array.isArray(cursor?.batch)) return cursor.batch
-  if (Array.isArray((root as any)?.batch)) return (root as any).batch
-  if (Array.isArray((root as any)?.documents)) return (root as any).documents
-  if (Array.isArray((root as any)?.data)) return (root as any).data
-  return []
-}
-
 const tariffOrgSelect = {
   id: true,
   name: true,
@@ -109,33 +65,35 @@ async function attachOrganizationsToTariffs<T extends { organizationId: string }
   })
 }
 
-async function upsertCategoryTariff(params: {
-  category: string
-  baseCleanFee: number
-  baseDirtyFee: number
-  cleanPerM3: number
-  dirtyPerM3: number
-}) {
-  const now = new Date()
-  await prisma.$runCommandRaw({
-    update: 'category_tariffs',
-    updates: [
-      {
-        q: { category: params.category },
-        u: {
-          $set: {
-            baseCleanFee: params.baseCleanFee,
-            baseDirtyFee: params.baseDirtyFee,
-            cleanPerM3: params.cleanPerM3,
-            dirtyPerM3: params.dirtyPerM3,
-            updatedAt: now,
-          },
-          $setOnInsert: { createdAt: now },
-        },
-        upsert: true,
-      },
-    ],
-  } as any)
+async function upsertCategoryTariff(
+  params: {
+    category: string
+    baseCleanFee: number
+    baseDirtyFee: number
+    cleanPerM3: number
+    dirtyPerM3: number
+  },
+  userId: string
+) {
+  await prisma.categoryTariff.upsert({
+    where: { category: params.category },
+    create: {
+      category: params.category,
+      baseCleanFee: params.baseCleanFee,
+      baseDirtyFee: params.baseDirtyFee,
+      cleanPerM3: params.cleanPerM3,
+      dirtyPerM3: params.dirtyPerM3,
+      createdByUserId: userId,
+      updatedByUserId: userId,
+    },
+    update: {
+      baseCleanFee: params.baseCleanFee,
+      baseDirtyFee: params.baseDirtyFee,
+      cleanPerM3: params.cleanPerM3,
+      dirtyPerM3: params.dirtyPerM3,
+      updatedByUserId: userId,
+    },
+  })
 }
 
 export async function GET(request: NextRequest) {
@@ -164,14 +122,11 @@ export async function GET(request: NextRequest) {
     const includeCategory = searchParams.get('includeCategory') === '1'
     if (!includeCategory) return NextResponse.json(tariffs)
 
-    const catFind = await prisma.$runCommandRaw({
-      find: 'category_tariffs',
-      filter: {},
-      sort: { updatedAt: -1 },
-      limit: 500,
-    } as any)
-    const catDocs = extractMongoBatch(catFind) as CategoryTariffDoc[]
-    const categoryTariffs = catDocs.map((d: any) => ({
+    const catRows = await prisma.categoryTariff.findMany({
+      orderBy: { updatedAt: 'desc' },
+      take: 500,
+    })
+    const categoryTariffs = catRows.map((d) => ({
       id: `category:${d.category}`,
       kind: 'category',
       category: d.category,
@@ -179,6 +134,8 @@ export async function GET(request: NextRequest) {
       baseDirtyFee: d.baseDirtyFee ?? 0,
       cleanPerM3: d.cleanPerM3 ?? 0,
       dirtyPerM3: d.dirtyPerM3 ?? 0,
+      createdByUserId: d.createdByUserId,
+      updatedByUserId: d.updatedByUserId,
       updatedAt: d.updatedAt,
     }))
 
@@ -264,7 +221,13 @@ export async function POST(request: NextRequest) {
       const tariffRaw = existing
         ? await prisma.organizationTariff.update({
             where: { organizationId_year_month: { organizationId, year, month } },
-            data: { baseCleanFee, baseDirtyFee, cleanPerM3, dirtyPerM3 },
+            data: {
+              baseCleanFee,
+              baseDirtyFee,
+              cleanPerM3,
+              dirtyPerM3,
+              updatedByUserId: user.userId,
+            },
           })
         : await prisma.organizationTariff.create({
             data: {
@@ -275,6 +238,8 @@ export async function POST(request: NextRequest) {
               baseDirtyFee,
               cleanPerM3,
               dirtyPerM3,
+              createdByUserId: user.userId,
+              updatedByUserId: user.userId,
             },
           })
       const [tariff] = await attachOrganizationsToTariffs([tariffRaw])
@@ -304,13 +269,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Нэг төрлийн тариф нэг л байна; шинэчлэх хүртэл идэвхтэй
-    await upsertCategoryTariff({
-      category,
-      baseCleanFee,
-      baseDirtyFee,
-      cleanPerM3,
-      dirtyPerM3,
-    })
+    await upsertCategoryTariff(
+      {
+        category,
+        baseCleanFee,
+        baseDirtyFee,
+        cleanPerM3,
+        dirtyPerM3,
+      },
+      user.userId
+    )
 
     // Байгууллага бүрт тухайн сарын тариф бичлэг үүсгэж, уншилтанд хэрэглэгдэнэ.
     // Өмнө нь org бүрт find+write дарааллаар (2N query) удаан байсан тул:
@@ -342,7 +310,13 @@ export async function POST(request: NextRequest) {
       })
       const existingByOrgId = new Map(existingRows.map((r) => [r.organizationId, r]))
 
-      const toCreate: Array<{ organizationId: string; year: number; month: number } & RowPayload> = []
+      const toCreate: Array<{
+        organizationId: string
+        year: number
+        month: number
+        createdByUserId: string
+        updatedByUserId: string
+      } & RowPayload> = []
       const toUpdate: Array<{ id: string } & RowPayload> = []
 
       for (const org of orgs) {
@@ -363,6 +337,8 @@ export async function POST(request: NextRequest) {
             organizationId: org.id,
             year,
             month,
+            createdByUserId: user.userId,
+            updatedByUserId: user.userId,
             ...payload,
           })
         }
@@ -385,6 +361,7 @@ export async function POST(request: NextRequest) {
                 baseDirtyFee: row.baseDirtyFee,
                 cleanPerM3: row.cleanPerM3,
                 dirtyPerM3: row.dirtyPerM3,
+                updatedByUserId: user.userId,
               },
             })
           )
@@ -461,7 +438,7 @@ export async function PUT(request: NextRequest) {
 
     const updatedRaw = await prisma.organizationTariff.update({
       where: { id: data.id },
-      data: patch,
+      data: { ...patch, updatedByUserId: user.userId },
     })
     const [updated] = await attachOrganizationsToTariffs([updatedRaw])
 
@@ -492,10 +469,7 @@ export async function DELETE(request: NextRequest) {
       if (!category) {
         return NextResponse.json({ error: 'Хэрэглэгчийн төрөл (category) шаардлагатай' }, { status: 400 })
       }
-      await prisma.$runCommandRaw({
-        delete: 'category_tariffs',
-        deletes: [{ q: { category }, limit: 1 }],
-      } as any)
+      await prisma.categoryTariff.deleteMany({ where: { category } })
       return NextResponse.json({ success: true })
     }
     const id = searchParams.get('id')

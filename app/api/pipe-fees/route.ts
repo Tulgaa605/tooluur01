@@ -118,6 +118,8 @@ export async function POST(request: NextRequest) {
         diameterMm,
         baseCleanFee,
         baseDirtyFee,
+        createdByUserId: user.userId,
+        updatedByUserId: user.userId,
       },
     })
 
@@ -188,7 +190,7 @@ export async function PUT(request: NextRequest) {
 
     const updated = await prisma.pipeFee.update({
       where: { id: data.id },
-      data: patch,
+      data: { ...patch, updatedByUserId: user.userId },
     })
 
     return NextResponse.json(updated)

@@ -18,6 +18,8 @@ interface Reading {
     id: string
     name: string
     code: string | null
+    phone?: string | null
+    users?: { phone: string | null }[]
   }
 }
 
@@ -29,11 +31,25 @@ interface BillingRow {
   total: number
   approved: boolean
   meterNumber: string
+  customerPhones: string
   organization: {
     id: string
     name: string
     code: string | null
+    phone?: string | null
+    users?: { phone: string | null }[]
   }
+}
+
+function collectCustomerPhones(org: Reading['organization']): string {
+  const set = new Set<string>()
+  const p = org?.phone?.trim()
+  if (p) set.add(p)
+  org?.users?.forEach((u) => {
+    const up = u?.phone?.trim()
+    if (up) set.add(up)
+  })
+  return Array.from(set).join(', ') || '—'
 }
 
 export default function BillingContent() {
@@ -43,6 +59,9 @@ export default function BillingContent() {
   const [sendingAll, setSendingAll] = useState(false)
   const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()))
   const [filterMonth, setFilterMonth] = useState(String(new Date().getMonth() + 1))
+  const [senderPhone, setSenderPhone] = useState('89980862')
+  const [senderOptions, setSenderOptions] = useState<string[]>([])
+  const [senderPickCustom, setSenderPickCustom] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const yearOptions = useMemo(() => {
     const y = new Date().getFullYear()
@@ -61,10 +80,13 @@ export default function BillingContent() {
         total: Number(r.total ?? 0) || 0,
         approved: !!r.approved,
         meterNumber: r.meter?.meterNumber || '-',
+        customerPhones: collectCustomerPhones(r.organization),
         organization: {
           id: (r.organization?.id && String(r.organization.id).trim()) || '',
           name: r.organization?.name || '-',
           code: r.organization?.code || null,
+          phone: r.organization?.phone ?? null,
+          users: r.organization?.users,
         },
       }))
       .sort((a, b) => {
@@ -119,6 +141,22 @@ export default function BillingContent() {
       })
   }, [filterYear, filterMonth])
 
+  useEffect(() => {
+    fetchWithAuth('/api/sms/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { senders?: string[]; defaultSender?: string } | null) => {
+        if (data?.senders?.length) {
+          setSenderOptions(data.senders)
+          if (data.defaultSender && data.senders.includes(data.defaultSender)) {
+            setSenderPhone(data.defaultSender)
+          } else {
+            setSenderPhone(data.senders[0])
+          }
+        }
+      })
+      .catch(() => {})
+  }, [])
+
   const handleDownload = (reading: Reading) => {
     const invoice = `
 Төлбөрийн нэхэмжлэх
@@ -142,7 +180,7 @@ export default function BillingContent() {
       const res = await fetchWithAuth('/api/notifications/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ readingId: row.id }),
+        body: JSON.stringify({ readingId: row.id, fromPhone: senderPhone.trim() }),
       })
 
       const data = await res.json()
@@ -151,7 +189,30 @@ export default function BillingContent() {
         throw new Error(data.error || 'Алдаа гарлаа')
       }
 
-      alert(`Төлбөрийн мэдээлэл илгээгдлээ!\nТөлбөрийн код: ${data.paymentCode}`)
+      const toPhones =
+        Array.isArray(data.recipients) && data.recipients.length > 0
+          ? data.recipients.map((r: { phone?: string }) => r.phone).filter(Boolean).join(', ')
+          : collectCustomerPhones(row.organization)
+      const sms = data.sms as
+        | { provider?: string; sentOk?: number; sentFailed?: number; results?: { to: string; ok: boolean; error?: string }[] }
+        | undefined
+      let smsLine = ''
+      if (sms?.provider === 'none' || !sms?.provider) {
+        smsLine = '\nSMS: тохиргоо хийгээгүй (.env дээр SMS_HTTP_URL).'
+      } else if ((sms.sentOk ?? 0) === 0 && (sms.sentFailed ?? 0) === 0) {
+        smsLine = '\nSMS: хүлээн авагчийн утас олдсонгүй.'
+      } else {
+        smsLine = `\nSMS (${sms.provider}): амжилт ${sms.sentOk ?? 0}, алдаа ${sms.sentFailed ?? 0}.`
+        const failed = sms.results?.filter((r) => !r.ok).map((r) => `${r.to}: ${r.error || 'алдаа'}`)
+        if (failed?.length) smsLine += `\n${failed.slice(0, 3).join('\n')}`
+      }
+      alert(
+        `Төлбөрийн мэдээлэл боловсрууллаа.\n` +
+          `Илгээгч: ${data.fromPhone || senderPhone.trim()}\n` +
+          `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}\n` +
+          `Төлбөрийн код: ${data.paymentCode}` +
+          smsLine
+      )
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
     } finally {
@@ -173,7 +234,7 @@ export default function BillingContent() {
         const res = await fetchWithAuth('/api/notifications/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ readingId: row.id }),
+          body: JSON.stringify({ readingId: row.id, fromPhone: senderPhone.trim() }),
         })
         if (res.ok) okCount += 1
       }
@@ -196,45 +257,47 @@ export default function BillingContent() {
         <h2 className="text-2xl font-semibold text-gray-900">Төлбөр</h2>
       </div>
       <div className="bg-white p-4 rounded-lg border border-gray-200 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Он</label>
-            <select
-              value={filterYear}
-              onChange={(e) => setFilterYear(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-            >
-              <option value="">Бүгд</option>
-              {yearOptions.map((y) => (
-                <option key={y} value={String(y)}>
-                  {y}
-                </option>
-              ))}
-            </select>
+        <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+          <div className="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4 sm:flex sm:flex-1 sm:min-w-0 sm:max-w-xl">
+            <div className="min-w-0 sm:w-36">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Он</label>
+              <select
+                value={filterYear}
+                onChange={(e) => setFilterYear(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              >
+                <option value="">Бүгд</option>
+                {yearOptions.map((y) => (
+                  <option key={y} value={String(y)}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-0 sm:w-36">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Сар</label>
+              <select
+                value={filterMonth}
+                onChange={(e) => setFilterMonth(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              >
+                <option value="">Бүгд</option>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                  <option key={m} value={String(m)}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Сар</label>
-            <select
-              value={filterMonth}
-              onChange={(e) => setFilterMonth(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-            >
-              <option value="">Бүгд</option>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
-                <option key={m} value={String(m)}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="md:col-span-2 flex items-end justify-end">
+          <div className="flex justify-end sm:ml-auto sm:shrink-0">
             <button
               type="button"
               onClick={handleSendAllNotifications}
               disabled={sendingAll || billingRows.length === 0}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 whitespace-nowrap"
             >
-              {sendingAll ? 'Илгээж байна...' : 'Илгээх'}
+              {sendingAll ? 'Илгээж байна...' : 'Бүгдийг илгээх'}
             </button>
           </div>
         </div>
@@ -267,6 +330,9 @@ export default function BillingContent() {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Тоолуур
               </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Харилцагчийн утас
+              </th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Хэрэглээ (м³)
               </th>
@@ -295,6 +361,9 @@ export default function BillingContent() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {row.meterNumber}
+                </td>
+                <td className="px-6 py-4 text-sm text-gray-700 max-w-[14rem] break-words">
+                  {row.customerPhones}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-900">
                   {(row.usage ?? 0).toFixed(2)}
@@ -348,7 +417,7 @@ export default function BillingContent() {
           </tbody>
           <tfoot className="bg-gray-50 border-t border-gray-200">
             <tr>
-              <td colSpan={4} className="px-6 py-3 text-sm font-semibold text-gray-900">
+              <td colSpan={5} className="px-6 py-3 text-sm font-semibold text-gray-900">
                 Нийт дүн
               </td>
               <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
