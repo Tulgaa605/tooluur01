@@ -1,9 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowDownTrayIcon, DocumentArrowUpIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
+import {
+  downloadHouseholdExcelTemplate,
+  parseHouseholdRowsFromExcel,
+} from '@/lib/excel-household-import'
 
 type OrganizationCategory =
   | 'HOUSEHOLD'
@@ -93,6 +97,8 @@ export default function UsersContent() {
   })
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'org' | 'household'; id: string } | null>(null)
+  const [importingExcel, setImportingExcel] = useState(false)
+  const excelInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     loadOrganizations()
@@ -174,6 +180,67 @@ export default function UsersContent() {
 
   const handleDeleteHousehold = (id: string) => {
     setDeleteConfirm({ type: 'household', id })
+  }
+
+  const handleExcelFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImportingExcel(true)
+    let ok = 0
+    const errors: string[] = []
+    try {
+      const buf = await file.arrayBuffer()
+      const rows = parseHouseholdRowsFromExcel(buf)
+      if (rows.length === 0) {
+        alert('Excel-д өгөгдөл олдсонгүй. Эхний хуудас, толгой мөр (Овог, Нэр, …) зөв эсэхийг шалгана уу.')
+        return
+      }
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i]
+        const fullName = householdFullNameForSave(r.ovog || '', r.givenName || '')
+        if (!fullName.trim()) {
+          errors.push(`Мөр ${i + 2}: овог, нэр хоосон`)
+          continue
+        }
+        try {
+          const orgRes = await fetchWithAuth('/api/organizations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              name: fullName,
+              ovog: r.ovog?.trim() || null,
+              code: r.code?.trim() || null,
+              address: r.address?.trim() || null,
+              phone: r.phone?.trim() || null,
+              email: r.email?.trim() || null,
+              connectionNumber: (r.connectionNumber || '15').trim() || '15',
+              category: 'HOUSEHOLD',
+            }),
+          })
+          const orgData = await orgRes.json()
+          if (!orgRes.ok) {
+            errors.push(`Мөр ${i + 2}: ${orgData.error || orgData.message || 'алдаа'}`)
+            continue
+          }
+          ok += 1
+        } catch (err: unknown) {
+          errors.push(`Мөр ${i + 2}: ${err instanceof Error ? err.message : 'алдаа'}`)
+        }
+      }
+      const errText =
+        errors.length > 0
+          ? `\n\nАлдаатай (${errors.length}):\n${errors.slice(0, 15).join('\n')}${errors.length > 15 ? '\n…' : ''}`
+          : ''
+      alert(`Импорт дууслаа.\nАмжилттай: ${ok}${errText}`)
+      loadOrganizations()
+      loadHouseholds()
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Excel уншихад алдаа гарлаа')
+    } finally {
+      setImportingExcel(false)
+    }
   }
 
   const handleSubmitUser = async (e: React.FormEvent) => {
@@ -340,19 +407,38 @@ export default function UsersContent() {
 
       {activeTab === 'users' && (
         <>
-          <div className="mb-6 flex justify-end">
-            <button
-              onClick={() => {
-                if (!showUserForm) {
-                  setEditingHouseholdId(null)
-                  setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
-                }
-                setShowUserForm(!showUserForm)
-              }}
-              className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-            >
-              {showUserForm ? 'Цуцлах' : 'Шинэ хэрэглэгч'}
-            </button>
+          <input
+            ref={excelInputRef}
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            onChange={handleExcelFileChange}
+          />
+          <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end sm:items-center">
+            <div className="flex flex-wrap gap-2 justify-end">
+              {/* <button
+                type="button"
+                disabled={importingExcel}
+                onClick={() => excelInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 border border-primary-300 rounded-md text-primary-700 bg-primary-50 hover:bg-primary-100 disabled:opacity-50 text-sm"
+              >
+                <DocumentArrowUpIcon className="h-5 w-5 shrink-0" />
+                {importingExcel ? 'Импортлох…' : 'Excel-ээс импорт'}
+              </button> */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!showUserForm) {
+                    setEditingHouseholdId(null)
+                    setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
+                  }
+                  setShowUserForm(!showUserForm)
+                }}
+                className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm"
+              >
+                {showUserForm ? 'Цуцлах' : 'Шинэ хэрэглэгч'}
+              </button>
+            </div>
           </div>
 
           {householdsLoading ? (

@@ -75,6 +75,8 @@ async function upsertCategoryTariff(
   },
   userId: string
 ) {
+  // `category_tariffs` дээр createdAt/updatedAt нь string болсон хуучин өгөгдөл байж болдог.
+  // Prisma DateTime хөрвүүлэх гэж алдаа гаргахгүй байлгахын тулд select-оор тэдгээрийг буцаахгүй.
   await prisma.categoryTariff.upsert({
     where: { category: params.category },
     create: {
@@ -93,6 +95,7 @@ async function upsertCategoryTariff(
       dirtyPerM3: params.dirtyPerM3,
       updatedByUserId: userId,
     },
+    select: { id: true },
   })
 }
 
@@ -122,9 +125,19 @@ export async function GET(request: NextRequest) {
     const includeCategory = searchParams.get('includeCategory') === '1'
     if (!includeCategory) return NextResponse.json(tariffs)
 
+    // createdAt/updatedAt нь string байж болзошгүй тул DateTime талбаруудыг буцаахгүй.
+    // Эрэмбэлэх шаардлагатай бол өгөгдлөө Compass/mongosh дээр Date болгоод дараа нь orderBy-г буцааж нэмж болно.
     const catRows = await prisma.categoryTariff.findMany({
-      orderBy: { updatedAt: 'desc' },
       take: 500,
+      select: {
+        category: true,
+        baseCleanFee: true,
+        baseDirtyFee: true,
+        cleanPerM3: true,
+        dirtyPerM3: true,
+        createdByUserId: true,
+        updatedByUserId: true,
+      },
     })
     const categoryTariffs = catRows.map((d) => ({
       id: `category:${d.category}`,
@@ -136,7 +149,7 @@ export async function GET(request: NextRequest) {
       dirtyPerM3: d.dirtyPerM3 ?? 0,
       createdByUserId: d.createdByUserId,
       updatedByUserId: d.updatedByUserId,
-      updatedAt: d.updatedAt,
+      updatedAt: null,
     }))
 
     return NextResponse.json([...tariffs, ...categoryTariffs])

@@ -349,6 +349,15 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
+    // Тариф, албын шугамын хураамж — байгууллагыг устгахаас өмнө холбоосыг заавал цэвэрлэнэ (P2014).
+    await prisma.organizationTariff.deleteMany({ where: { organizationId: id } })
+    await prisma.officePipeFee.deleteMany({ where: { officeOrganizationId: id } })
+    // Энэ албаас бүртгэсэн харилцагчдыг «эзэнгүй» болгоно (устгахгүй).
+    await prisma.organization.updateMany({
+      where: { managedByOrganizationId: id },
+      data: { managedByOrganizationId: null },
+    })
+
     await prisma.organization.delete({
       where: { id },
     })
