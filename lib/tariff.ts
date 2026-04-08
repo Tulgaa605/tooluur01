@@ -6,6 +6,9 @@ type CategoryTariffDoc = {
   baseDirtyFee?: number
   cleanPerM3?: number
   dirtyPerM3?: number
+  heatBaseFee?: number
+  heatPerM3?: number
+  heatPerM2?: number
 }
 
 /** Шинэ байгууллага үүсгэхэд тухайн төрлийн одоогийн тариф байвал тухайн сарын organization tariff үүсгэнэ. */
@@ -32,6 +35,9 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
       baseDirtyFee: true,
       cleanPerM3: true,
       dirtyPerM3: true,
+      heatBaseFee: true,
+      heatPerM3: true,
+      heatPerM2: true,
     },
   })
   const catDocs: CategoryTariffDoc[] = catRow
@@ -41,6 +47,9 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
           baseDirtyFee: catRow.baseDirtyFee,
           cleanPerM3: catRow.cleanPerM3,
           dirtyPerM3: catRow.dirtyPerM3,
+          heatBaseFee: catRow.heatBaseFee,
+          heatPerM3: catRow.heatPerM3,
+          heatPerM2: catRow.heatPerM2,
         },
       ]
     : []
@@ -71,6 +80,9 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
           baseDirtyFee: true,
           cleanPerM3: true,
           dirtyPerM3: true,
+          heatBaseFee: true,
+          heatPerM3: true,
+          heatPerM2: true,
         },
       })
       if (latest) {
@@ -86,6 +98,9 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
       baseDirtyFee: 0,
       cleanPerM3: 0,
       dirtyPerM3: 0,
+      heatBaseFee: 0,
+      heatPerM3: 0,
+      heatPerM2: 0,
     }
   }
 
@@ -94,6 +109,9 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
   const baseDirtyFee = pipeBase ? pipeBase.baseDirtyFee : (d.baseDirtyFee ?? 0)
   const cleanPerM3 = d.cleanPerM3 ?? 0
   const dirtyPerM3 = d.dirtyPerM3 ?? 0
+  const heatBaseFee = d.heatBaseFee ?? 0
+  const heatPerM3 = d.heatPerM3 ?? 0
+  const heatPerM2 = d.heatPerM2 ?? 0
 
   await prisma.organizationTariff.create({
     data: {
@@ -104,6 +122,9 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
       baseDirtyFee,
       cleanPerM3,
       dirtyPerM3,
+      heatBaseFee,
+      heatPerM3,
+      heatPerM2,
     },
   })
   return 1

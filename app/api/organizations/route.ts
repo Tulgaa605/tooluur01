@@ -113,24 +113,91 @@ export async function POST(request: NextRequest) {
       (user.role === Role.ACCOUNTANT || user.role === Role.MANAGER) &&
       user.organizationId != null
 
-    const organization = await prisma.organization.create({
-      data: {
-        name: data.name.trim(),
-        ...(data.ovog !== undefined && { ovog: data.ovog?.trim() || null }),
-        code: data.code?.trim() || null,
-        address: data.address?.trim() || null,
-        phone: data.phone?.trim() || null,
-        email: data.email?.trim() || null,
-        connectionNumber: data.connectionNumber?.trim() || null,
-        category,
-        baseCleanFee,
-        baseDirtyFee,
-        year: data.year || currentYear,
-        ...(tagManagedByOffice ? { managedByOrganizationId: user.organizationId } : {}),
-        createdByUserId: user.userId,
-        updatedByUserId: user.userId,
-      },
+    const name = String(data.name).trim()
+
+    // Excel import зэрэг үед ижил нэртэй мөр таарвал create биш update хийж үргэлжлүүлнэ.
+    const existingByName = await prisma.organization.findUnique({
+      where: { name },
+      select: { id: true, managedByOrganizationId: true, category: true },
     })
+
+    const orgData = {
+      name,
+      ...(data.ovog !== undefined && { ovog: data.ovog?.trim() || null }),
+      code: data.code?.trim() || null,
+      address: data.address?.trim() || null,
+      phone: data.phone?.trim() || null,
+      email: data.email?.trim() || null,
+      connectionNumber: data.connectionNumber?.trim() || null,
+      category,
+      baseCleanFee,
+      baseDirtyFee,
+      year: data.year || currentYear,
+      ...(tagManagedByOffice ? { managedByOrganizationId: user.organizationId } : {}),
+      updatedByUserId: user.userId,
+    }
+
+    const organization = existingByName
+      ? await prisma.organization.update({
+          where: { id: existingByName.id },
+          data: orgData,
+        })
+      : await prisma.organization.create({
+          data: {
+            ...orgData,
+            createdByUserId: user.userId,
+          },
+        })
+
+    // Import: хүсвэл тоолуур автоматаар үүсгэнэ. Тоолуурын дугаар нь 1-с эхэлсэн дараалал (1,2,3...).
+    const shouldAutoCreateMeter = Boolean((data as any).autoCreateMeter)
+    if (shouldAutoCreateMeter) {
+      const hasMeter = await prisma.meter.findFirst({
+        where: { organizationId: organization.id },
+        select: { id: true },
+      })
+      if (!hasMeter) {
+        // Дарааллын хамгийн сүүлийн тоог Mongo aggregation-аар хурдан олно (зөвхөн бүхэл тоон дугаартай).
+        let maxN = 0
+        try {
+          const r = await prisma.meter.aggregateRaw({
+            pipeline: [
+              { $match: { meterNumber: { $regex: '^[0-9]+$' } } },
+              { $addFields: { n: { $toInt: '$meterNumber' } } },
+              { $group: { _id: null, maxN: { $max: '$n' } } },
+              { $project: { _id: 0, maxN: 1 } },
+            ],
+          })
+          const first = Array.isArray(r) ? (r[0] as any) : undefined
+          const m = typeof first?.maxN === 'number' ? first.maxN : 0
+          if (Number.isFinite(m) && m > 0) maxN = m
+        } catch {
+          // aggregateRaw боломжгүй/алдаатай үед maxN=0 (доорх retry loop давхардлыг хамгаална)
+          maxN = 0
+        }
+        // race condition байж болох тул давхардвал +1 хийж retry
+        for (let step = 1; step <= 20; step++) {
+          const candidate = String(maxN + step)
+          try {
+            await prisma.meter.create({
+              data: {
+                meterNumber: candidate,
+                organizationId: organization.id,
+                year: data.year || currentYear,
+                billingMode: 'WATER',
+                serviceStatus: 'NORMAL',
+                createdByUserId: user.userId,
+                updatedByUserId: user.userId,
+              },
+            })
+            break
+          } catch (e: any) {
+            if (e?.code === 'P2002') continue
+            throw e
+          }
+        }
+      }
+    }
 
     let newToken: string | undefined
     if (user.organizationId == null) {

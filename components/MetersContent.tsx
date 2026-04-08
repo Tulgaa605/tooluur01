@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
+import * as XLSX from 'xlsx'
 
 interface Organization {
   id: string
@@ -11,18 +12,26 @@ interface Organization {
 }
 
 type MeterServiceStatus = 'NORMAL' | 'DAMAGED' | 'REPLACED'
+type MeterBillingMode = 'WATER' | 'HEAT' | 'WATER_HEAT'
 
 interface Meter {
   id: string
   meterNumber: string
   year: number
   organizationId: string
+  billingMode?: MeterBillingMode | string
   serviceStatus?: MeterServiceStatus | string
   organization: {
     name: string
   }
 }
 type OwnerType = 'organization' | 'household'
+
+const nameCollator = new Intl.Collator(['mn', 'ru', 'en'], {
+  sensitivity: 'base',
+  numeric: true,
+  ignorePunctuation: true,
+})
 
 export default function MetersContent() {
   const [meters, setMeters] = useState<Meter[]>([])
@@ -33,12 +42,15 @@ export default function MetersContent() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const currentYear = new Date().getFullYear()
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
   const [form, setForm] = useState({
     ownerType: '' as OwnerType | '',
     meterNumber: '',
     organizationId: '',
     year: currentYear,
     serviceStatus: 'NORMAL' as MeterServiceStatus,
+    billingMode: 'WATER' as MeterBillingMode,
   })
 
   useEffect(() => {
@@ -65,6 +77,54 @@ export default function MetersContent() {
       })
       .catch(() => setHouseholds([]))
   }, [])
+
+  useEffect(() => {
+    if (!excelExportMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = excelExportMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setExcelExportMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [excelExportMenu])
+
+  const organizationsSorted = useMemo(() => {
+    const arr = [...organizations]
+    arr.sort((a, b) => nameCollator.compare(String(a.name ?? ''), String(b.name ?? '')))
+    return arr
+  }, [organizations])
+
+  const householdsSorted = useMemo(() => {
+    const arr = [...households]
+    arr.sort((a, b) => nameCollator.compare(String(a.name ?? ''), String(b.name ?? '')))
+    return arr
+  }, [households])
+
+  const exportMetersXlsx = () => {
+    const rows = meters.map((m) => ({
+      'Тоолуурын дугаар': m.meterNumber ?? '',
+      'Хэрэглэгч': m.organization?.name ?? '',
+      'Он': m.year ?? '',
+      'Төлөв':
+        String(m.serviceStatus ?? 'NORMAL').toUpperCase() === 'DAMAGED'
+          ? 'Эвдэрсэн'
+          : String(m.serviceStatus ?? 'NORMAL').toUpperCase() === 'REPLACED'
+            ? 'Солигдсон'
+            : 'Хэвийн',
+      'Тооцоо':
+        String(m.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
+          ? 'Дулаан'
+          : String(m.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
+            ? 'Ус+дулаан'
+            : 'Ус',
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Meters')
+    XLSX.writeFile(wb, `meters-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
 
   const loadMeters = () => {
     fetchWithAuth('/api/meters')
@@ -105,12 +165,20 @@ export default function MetersContent() {
     try {
       const method = editingId ? 'PUT' : 'POST'
       const body = editingId
-        ? { ...form, id: editingId }
+        ? {
+            id: editingId,
+            meterNumber: form.meterNumber,
+            organizationId: form.organizationId,
+            year: form.year,
+            serviceStatus: form.serviceStatus || 'NORMAL',
+            billingMode: form.billingMode,
+          }
         : {
             meterNumber: form.meterNumber,
             organizationId: form.organizationId,
             year: form.year,
             serviceStatus: form.serviceStatus || 'NORMAL',
+            billingMode: form.billingMode,
           }
 
       const res = await fetchWithAuth('/api/meters', {
@@ -124,7 +192,7 @@ export default function MetersContent() {
 
       setShowForm(false)
       setEditingId(null)
-      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
+      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
       loadMeters()
     } catch (err: any) {
       alert(err.message || 'Алдаа гарлаа')
@@ -137,12 +205,16 @@ export default function MetersContent() {
     const st = String(meter.serviceStatus ?? 'NORMAL').toUpperCase()
     const serviceStatus: MeterServiceStatus =
       st === 'DAMAGED' || st === 'REPLACED' ? st : 'NORMAL'
+    const bm = String(meter.billingMode ?? 'WATER').toUpperCase()
+    const billingMode: MeterBillingMode =
+      bm === 'HEAT' || bm === 'WATER_HEAT' ? (bm as MeterBillingMode) : 'WATER'
     setForm({
       ownerType: inHousehold ? 'household' : 'organization',
       meterNumber: meter.meterNumber,
       organizationId: meter.organizationId,
       year: meter.year ?? currentYear,
       serviceStatus,
+      billingMode,
     })
     setShowForm(true)
   }
@@ -170,14 +242,21 @@ export default function MetersContent() {
   }
 
   return (
-    <div className="px-4 sm:px-0">
+    <div
+      className="px-4 sm:px-0"
+      onContextMenu={(e) => {
+        // Баруун товч: Excel export menu
+        e.preventDefault()
+        setExcelExportMenu({ x: e.clientX, y: e.clientY })
+      }}
+    >
       <div className="mb-8 flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-900">Тоолуурууд</h2>
         <button
           onClick={() => {
             setShowForm(!showForm)
             setEditingId(null)
-            setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
+            setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -193,7 +272,7 @@ export default function MetersContent() {
               onClick={() => {
                 setShowForm(false)
                 setEditingId(null)
-                setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
+                setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
               }}
               aria-hidden="true"
             />
@@ -208,7 +287,7 @@ export default function MetersContent() {
                     onClick={() => {
                       setShowForm(false)
                       setEditingId(null)
-                      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
+                      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
                   >
@@ -251,15 +330,34 @@ export default function MetersContent() {
                       >
                         <option value="">Сонгох</option>
                         {form.ownerType === 'organization' &&
-                          organizations.map(org => (
+                          organizationsSorted.map(org => (
                             <option key={org.id} value={org.id}>{org.name}</option>
                           ))}
                         {form.ownerType === 'household' &&
-                          households.map(h => (
+                          householdsSorted.map(h => (
                             <option key={h.id} value={h.id}>{h.name}</option>
                           ))}
                       </select>
                     )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Тооцооллын төрөл
+                    </label>
+                    <select
+                      value={form.billingMode}
+                      onChange={(e) =>
+                        setForm((p) => ({ ...p, billingMode: e.target.value as MeterBillingMode }))
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    >
+                      <option value="WATER">Ус</option>
+                      <option value="HEAT">Дулааны</option>
+                      <option value="WATER_HEAT">Дулаан — ус</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Айл өрхийн дулаан: м²-ээр; төсөвт байгууллага, ААН: м³-ээр (тариф хуудаснаас).
+                    </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -270,7 +368,6 @@ export default function MetersContent() {
                       value={form.meterNumber}
                       onChange={(e) => setForm(prev => ({ ...prev, meterNumber: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      required
                     />
                   </div>
                   <div>
@@ -313,7 +410,7 @@ export default function MetersContent() {
                       onClick={() => {
                         setShowForm(false)
                         setEditingId(null)
-                        setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL' })
+                        setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                     >
@@ -350,6 +447,9 @@ export default function MetersContent() {
                 Төлөв
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Тооцоо
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Үйлдэл
               </th>
             </tr>
@@ -372,6 +472,13 @@ export default function MetersContent() {
                     : String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'REPLACED'
                       ? 'Солигдсон'
                       : 'Хэвийн'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                  {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
+                    ? 'Дулаан'
+                    : String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
+                      ? 'Ус+дулаан'
+                      : 'Ус'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex gap-2">
@@ -401,6 +508,34 @@ export default function MetersContent() {
           </div>
         )} 
       </div>
+      {excelExportMenu && (
+        <div
+          ref={excelExportMenuRef}
+          style={{
+            position: 'fixed',
+            top: excelExportMenu.y,
+            left: excelExportMenu.x,
+            zIndex: 99999,
+            background: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+            padding: 6,
+            minWidth: 220,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setExcelExportMenu(null)
+              exportMetersXlsx()
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
+          >
+            Excel файл болгох
+          </button>
+        </div>
+      )}
       <ConfirmModal
         open={deleteConfirmId !== null}
         title="Тоолуур устгах"

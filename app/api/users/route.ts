@@ -92,7 +92,6 @@ export async function PUT(request: NextRequest) {
       updateData.organizationId = target.organizationId
     }
 
-    // Only allow role update for MANAGER
     if (data.role && Object.values(Role).includes(data.role as Role)) {
       updateData.role = data.role
     }

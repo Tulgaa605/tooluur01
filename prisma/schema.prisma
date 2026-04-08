@@ -80,6 +80,12 @@ model OrganizationTariff {
   baseDirtyFee   Float        @default(0)
   cleanPerM3     Float        @default(0)
   dirtyPerM3     Float        @default(0)
+  /// Дулааны суурь (₮/сар)
+  heatBaseFee    Float        @default(0)
+  /// Төсөвт / ААН: ₮/м³
+  heatPerM3      Float        @default(0)
+  /// Айл өрх: ₮/м²
+  heatPerM2      Float        @default(0)
   createdByUserId String?     @db.ObjectId
   updatedByUserId String?     @db.ObjectId
   createdByUser   User?       @relation("OrgTariffCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
@@ -97,6 +103,8 @@ model Meter {
   organizationId String        @db.ObjectId
   organization   Organization  @relation(fields: [organizationId], references: [id])
   year           Int           @default(2026)
+  /// WATER | HEAT | WATER_HEAT — ус, дулаан, эсвэл хоёуланг нь тооцно.
+  billingMode    String        @default("WATER")
   /// NORMAL | DAMAGED | REPLACED — хоосон/null = хэвийн (хуучин баримттай нийцэх).
   serviceStatus  String?
   readings       MeterReading[]
@@ -120,6 +128,8 @@ model MeterReading {
   year           Int
   startValue     Float
   endValue       Float
+  /// Дулааны хэрэглээ (м³/м²). HEAT болон WATER_HEAT дээр UI-гээс орж хадгалагдана.
+  heatUsage      Float        @default(0)
   usage          Float
   baseClean      Float        @default(0)
   baseDirty      Float        @default(0)
@@ -127,6 +137,10 @@ model MeterReading {
   dirtyPerM3     Float        @default(0)
   cleanAmount    Float        @default(0)
   dirtyAmount    Float        @default(0)
+  heatBase       Float        @default(0)
+  heatPerM3      Float        @default(0)
+  heatPerM2      Float        @default(0)
+  heatAmount     Float        @default(0)
   subtotal       Float        @default(0)
   vat            Float        @default(0)
   total          Float        @default(0)
@@ -190,6 +204,9 @@ model CategoryTariff {
   baseDirtyFee    Float    @default(0)
   cleanPerM3      Float    @default(0)
   dirtyPerM3      Float    @default(0)
+  heatBaseFee     Float    @default(0)
+  heatPerM3       Float    @default(0)
+  heatPerM2       Float    @default(0)
   createdByUserId String?  @db.ObjectId
   updatedByUserId String?  @db.ObjectId
   createdByUser   User?    @relation("CategoryTariffCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)

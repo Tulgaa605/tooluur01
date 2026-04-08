@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDownTrayIcon, DocumentArrowUpIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
@@ -8,6 +8,8 @@ import {
   downloadHouseholdExcelTemplate,
   parseHouseholdRowsFromExcel,
 } from '@/lib/excel-household-import'
+import * as XLSX from 'xlsx'
+import { downloadOrgExcelTemplate, parseOrgRowsFromExcel } from '@/lib/excel-org-import'
 
 type OrganizationCategory =
   | 'HOUSEHOLD'
@@ -57,6 +59,12 @@ function householdFullNameForSave(ovog: string, givenName: string): string {
   return [o, g].filter(Boolean).join(' ').trim() || 'Иргэн, хувь хүн'
 }
 
+const nameCollator = new Intl.Collator(['mn', 'ru', 'en'], {
+  sensitivity: 'base',
+  numeric: true,
+  ignorePunctuation: true,
+})
+
 export default function UsersContent() {
   const [activeTab, setActiveTab] = useState<'users' | 'organizations'>('users')
   
@@ -98,7 +106,42 @@ export default function UsersContent() {
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'org' | 'household'; id: string } | null>(null)
   const [importingExcel, setImportingExcel] = useState(false)
+  const [importingOrgExcel, setImportingOrgExcel] = useState(false)
   const excelInputRef = useRef<HTMLInputElement>(null)
+  const orgExcelInputRef = useRef<HTMLInputElement>(null)
+
+  const exportHouseholdsToExcel = () => {
+    const rows = households.map((h) => ({
+      'Овог': h.ovog ?? '',
+      'Нэр': householdGivenName(h.name, h.ovog) ?? '',
+      'Код': h.code ?? '',
+      'Хаяг': h.address ?? '',
+      'Утас': h.phone ?? '',
+      'Имэйл': h.email ?? '',
+      'Шугамын хоолой': h.connectionNumber ?? '',
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Иргэн')
+    XLSX.writeFile(wb, `users-household-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
+  const exportOrganizationsToExcel = () => {
+    const rows = orgs.map((o) => ({
+      'Нэр': o.name ?? '',
+      'Код': o.code ?? '',
+      'Хаяг': o.address ?? '',
+      'Утас': o.phone ?? '',
+      'Имэйл': o.email ?? '',
+      'Шугамын хоолой': o.connectionNumber ?? '',
+      'Он': o.year ?? '',
+      'Хэрэглэгчийн төрөл': o.category ? (CATEGORY_LABELS[o.category] || o.category) : '',
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Бусад')
+    XLSX.writeFile(wb, `users-org-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
 
   useEffect(() => {
     loadOrganizations()
@@ -196,39 +239,47 @@ export default function UsersContent() {
         alert('Excel-д өгөгдөл олдсонгүй. Эхний хуудас, толгой мөр (Овог, Нэр, …) зөв эсэхийг шалгана уу.')
         return
       }
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i]
-        const fullName = householdFullNameForSave(r.ovog || '', r.givenName || '')
-        if (!fullName.trim()) {
-          errors.push(`Мөр ${i + 2}: овог, нэр хоосон`)
-          continue
-        }
-        try {
-          const orgRes = await fetchWithAuth('/api/organizations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              name: fullName,
-              ovog: r.ovog?.trim() || null,
-              code: r.code?.trim() || null,
-              address: r.address?.trim() || null,
-              phone: r.phone?.trim() || null,
-              email: r.email?.trim() || null,
-              connectionNumber: (r.connectionNumber || '15').trim() || '15',
-              category: 'HOUSEHOLD',
-            }),
-          })
-          const orgData = await orgRes.json()
-          if (!orgRes.ok) {
-            errors.push(`Мөр ${i + 2}: ${orgData.error || orgData.message || 'алдаа'}`)
+      const CONCURRENCY = 6
+      let nextIndex = 0
+      const worker = async () => {
+        while (true) {
+          const i = nextIndex++
+          if (i >= rows.length) return
+          const r = rows[i]
+          const fullName = householdFullNameForSave(r.ovog || '', r.givenName || '')
+          if (!fullName.trim()) {
+            errors.push(`Мөр ${i + 2}: овог, нэр хоосон`)
             continue
           }
-          ok += 1
-        } catch (err: unknown) {
-          errors.push(`Мөр ${i + 2}: ${err instanceof Error ? err.message : 'алдаа'}`)
+          try {
+            const orgRes = await fetchWithAuth('/api/organizations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                name: fullName,
+                ovog: r.ovog?.trim() || null,
+                code: r.code?.trim() || null,
+                address: r.address?.trim() || null,
+                phone: r.phone?.trim() || null,
+                email: r.email?.trim() || null,
+                connectionNumber: (r.connectionNumber || '15').trim() || '15',
+                category: 'HOUSEHOLD',
+                autoCreateMeter: true,
+              }),
+            })
+            const orgData = await orgRes.json()
+            if (!orgRes.ok) {
+              errors.push(`Мөр ${i + 2}: ${orgData.error || orgData.message || 'алдаа'}`)
+              continue
+            }
+            ok += 1
+          } catch (err: unknown) {
+            errors.push(`Мөр ${i + 2}: ${err instanceof Error ? err.message : 'алдаа'}`)
+          }
         }
       }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, () => worker()))
       const errText =
         errors.length > 0
           ? `\n\nАлдаатай (${errors.length}):\n${errors.slice(0, 15).join('\n')}${errors.length > 15 ? '\n…' : ''}`
@@ -240,6 +291,86 @@ export default function UsersContent() {
       alert(err instanceof Error ? err.message : 'Excel уншихад алдаа гарлаа')
     } finally {
       setImportingExcel(false)
+    }
+  }
+
+  const handleOrgExcelFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImportingOrgExcel(true)
+    let ok = 0
+    const errors: string[] = []
+    try {
+      const buf = await file.arrayBuffer()
+      const rows = parseOrgRowsFromExcel(buf)
+      if (rows.length === 0) {
+        alert('Excel-д өгөгдөл олдсонгүй. Эхний хуудас, толгой мөр (Нэр, Код, …) зөв эсэхийг шалгана уу.')
+        return
+      }
+      const CONCURRENCY = 6
+      let nextIndex = 0
+      const worker = async () => {
+        while (true) {
+          const i = nextIndex++
+          if (i >= rows.length) return
+          const r = rows[i]
+          const name = String(r.name ?? '').trim()
+          if (!name) {
+            errors.push(`Мөр ${i + 2}: нэр хоосон`)
+            continue
+          }
+          const catRaw = String(r.category ?? '').trim().toUpperCase()
+          const allowed = new Set([
+            'ORGANIZATION',
+            'BUSINESS',
+            'TRANSPORT_DISPOSAL',
+            'TRANSPORT_RECEPTION',
+            'WATER_POINT',
+          ])
+          const category = allowed.has(catRaw) ? catRaw : 'ORGANIZATION'
+          const yearNum = Number(String(r.year ?? '').trim())
+          const year = Number.isFinite(yearNum) && yearNum >= 2000 && yearNum <= 2100 ? yearNum : undefined
+          try {
+            const orgRes = await fetchWithAuth('/api/organizations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                name,
+                code: String(r.code ?? '').trim() || null,
+                address: String(r.address ?? '').trim() || null,
+                phone: String(r.phone ?? '').trim() || null,
+                email: String(r.email ?? '').trim() || null,
+                connectionNumber: (String(r.connectionNumber ?? '') || '15').trim() || '15',
+                category,
+                ...(year ? { year } : {}),
+                autoCreateMeter: true,
+              }),
+            })
+            const orgData = await orgRes.json()
+            if (!orgRes.ok) {
+              errors.push(`Мөр ${i + 2}: ${orgData.error || orgData.message || 'алдаа'}`)
+              continue
+            }
+            ok += 1
+          } catch (err: unknown) {
+            errors.push(`Мөр ${i + 2}: ${err instanceof Error ? err.message : 'алдаа'}`)
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, () => worker()))
+      const errText =
+        errors.length > 0
+          ? `\n\nАлдаатай (${errors.length}):\n${errors.slice(0, 15).join('\n')}${errors.length > 15 ? '\n…' : ''}`
+          : ''
+      alert(`Импорт дууслаа.\nАмжилттай: ${ok}${errText}`)
+      loadOrganizations()
+      loadHouseholds()
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Excel уншихад алдаа гарлаа')
+    } finally {
+      setImportingOrgExcel(false)
     }
   }
 
@@ -373,6 +504,22 @@ export default function UsersContent() {
     }
   }
 
+  const householdsSorted = useMemo(() => {
+    const arr = [...households]
+    arr.sort((a, b) => {
+      const aName = householdGivenName(a.name, a.ovog)
+      const bName = householdGivenName(b.name, b.ovog)
+      return nameCollator.compare(aName, bName)
+    })
+    return arr
+  }, [households])
+
+  const orgsSorted = useMemo(() => {
+    const arr = [...orgs]
+    arr.sort((a, b) => nameCollator.compare(String(a.name ?? ''), String(b.name ?? '')))
+    return arr
+  }, [orgs])
+
   return (
     <div className="px-4 sm:px-0">
       <div className="mb-8">
@@ -416,7 +563,16 @@ export default function UsersContent() {
           />
           <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end sm:items-center">
             <div className="flex flex-wrap gap-2 justify-end">
-              {/* <button
+              <button
+                type="button"
+                onClick={() => exportHouseholdsToExcel()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 text-sm"
+                title="Жагсаалтыг Excel рүү татах"
+              >
+                <ArrowDownTrayIcon className="h-5 w-5 shrink-0" />
+                Excel татах
+              </button>
+              <button
                 type="button"
                 disabled={importingExcel}
                 onClick={() => excelInputRef.current?.click()}
@@ -424,7 +580,7 @@ export default function UsersContent() {
               >
                 <DocumentArrowUpIcon className="h-5 w-5 shrink-0" />
                 {importingExcel ? 'Импортлох…' : 'Excel-ээс импорт'}
-              </button> */}
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -459,7 +615,7 @@ export default function UsersContent() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {households.map((h) => (
+                  {householdsSorted.map((h) => (
                     <tr key={h.id}>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.ovog ?? '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">
@@ -624,7 +780,33 @@ export default function UsersContent() {
       {/* Organizations Tab */}
       {activeTab === 'organizations' && (
         <>
-          <div className="mb-6 flex justify-end">
+          <input
+            ref={orgExcelInputRef}
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            onChange={handleOrgExcelFileChange}
+          />
+          <div className="mb-6 flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={importingOrgExcel}
+              onClick={() => orgExcelInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-4 py-2 border border-primary-300 rounded-md text-primary-700 bg-primary-50 hover:bg-primary-100 disabled:opacity-50 text-sm"
+              title="Excel-ээс импорт"
+            >
+              <DocumentArrowUpIcon className="h-5 w-5 shrink-0" />
+              {importingOrgExcel ? 'Импортлох…' : 'Excel-ээс импорт'}
+            </button>
+            <button
+              type="button"
+              onClick={() => exportOrganizationsToExcel()}
+              className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 text-sm"
+              title="Жагсаалтыг Excel рүү татах"
+            >
+              <ArrowDownTrayIcon className="h-5 w-5 shrink-0" />
+              Excel татах
+            </button>
             <button
               onClick={() => {
                 if (!showOrgForm) {
@@ -835,7 +1017,7 @@ export default function UsersContent() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {orgs.map((org) => (
+                  {orgsSorted.map((org) => (
                     <tr key={org.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {org.name}

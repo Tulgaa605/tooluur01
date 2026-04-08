@@ -43,11 +43,36 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Зарим хуучин бүртгэлд (ялангуяа ACCOUNTANT/MANAGER) organizationId хоосон үлдсэн байж болно.
+    // Тэгвэл scope-д тулгуурласан бүх үйлдлүүд (тоолуур/заалт/харилцагч) ажиллахгүй тул login үед засварлана.
+    let organizationId = user.organizationId
+    const role = user.role as Role
+    if ((role === Role.ACCOUNTANT || role === Role.MANAGER) && !organizationId) {
+      const currentYear = new Date().getFullYear()
+      const orgName = `${user.name.trim()} (${user.email})`
+      const org = await prisma.organization.create({
+        data: {
+          name: orgName,
+          category: 'ORGANIZATION',
+          baseCleanFee: 0,
+          baseDirtyFee: 0,
+          year: currentYear,
+          createdByUserId: user.id,
+          updatedByUserId: user.id,
+        },
+      })
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { organizationId: org.id },
+      })
+      organizationId = org.id
+    }
+
     const token = generateToken({
       userId: user.id,
       email: user.email,
-      role: user.role as Role,
-      organizationId: user.organizationId,
+      role,
+      organizationId,
     })
 
     const response = NextResponse.json({
@@ -58,7 +83,7 @@ export async function POST(request: NextRequest) {
         email: user.email,
         name: user.name,
         role: user.role,
-        organizationId: user.organizationId,
+        organizationId,
       },
     })
 

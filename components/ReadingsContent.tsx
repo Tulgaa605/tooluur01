@@ -7,9 +7,57 @@ import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { PlusIcon } from '@heroicons/react/24/outline'
+import * as XLSX from 'xlsx'
+import {
+  computeReadingMoney,
+  computeReadingMoneySplit,
+  normalizeBillingMode,
+} from '@/lib/meter-reading-calc-core'
+import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
 
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
+
+const WATER_GRID_FIELDS = new Set(['baseDirty', 'baseClean', 'dirtyAmount', 'cleanAmount'])
+const HEAT_GRID_FIELDS = new Set(['heatReading', 'heatAmount'])
+
+function readingRowUsesWater(r: Reading): boolean {
+  const m = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
+  return m === 'WATER' || m === 'WATER_HEAT'
+}
+
+function readingRowUsesHeat(r: Reading): boolean {
+  const m = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
+  return m === 'HEAT' || m === 'WATER_HEAT'
+}
+
+/** Заалт оруулах модал: сонгосон он/сарт тохирох мөр эсэх */
+function modalRowIsActivePeriod(
+  params: { data?: Reading },
+  showModal: boolean,
+  y: number,
+  m: number
+): boolean {
+  return !!(
+    showModal &&
+    params.data?.year === y &&
+    params.data?.month === m
+  )
+}
+
+function filterReadingGridColumnsByBilling(
+  cols: ColDef<Reading>[],
+  needsWater: boolean,
+  needsHeat: boolean
+): ColDef<Reading>[] {
+  return cols.filter((c) => {
+    const key = (c.colId ?? c.field) as string | undefined
+    if (!key) return true
+    if (!needsWater && WATER_GRID_FIELDS.has(key)) return false
+    if (!needsHeat && HEAT_GRID_FIELDS.has(key)) return false
+    return true
+  })
+}
 
 /**
  * AG Grid v31+ reactive cell editor: imperative getValue() энд ашиглагдахгүй.
@@ -105,6 +153,9 @@ interface OrganizationTariff {
   baseDirtyFee: number
   cleanPerM3: number
   dirtyPerM3: number
+  heatBaseFee?: number
+  heatPerM3?: number
+  heatPerM2?: number
   organization?: {
     id: string
     category?: string
@@ -119,12 +170,16 @@ interface CategoryTariff {
   baseDirtyFee: number
   cleanPerM3: number
   dirtyPerM3: number
+  heatBaseFee?: number
+  heatPerM3?: number
+  heatPerM2?: number
 }
 
 interface Meter {
   id: string
   meterNumber: string
   organizationId: string
+  billingMode?: string | null
   serviceStatus?: string | null
   organization?: {
     name: string
@@ -157,26 +212,37 @@ interface Reading {
   startValue: number
   endValue: number
   usage: number
+  heatUsage?: number
   baseClean: number
   baseDirty: number
   cleanPerM3?: number
   dirtyPerM3?: number
+  heatBase?: number
+  heatPerM3?: number
+  heatPerM2?: number
   cleanAmount: number
   dirtyAmount: number
+  heatAmount?: number
   subtotal: number
   vat: number
   total: number
   meterId?: string
+  billingMode?: string
   meter?: {
     id?: string
     meterNumber: string
+    billingMode?: string | null
   }
   organizationId?: string
   organization?: {
     name: string
     id: string
     code: string | null
+    category?: string
   }
+  /** Зөвхөн pinned «Нийт дүн» мөр */
+  usageWaterDiffSum?: number
+  heatReadingSum?: number
   _isNew?: boolean
 }
 
@@ -199,10 +265,71 @@ export default function ReadingsContent() {
   const gridRef = useRef<AgGridReact>(null)
   // `mouse right` дарахад browser-ийн context menu гарч ирэхээс сэргийлж,
   // grid доторх үед өөрийн жижиг menu харуулж Excel export хийхээр salt.
+  const applyReadingTotals = useCallback((reading: Reading) => {
+    const orgCategory = reading.organization?.category ?? 'HOUSEHOLD'
+    const billingMode = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
+    let usage: number
+    const heatUsage = Math.max(0, Number(reading.heatUsage ?? 0))
+    if (billingMode === 'HEAT') {
+      usage = Math.max(0, Number(reading.usage ?? 0))
+      reading.usage = usage
+    } else {
+      usage =
+        (reading.endValue || 0) > (reading.startValue || 0)
+          ? (reading.endValue || 0) - (reading.startValue || 0)
+          : 0
+      reading.usage = usage
+    }
+    const water = {
+      baseClean: reading.baseClean || 0,
+      baseDirty: reading.baseDirty || 0,
+      cleanPerM3: reading.cleanPerM3 || 0,
+      dirtyPerM3: reading.dirtyPerM3 || 0,
+    }
+    const heat = {
+      heatBase: reading.heatBase || 0,
+      heatPerM3: reading.heatPerM3 || 0,
+      heatPerM2: reading.heatPerM2 || 0,
+    }
+    const m =
+      billingMode === 'WATER_HEAT'
+        ? computeReadingMoneySplit(usage, heatUsage, orgCategory, billingMode, water, heat)
+        : computeReadingMoney(usage, orgCategory, billingMode, water, heat)
+    reading.baseClean = m.baseClean
+    reading.baseDirty = m.baseDirty
+    reading.cleanPerM3 = m.cleanPerM3
+    reading.dirtyPerM3 = m.dirtyPerM3
+    reading.heatBase = m.heatBase
+    reading.heatPerM3 = m.heatPerM3
+    reading.heatPerM2 = m.heatPerM2
+    reading.cleanAmount = m.cleanAmount
+    reading.dirtyAmount = m.dirtyAmount
+    reading.heatAmount = m.heatAmount
+    reading.subtotal = m.subtotal
+    reading.vat = m.vat
+    reading.total = m.total
+  }, [])
+
   const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
+  const [modalExcelExportMenu, setModalExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const modalExcelExportMenuRef = useRef<HTMLDivElement | null>(null)
   const modalGridRef = useRef<AgGridReact>(null)
-  const modalOriginalRowsRef = useRef<Map<string, { startValue: number; endValue: number; meterId?: string; baseClean: number; baseDirty: number }>>(new Map())
+  const modalOriginalRowsRef = useRef<
+    Map<
+      string,
+      {
+        startValue: number
+        endValue: number
+        meterId?: string
+        baseClean: number
+        baseDirty: number
+        usage: number
+        heatUsage: number
+        heatAmount: number
+      }
+    >
+  >(new Map())
   const numberColStyle = useMemo(
     () => ({
       cellClass: 'ag-right-aligned-cell',
@@ -227,6 +354,18 @@ export default function ReadingsContent() {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [excelExportMenu])
 
+  useEffect(() => {
+    if (!modalExcelExportMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = modalExcelExportMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setModalExcelExportMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [modalExcelExportMenu])
+
   // Modal-ийн дотор зөвхөн сонгосон (Он,Сар)-ын мөрүүдийг л харуулна.
   // Гэхдээ data/тооцоололд бүх period-үүд ашиглагдана (save үед serialize).
   const visibleModalRows = useMemo(() => {
@@ -244,7 +383,19 @@ export default function ReadingsContent() {
     return `new:${r.organizationId ?? 'x'}-${r.meterId ?? 'x'}-${r.year}-${r.month}`
   }, [])
   const snapshotRows = useCallback((rows: Reading[]) => {
-    const m = new Map<string, { startValue: number; endValue: number; meterId?: string; baseClean: number; baseDirty: number }>()
+    const m = new Map<
+      string,
+      {
+        startValue: number
+        endValue: number
+        meterId?: string
+        baseClean: number
+        baseDirty: number
+        usage: number
+        heatUsage: number
+        heatAmount: number
+      }
+    >()
     for (const r of rows) {
       m.set(getRowSnapshotKey(r), {
         startValue: Number(r.startValue || 0),
@@ -252,6 +403,9 @@ export default function ReadingsContent() {
         meterId: r.meterId,
         baseClean: Number(r.baseClean || 0),
         baseDirty: Number(r.baseDirty || 0),
+        usage: Number(r.usage ?? 0),
+        heatUsage: Number(r.heatUsage ?? 0),
+        heatAmount: Number(r.heatAmount || 0),
       })
     }
     modalOriginalRowsRef.current = m
@@ -337,8 +491,7 @@ export default function ReadingsContent() {
       if (filterYear.trim()) params.append('year', filterYear.trim())
 
       params.append('limit', '300')
-      // Одоогийн тариф + шугамын суурь хураамжаар дүнг харуулна (хуучин хадгалсан snapshot биш)
-      params.append('recalculate', '1')
+      // DB-д хадгалсан дүн (гуараар оруулсан дулаан зэрэг). recalculate=1 бол тарифаар дахин тооцож хадгалсныг дарна.
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
       let data: any = null
       try {
@@ -351,10 +504,12 @@ export default function ReadingsContent() {
         const normalized = data.map((r: any) => {
           const startVal = r.startValue ?? r.start_value
           const endVal = r.endValue ?? r.end_value
+          const heatUsageVal = r.heatUsage ?? r.heat_usage
           return {
             ...r,
             startValue: startVal != null && startVal !== '' ? Number(startVal) : 0,
             endValue: endVal != null && endVal !== '' ? Number(endVal) : 0,
+            heatUsage: heatUsageVal != null && heatUsageVal !== '' ? Number(heatUsageVal) : 0,
           }
         })
         setReadings(normalized as Reading[])
@@ -410,6 +565,15 @@ export default function ReadingsContent() {
     [setExcelExportMenu]
   )
 
+  const handleModalCellContextMenu = useCallback(
+    (params: any) => {
+      params?.event?.preventDefault?.()
+      params?.event?.stopPropagation?.()
+      setModalExcelExportMenu({ x: params?.event?.clientX ?? 0, y: params?.event?.clientY ?? 0 })
+    },
+    [setModalExcelExportMenu]
+  )
+
   const handleCellValueChanged = useCallback(async (params: any) => {
     const reading = params.data as Reading
     const changedField = params.colDef?.field as string | undefined
@@ -433,7 +597,10 @@ export default function ReadingsContent() {
             if (data && !data.error && typeof data.endValue === 'number') {
               reading.startValue = data.endValue
               reading.endValue = data.endValue
-              params.api.refreshCells({ rowNodes: [params.node], columns: ['startValue', 'endValue'] })
+              params.api.refreshCells({
+                rowNodes: [params.node],
+                columns: ['startValue', 'endValue', 'waterDiff', 'usage', 'heatReading', 'heatAmount'],
+              })
             }
           }
         } catch (err) {
@@ -441,24 +608,43 @@ export default function ReadingsContent() {
         }
       }
 
-      // Calculate all values
-      const usage = (reading.endValue || 0) > (reading.startValue || 0) 
-        ? (reading.endValue || 0) - (reading.startValue || 0) 
-        : 0
-      reading.usage = usage
-      
-      // Get cleanPerM3 and dirtyPerM3 (default to 0 for now, as per save function)
-      const cleanPerM3 = reading.cleanPerM3 || 0
-      const dirtyPerM3 = reading.dirtyPerM3 || 0
-      const baseClean = reading.baseClean || 0
-      const baseDirty = reading.baseDirty || 0
-      
-      // Calculate amounts
-      reading.cleanAmount = usage * cleanPerM3 + baseClean
-      reading.dirtyAmount = usage * dirtyPerM3 + baseDirty
-      reading.subtotal = reading.cleanAmount + reading.dirtyAmount
-      reading.vat = reading.subtotal * 0.1
-      reading.total = reading.subtotal + reading.vat
+      // Дулааны хэрэглээ (м³/м²): heatUsage дээр орно → heatUsage-оор мөнгийг дахин бодно.
+      if (changedField === 'heatUsage' && readingRowUsesHeat(reading)) {
+        const u = Math.max(0, Number(reading.heatUsage ?? 0))
+        reading.heatUsage = u
+        const orgCategory = reading.organization?.category ?? 'HOUSEHOLD'
+        const billingMode = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
+        const water = {
+          baseClean: reading.baseClean || 0,
+          baseDirty: reading.baseDirty || 0,
+          cleanPerM3: reading.cleanPerM3 || 0,
+          dirtyPerM3: reading.dirtyPerM3 || 0,
+        }
+        const heat = {
+          heatBase: reading.heatBase || 0,
+          heatPerM3: reading.heatPerM3 || 0,
+          heatPerM2: reading.heatPerM2 || 0,
+        }
+        const m =
+          billingMode === 'WATER_HEAT'
+            ? computeReadingMoneySplit(Number(reading.usage ?? 0), u, orgCategory, billingMode, water, heat)
+            : computeReadingMoney(u, orgCategory, billingMode, water, heat)
+        reading.baseClean = m.baseClean
+        reading.baseDirty = m.baseDirty
+        reading.cleanPerM3 = m.cleanPerM3
+        reading.dirtyPerM3 = m.dirtyPerM3
+        reading.heatBase = m.heatBase
+        reading.heatPerM3 = m.heatPerM3
+        reading.heatPerM2 = m.heatPerM2
+        reading.cleanAmount = m.cleanAmount
+        reading.dirtyAmount = m.dirtyAmount
+        reading.heatAmount = m.heatAmount
+        reading.subtotal = m.subtotal
+        reading.vat = m.vat
+        reading.total = m.total
+      } else {
+        applyReadingTotals(reading)
+      }
 
       // Дараагийн тикт refresh — commit дуусахаас өмнө refreshCells зарим тохиолдолд утга алдагдуулна
       const api = params.api
@@ -501,18 +687,7 @@ export default function ReadingsContent() {
           // start-оос бага end болохоос сэргийлнэ.
           if (Number(nextRow.endValue || 0) < carried) nextRow.endValue = carried
 
-          nextRow.usage =
-            (nextRow.endValue || 0) > (nextRow.startValue || 0)
-              ? (nextRow.endValue || 0) - (nextRow.startValue || 0)
-              : 0
-
-          const nextCleanPerM3 = nextRow.cleanPerM3 || 0
-          const nextDirtyPerM3 = nextRow.dirtyPerM3 || 0
-          nextRow.cleanAmount = nextRow.usage * nextCleanPerM3 + (nextRow.baseClean || 0)
-          nextRow.dirtyAmount = nextRow.usage * nextDirtyPerM3 + (nextRow.baseDirty || 0)
-          nextRow.subtotal = nextRow.cleanAmount + nextRow.dirtyAmount
-          nextRow.vat = nextRow.subtotal * 0.1
-          nextRow.total = nextRow.subtotal + nextRow.vat
+          applyReadingTotals(nextRow)
 
           const key = `${meterId}-${Number(nextRow.year)}-${Number(nextRow.month)}`
           const nodeForNext = nodesByKey.get(key)
@@ -532,7 +707,20 @@ export default function ReadingsContent() {
             api.refreshCells({
               force: true,
               rowNodes: rowNodesToRefresh,
-              columns: ['startValue', 'endValue', 'usage', 'cleanAmount', 'dirtyAmount', 'subtotal', 'vat', 'total'],
+              columns: [
+                'startValue',
+                'endValue',
+                'waterDiff',
+                'usage',
+                'heatUsage',
+                'heatReading',
+                'cleanAmount',
+                'dirtyAmount',
+                'heatAmount',
+                'subtotal',
+                'vat',
+                'total',
+              ],
             })
           }
         } catch {
@@ -572,7 +760,10 @@ export default function ReadingsContent() {
             if (data && !data.error && typeof data.endValue === 'number') {
               reading.startValue = data.endValue
               reading.endValue = data.endValue
-              params.api.refreshCells({ rowNodes: [params.node], columns: ['startValue', 'endValue'] })
+              params.api.refreshCells({
+                rowNodes: [params.node],
+                columns: ['startValue', 'endValue', 'waterDiff', 'usage', 'heatReading', 'heatAmount'],
+              })
             }
           }
         } catch (err) {
@@ -615,7 +806,7 @@ export default function ReadingsContent() {
         setTimeout(() => setMessage(null), 3000)
       }
     }
-  }, [fetchReadings, showAddModal])
+  }, [fetchReadings, showAddModal, applyReadingTotals])
 
   const latestOrgTariffByOrgId = useMemo(() => {
     const byOrg = new Map<string, OrganizationTariff>()
@@ -659,6 +850,142 @@ export default function ReadingsContent() {
     return byCategory
   }, [categoryTariffs])
 
+  /**
+   * «Дулаан» (мөнгө): зөрүү × сүүлийн дулааны тариф + суурь.
+   * Мөрөн дээр хадгалагдсан heatPerM3/heatPerM2 ихэнхдээ 0 тул buildOneRow-той ижилээр
+   * байгууллага / төрлийн тарифаас уншина.
+   */
+  const getTariffHeatDisplayAmount = useCallback(
+    (r: Reading | undefined): number => {
+      if (!r || !readingRowUsesHeat(r)) return 0
+      const billingMode = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
+      // Дулааны дүн: үндсэн хүснэгтийн «м³/м²»-д харагдаж буй утгатай адил (HEAT/WATER_HEAT = heatUsage).
+      const heatQty =
+        billingMode === 'HEAT' || billingMode === 'WATER_HEAT'
+          ? Number(r.heatUsage ?? r.usage ?? 0) || 0
+          : 0
+      const orgId = r.organizationId
+      const category =
+        r.organization?.category ??
+        organizations.find((o) => o.id === orgId)?.category ??
+        'HOUSEHOLD'
+
+      let heatBase = r.heatBase ?? 0
+      let heatPerM3 = r.heatPerM3 ?? 0
+      let heatPerM2 = r.heatPerM2 ?? 0
+
+      let tariff: OrganizationTariff | CategoryTariff | undefined
+      if (orgId) {
+        tariff = latestOrgTariffByOrgId.get(orgId)
+      }
+      if (!tariff && category) {
+        tariff =
+          latestCategoryTariffByCategory.get(category) ?? latestOrgTariffByCategory.get(category)
+      }
+
+      if (tariff) {
+        heatBase = tariff.heatBaseFee ?? 0
+        heatPerM3 = tariff.heatPerM3 ?? 0
+        heatPerM2 = tariff.heatPerM2 ?? 0
+      }
+
+      const cat = String(category ?? '').toUpperCase()
+      let perM3 = Number(heatPerM3) || 0
+      let perM2 = Number(heatPerM2) || 0
+      // Tariff API-г харах эрхгүй (эсвэл DB-д category tariff байхгүй) үед fallback default үнэ.
+      if (perM3 === 0 && perM2 === 0 && cat) {
+        const d = heatDefaultsForCategory(cat)
+        perM3 = Number(d.heatPerM3) || 0
+        perM2 = Number(d.heatPerM2) || 0
+      }
+      const unitRate =
+        cat === 'HOUSEHOLD'
+          ? perM2 > 0
+            ? perM2
+            : perM3
+          : perM3 > 0
+            ? perM3
+            : perM2
+      return heatQty * (Number(unitRate) || 0) + (Number(heatBase) || 0)
+    },
+    [
+      latestOrgTariffByOrgId,
+      latestCategoryTariffByCategory,
+      latestOrgTariffByCategory,
+      organizations,
+    ],
+  )
+
+  const getDisplaySubtotalVatTotal = useCallback(
+    (r: Reading | undefined): { subtotal: number; vat: number; total: number } => {
+      if (!r) return { subtotal: 0, vat: 0, total: 0 }
+      if (r.organization?.name === 'Нийт дүн') {
+        const subtotal = Number(r.subtotal ?? 0) || 0
+        const vat = Number(r.vat ?? 0) || 0
+        const total = Number(r.total ?? 0) || 0
+        return { subtotal, vat, total }
+      }
+      const clean = Number(r.cleanAmount ?? 0) || 0
+      const dirty = Number(r.dirtyAmount ?? 0) || 0
+      const heat = getTariffHeatDisplayAmount(r)
+      const subtotal = clean + dirty + heat
+      const vat = subtotal * 0.1
+      const total = subtotal + vat
+      return { subtotal, vat, total }
+    },
+    [getTariffHeatDisplayAmount]
+  )
+
+  const exportReadingsGridXlsx = useCallback(() => {
+    const rows = readings.map((r) => ({
+      'Он': r.year ?? '',
+      'Сар': r.month ?? '',
+      'Тоолуур': r.meter?.meterNumber ?? '',
+      'Хэрэглэгч': r.organization?.name ?? '',
+      'Эхний заалт': Number(r.startValue ?? 0) || 0,
+      'Эцсийн заалт': Number(r.endValue ?? 0) || 0,
+      'Зөрүү': (Number(r.endValue ?? 0) || 0) - (Number(r.startValue ?? 0) || 0),
+      'м³/м²': Number(r.heatUsage ?? 0) || 0,
+      'Дулаан': getTariffHeatDisplayAmount(r),
+      'Бохир': Number(r.dirtyAmount ?? 0) || 0,
+      'Цэвэр': Number(r.cleanAmount ?? 0) || 0,
+      'Нийт': getDisplaySubtotalVatTotal(r).subtotal,
+      'НӨАТ': getDisplaySubtotalVatTotal(r).vat,
+      'Нийт дүн': getDisplaySubtotalVatTotal(r).total,
+    }))
+    const year = filterYear || 'all'
+    const month = filterMonth || 'all'
+    const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Readings')
+    XLSX.writeFile(wb, `readings-${year}-${month}.xlsx`)
+  }, [readings, filterYear, filterMonth, getTariffHeatDisplayAmount, getDisplaySubtotalVatTotal])
+
+  const exportModalXlsx = useCallback(() => {
+    const rows = visibleModalRows.map((r) => ({
+      'Он': r.year ?? '',
+      'Сар': r.month ?? '',
+      'Тоолуур': r.meter?.meterNumber ?? '',
+      'Хэрэглэгч': r.organization?.name ?? '',
+      'Эхний заалт': Number(r.startValue ?? 0) || 0,
+      'Эцсийн заалт': Number(r.endValue ?? 0) || 0,
+      'Зөрүү': (Number(r.endValue ?? 0) || 0) - (Number(r.startValue ?? 0) || 0),
+      'м³/м²': Number(r.heatUsage ?? 0) || 0,
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Заалт оруулах')
+    XLSX.writeFile(wb, `readings-modal-${addModalYear}-${String(addModalMonth).padStart(2, '0')}.xlsx`)
+  }, [visibleModalRows, addModalYear, addModalMonth])
+
+  /** «м³/м²» багана: хадгалсан heatUsage (HEAT болон ус+дулаан дээр). */
+  const heatQtyForDisplay = useCallback((r: Reading | undefined): number | null => {
+    if (!r || !readingRowUsesHeat(r)) return null
+    const bm = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
+    if (bm === 'HEAT' || bm === 'WATER_HEAT') return Number(r.heatUsage ?? r.usage ?? 0) || 0
+    return 0
+  }, [])
+
   // Өмнөх сарын заалтаас эхний заалт авч, нэг (org, month, year) мөр үүсгэнэ
   const buildOneRow = useCallback((
     org: Organization,
@@ -692,6 +1019,9 @@ export default function ReadingsContent() {
         tariffForPeriod = latestOrgTariffByCategory.get(org.category)
       }
     }
+    let heatBaseFee = 0
+    let heatPerM3Rate = 0
+    let heatPerM2Rate = 0
     if (tariffForPeriod) {
       if (!pipeFee) {
         baseClean = tariffForPeriod.baseCleanFee ?? 0
@@ -699,10 +1029,27 @@ export default function ReadingsContent() {
       }
       cleanPerM3 = tariffForPeriod.cleanPerM3 ?? 0
       dirtyPerM3 = tariffForPeriod.dirtyPerM3 ?? 0
+      heatBaseFee = tariffForPeriod.heatBaseFee ?? 0
+      heatPerM3Rate = tariffForPeriod.heatPerM3 ?? 0
+      heatPerM2Rate = tariffForPeriod.heatPerM2 ?? 0
     } else if (org && !pipeFee) {
       baseClean = org.baseCleanFee ?? 0
       baseDirty = org.baseDirtyFee ?? 0
     }
+
+    const billingMode = normalizeBillingMode(meter?.billingMode)
+    if (billingMode === 'HEAT') {
+      baseClean = 0
+      baseDirty = 0
+      cleanPerM3 = 0
+      dirtyPerM3 = 0
+    }
+    if (billingMode === 'WATER') {
+      heatBaseFee = 0
+      heatPerM3Rate = 0
+      heatPerM2Rate = 0
+    }
+
     return {
       _isNew: true,
       organizationId: org.id,
@@ -710,21 +1057,30 @@ export default function ReadingsContent() {
         id: org.id,
         name: org.name || '-',
         code: (org as any)?.code ?? null,
+        category: org.category,
       },
       meterId: meter?.id,
-      meter: meter ? { meterNumber: meter.meterNumber } : undefined,
+      billingMode: meter ? String(meter.billingMode ?? 'WATER') : 'WATER',
+      meter: meter
+        ? { id: meter.id, meterNumber: meter.meterNumber, billingMode: meter.billingMode }
+        : undefined,
       month,
       year,
       startValue,
       // Өмнөх сарын эцсийн заалт → энэ сарын эхний болон эцсийн заалтын анхны утга (хэрэглэгч эцсийг өөрчилнө)
       endValue: startValue,
       usage: 0,
+      heatUsage: 0,
       baseClean,
       baseDirty,
       cleanPerM3,
       dirtyPerM3,
+      heatBase: heatBaseFee,
+      heatPerM3: heatPerM3Rate,
+      heatPerM2: heatPerM2Rate,
       cleanAmount: 0,
       dirtyAmount: 0,
+      heatAmount: 0,
       subtotal: 0,
       vat: 0,
       total: 0,
@@ -793,13 +1149,24 @@ export default function ReadingsContent() {
         fetchWithAuth('/api/pipe-fees'),
       ])
       const orgData = await orgRes.json()
-      if (orgRes.ok && Array.isArray(orgData)) setOrganizations(orgData)
       const meterData = await meterRes.json()
-      if (meterRes.ok && Array.isArray(meterData)) setAllMeters(meterData)
+      const orgListRaw: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
+      const metersListRaw: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
+
+      // Заалт оруулахад зөвхөн «тоолуур бүртгэлтэй» харилцагчдыг л гаргана.
+      // (Тоолуургүй байгууллагад placeholder мөр үүсгэхгүй.)
+      const orgIdsWithAnyMeter = new Set<string>(metersListRaw.map((m) => m.organizationId).filter(Boolean))
+      const orgList: Organization[] = orgListRaw.filter((o) => orgIdsWithAnyMeter.has(o.id))
+      // Организацийн жагсаалт (customersOnly=1) нь зөвхөн scope доторхыг авчирдаг.
+      // Тиймээс meter жагсаалтаас мөн scope-оос гадуурх (өөр албанд харьяалсан) тоолуурыг хасна,
+      // ингэснээр /api/readings болон /api/readings/previous дээр 403 үүсгэхгүй.
+      const allowedOrgIds = new Set<string>(orgList.map((o) => o.id))
+      const metersList: Meter[] = metersListRaw.filter((m) => allowedOrgIds.has(m.organizationId))
+
+      if (orgRes.ok && Array.isArray(orgData)) setOrganizations(orgList)
+      if (meterRes.ok && Array.isArray(meterData)) setAllMeters(metersList)
       const pipeData = await pipeRes.json().catch(() => [])
       const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
-      const orgList: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
-      const metersList: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
       const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
 
       // Modal дээр сонгосон (year, month)-оос 12 сар хүртэл + дараагийн оны 1 сар хүртэлх бүх period-ийг харуулна.
@@ -824,7 +1191,7 @@ export default function ReadingsContent() {
       const prevReadingsByKey: Record<string, Reading[]> = {}
       await Promise.all(
         Array.from(prevKeysNeeded.values()).map(async (p) => {
-          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}&recalculate=1`)
+          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
           const data = res.ok ? await res.json() : []
           prevReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
         })
@@ -882,7 +1249,7 @@ export default function ReadingsContent() {
       const currentReadingsByKey: Record<string, Reading[]> = {}
       await Promise.all(
         Array.from(currentKeysNeeded.values()).map(async (p) => {
-          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}&recalculate=1`)
+          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
           const data = res.ok ? await res.json() : []
           currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
         })
@@ -961,7 +1328,7 @@ export default function ReadingsContent() {
         const prevReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(
           Array.from(prevKeysNeeded.values()).map(async ({ year: py, month: pm }) => {
-            const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}&recalculate=1`)
+            const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}`)
             const data = res.ok ? await res.json() : []
             prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
           })
@@ -1034,7 +1401,7 @@ export default function ReadingsContent() {
         const currentReadingsByKey: Record<string, Reading[]> = {}
         await Promise.all(
           periods.map(async (p) => {
-            const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}&recalculate=1`)
+            const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
             const data = res.ok ? await res.json() : []
             currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
           })
@@ -1059,11 +1426,11 @@ export default function ReadingsContent() {
     }
   }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths, newReadings, snapshotRows])
 
-  const handleCloseAddModal = () => {
+  const handleCloseAddModal = (opts?: { keepMessage?: boolean }) => {
     setShowAddModal(false)
     setNewReadings([])
     modalOriginalRowsRef.current = new Map()
-    setMessage(null)
+    if (!opts?.keepMessage) setMessage(null)
   }
 
   const handleSaveNewReadings = async () => {
@@ -1075,6 +1442,9 @@ export default function ReadingsContent() {
         Number(r.endValue || 0) !== snap.endValue ||
         Number(r.baseClean || 0) !== snap.baseClean ||
         Number(r.baseDirty || 0) !== snap.baseDirty ||
+        Number(r.usage ?? 0) !== snap.usage ||
+        Number(r.heatUsage ?? 0) !== snap.heatUsage ||
+        Number(r.heatAmount || 0) !== snap.heatAmount ||
         (r.meterId || '') !== (snap.meterId || '')
       )
     }
@@ -1083,7 +1453,10 @@ export default function ReadingsContent() {
     const rowsWithDataButNoMeter = newReadings.filter((r) => {
       if (!r._isNew || !r.organizationId) return false
       if (r.meterId) return false
-      const hasReading = (r.endValue ?? 0) !== 0 || (r.startValue ?? 0) !== 0
+      const hasReading =
+        (r.endValue ?? 0) !== 0 ||
+        (r.startValue ?? 0) !== 0 ||
+        (readingRowUsesHeat(r) && (Number(r.heatUsage ?? 0) || 0) !== 0)
       return hasReading
     })
 
@@ -1109,7 +1482,8 @@ export default function ReadingsContent() {
     try {
       const saveOne = async (reading: Reading) => {
         const meterId = reading.meterId!
-        const body = {
+        const bm = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
+        const body: Record<string, unknown> = {
           meterId,
           month: reading.month,
           year: reading.year,
@@ -1119,6 +1493,9 @@ export default function ReadingsContent() {
           baseDirty: reading.baseDirty || 0,
           cleanPerM3: reading.cleanPerM3 || 0,
           dirtyPerM3: reading.dirtyPerM3 || 0,
+        }
+        if (bm === 'HEAT' || bm === 'WATER_HEAT') {
+          body.heatUsage = Number(reading.heatUsage ?? 0)
         }
         const res = reading._isNew
           ? await fetchWithAuth('/api/readings', {
@@ -1136,6 +1513,9 @@ export default function ReadingsContent() {
                 endValue: reading.endValue,
                 baseClean: reading.baseClean || 0,
                 baseDirty: reading.baseDirty || 0,
+                ...((bm === 'HEAT' || bm === 'WATER_HEAT')
+                  ? { heatUsage: Number(reading.heatUsage ?? 0) }
+                  : {}),
               }),
             })
 
@@ -1149,9 +1529,10 @@ export default function ReadingsContent() {
         await Promise.all(chunk.map((r) => saveOne(r)))
       }
 
+      // Эхлээд жагсаалтыг refresh хийгээд (шүүлтэнд таарах бол) UI дээр шууд харагдуулна.
+      await fetchReadings({ silent: true })
       setMessage({ type: 'success', text: 'Амжилттай хадгаллаа' })
-      handleCloseAddModal()
-      fetchReadings()
+      handleCloseAddModal({ keepMessage: true })
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Алдаа гарлаа' })
     } finally {
@@ -1222,7 +1603,7 @@ export default function ReadingsContent() {
     }
   }, [allMeters, metersForMeterSelect, organizations])
 
-  const columnDefs: ColDef<Reading>[] = useMemo(() => [
+  const allReadingColumnDefs: ColDef<Reading>[] = useMemo(() => [
     {
       headerName: 'РД',
       width: 100,
@@ -1291,10 +1672,12 @@ export default function ReadingsContent() {
       colId: 'startValue',
       field: 'startValue',
       ...numberColStyle,
+      suppressNavigable: (params: any) => !readingRowUsesWater(params.data),
+      cellClass: (params: any) =>
+        !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : '',
       editable: (params: any) =>
-        showAddModal &&
-        params.data?.year === addModalYear &&
-        params.data?.month === 1,
+        modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
+        readingRowUsesWater(params.data),
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1322,10 +1705,12 @@ export default function ReadingsContent() {
       colId: 'endValue',
       field: 'endValue',
       ...numberColStyle,
+      suppressNavigable: (params: any) => !readingRowUsesWater(params.data),
+      cellClass: (params: any) =>
+        !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : '',
       editable: (params: any) =>
-        showAddModal &&
-        params.data?.year === addModalYear &&
-        params.data?.month === addModalMonth,
+        modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
+        readingRowUsesWater(params.data),
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1350,12 +1735,16 @@ export default function ReadingsContent() {
     {
       headerName: 'Зөрүү',
       width: 100,
-      field: 'usage',
+      colId: 'waterDiff',
       ...numberColStyle,
       editable: false,
       valueGetter: (params: any) => {
-        const start = params.data?.startValue || 0
-        const end = params.data?.endValue || 0
+        const d = params.data as Reading | undefined
+        if (d?.organization?.name === 'Нийт дүн') {
+          return Number(d.usageWaterDiffSum ?? 0)
+        }
+        const start = d?.startValue || 0
+        const end = d?.endValue || 0
         return end > start ? end - start : 0
       },
       valueFormatter: (params: any) => {
@@ -1369,9 +1758,8 @@ export default function ReadingsContent() {
       field: 'baseDirty',
       ...numberColStyle,
       editable: (params: any) =>
-        showAddModal &&
-        params.data?.year === addModalYear &&
-        params.data?.month === addModalMonth,
+        modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
+        readingRowUsesWater(params.data),
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1388,9 +1776,8 @@ export default function ReadingsContent() {
       field: 'baseClean',
       ...numberColStyle,
       editable: (params: any) =>
-        showAddModal &&
-        params.data?.year === addModalYear &&
-        params.data?.month === addModalMonth,
+        modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
+        readingRowUsesWater(params.data),
       cellEditor: 'agNumberCellEditor',
       cellEditorParams: {
         min: 0,
@@ -1422,10 +1809,69 @@ export default function ReadingsContent() {
       },
     },
     {
+      headerName: 'м³/м²',
+      width: 100,
+      colId: 'heatReading',
+      field: 'heatUsage',
+      ...numberColStyle,
+      suppressNavigable: (params: any) => !readingRowUsesHeat(params.data),
+      cellClass: (params: any) =>
+        !readingRowUsesHeat(params.data) ? 'reading-billing-cell-disabled' : '',
+      editable: (params: any) =>
+        modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
+        readingRowUsesHeat(params.data),
+      cellEditor: NumberCellEditorSelectAll,
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d) return null
+        if (d.organization?.name === 'Нийт дүн') {
+          return Number(d.heatReadingSum ?? 0)
+        }
+        return heatQtyForDisplay(d)
+      },
+      valueSetter: (params: any) => {
+        if (params.data) {
+          const n = params.newValue != null ? Number(params.newValue) : 0
+          params.data.heatUsage = Number.isNaN(n) ? 0 : Math.max(0, n)
+        }
+        return true
+      },
+      valueFormatter: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d || !readingRowUsesHeat(d)) return ''
+        if (params.value == null || params.value === '') return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
+      headerName: 'Дулаан',
+      width: 120,
+      field: 'heatAmount',
+      ...numberColStyle,
+      suppressNavigable: (params: any) => !readingRowUsesHeat(params.data),
+      cellClass: (params: any) =>
+        !readingRowUsesHeat(params.data) ? 'reading-billing-cell-disabled' : '',
+      editable: false,
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d) return 0
+        if (d.organization?.name === 'Нийт дүн') return Number(d.heatAmount ?? 0) || 0
+        return getTariffHeatDisplayAmount(d)
+      },
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return Number(params.value).toFixed(2)
+      },
+    },
+    {
       headerName: 'Нийт',
       width: 120,
       field: 'subtotal',
       ...numberColStyle,
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        return getDisplaySubtotalVatTotal(d).subtotal
+      },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1436,6 +1882,10 @@ export default function ReadingsContent() {
       width: 120,
       field: 'vat',
       ...numberColStyle,
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        return getDisplaySubtotalVatTotal(d).vat
+      },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1446,6 +1896,10 @@ export default function ReadingsContent() {
       width: 120,
       field: 'total',
       ...numberColStyle,
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        return getDisplaySubtotalVatTotal(d).total
+      },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return Number(params.value).toFixed(2)
@@ -1460,41 +1914,91 @@ export default function ReadingsContent() {
     addModalYear,
     addModalMonth,
     numberColStyle,
+    getTariffHeatDisplayAmount,
+    getDisplaySubtotalVatTotal,
+    heatQtyForDisplay,
   ])
+
+  const gridNeedsWater = useMemo(
+    () => readings.length === 0 || readings.some(readingRowUsesWater),
+    [readings]
+  )
+  const gridNeedsHeat = useMemo(
+    () => readings.length === 0 || readings.some(readingRowUsesHeat),
+    [readings]
+  )
+
+  const columnDefs = useMemo(
+    () => filterReadingGridColumnsByBilling(allReadingColumnDefs, gridNeedsWater, gridNeedsHeat),
+    [allReadingColumnDefs, gridNeedsWater, gridNeedsHeat]
+  )
+
+  const modalNeedsWater = useMemo(
+    () => visibleModalRows.length === 0 || visibleModalRows.some(readingRowUsesWater),
+    [visibleModalRows]
+  )
+  const modalNeedsHeat = useMemo(
+    () => visibleModalRows.length === 0 || visibleModalRows.some(readingRowUsesHeat),
+    [visibleModalRows]
+  )
 
   const pinnedBottomRowData = useMemo(() => {
     const sum = (field: keyof Reading) =>
       readings.reduce((acc, row) => acc + (Number(row[field] ?? 0) || 0), 0)
+    const usageWaterDiffSum = readings.reduce((acc, r) => {
+      const s = Number(r.startValue ?? 0)
+      const e = Number(r.endValue ?? 0)
+      return acc + (e > s ? e - s : 0)
+    }, 0)
+    const heatReadingSum = readings.reduce((acc, r) => {
+      if (!readingRowUsesHeat(r)) return acc
+      return acc + (Number(r.heatUsage ?? 0) || 0)
+    }, 0)
+    const subtotalSum = readings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).subtotal, 0)
+    const vatSum = readings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).vat, 0)
+    const totalSum = readings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).total, 0)
     return [
       {
         meterId: '',
         organization: { name: 'Нийт дүн', id: '-', code: null },
         startValue: 0,
         endValue: 0,
+        usageWaterDiffSum,
+        heatReadingSum,
         usage: sum('usage'),
         baseDirty: sum('baseDirty'),
         baseClean: sum('baseClean'),
         dirtyAmount: sum('dirtyAmount'),
         cleanAmount: sum('cleanAmount'),
-        subtotal: sum('subtotal'),
-        vat: sum('vat'),
-        total: sum('total'),
+        heatAmount: readings.reduce((acc, row) => acc + getTariffHeatDisplayAmount(row), 0),
+        subtotal: subtotalSum,
+        vat: vatSum,
+        total: totalSum,
       } as Reading,
     ]
-  }, [readings])
+  }, [readings, getTariffHeatDisplayAmount, getDisplaySubtotalVatTotal])
 
   const modalColumnDefs: ColDef<Reading>[] = useMemo(() => {
-    const filtered = columnDefs.filter((col) =>
-      !['Б/Суурь хураамж', 'Ц/Суурь хураамж', 'Бохир', 'Цэвэр', 'Нийт', 'НӨАТ'].includes(
-        (col.headerName as string) || ''
-      )
+    const MODAL_HIDE_HEADERS = new Set([
+      'Б/Суурь хураамж',
+      'Ц/Суурь хураамж',
+      'Бохир',
+      'Цэвэр',
+      // Модал дээр зөвхөн заалт оруулна (мөнгө/нийт дүнг үндсэн хүснэгт дээр харуулна)
+      'Дулаан',
+      'Нийт',
+      'НӨАТ',
+    ])
+    const filtered = allReadingColumnDefs.filter(
+      (col) => !MODAL_HIDE_HEADERS.has((col.headerName as string) || '')
     )
-    return filtered.map((col) =>
+    const byBilling = filterReadingGridColumnsByBilling(filtered, modalNeedsWater, modalNeedsHeat)
+    return byBilling.map((col) =>
       (col.headerName as string) === 'Хэрэглэгчийн нэр'
         ? { ...col, flex: 1, minWidth: 120, width: undefined }
         : col
     )
-  }, [columnDefs])
+  }, [allReadingColumnDefs, modalNeedsWater, modalNeedsHeat, visibleModalRows])
 
   useEffect(() => {
     if (!showAddModal) return
@@ -1536,7 +2040,7 @@ export default function ReadingsContent() {
             {/* Backdrop */}
             <div
               className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
-              onClick={handleCloseAddModal}
+              onClick={() => handleCloseAddModal()}
               aria-hidden
             />
 
@@ -1547,7 +2051,7 @@ export default function ReadingsContent() {
                   <h3 className="text-2xl font-semibold text-gray-900">Заалт оруулах</h3>
                   <div className="flex gap-2">
                     <button
-                      onClick={handleCloseAddModal}
+                      onClick={() => handleCloseAddModal()}
                       className="text-gray-400 hover:text-gray-500 focus:outline-none"
                     >
                       <span className="sr-only">Хаах</span>
@@ -1594,6 +2098,29 @@ export default function ReadingsContent() {
                     </div>
                     {loading && <span className="text-sm text-gray-500">Бэлтгэж байна...</span>}
                   </div>
+                  <p className="mt-3 text-xs text-gray-600">
+                    {modalNeedsWater && !modalNeedsHeat && (
+                      <>
+                        <span className="font-medium text-gray-700">Зөвхөн ус:</span> тоолуур &quot;Ус&quot; төрөлтэй —
+                        зөвхөн усны баганууд харагдана; <strong>дулааны багана харагдахгүй</strong>.
+                        Холимог жагсаалтад зөвхөн усны мөр дээр дулааны нүд идэвхгүй.
+                      </>
+                    )}
+                    {modalNeedsHeat && !modalNeedsWater && (
+                      <>
+                        <span className="font-medium text-gray-700">Зөвхөн дулаан:</span> тоолуур &quot;Дулаан&quot;
+                        төрөлтэй — «Дулаан» дээр тоо оруулж, нийт дүн шинэчлэгдэнэ; <strong>усны (бохир/цэвэр) багана харагдахгүй</strong>.
+                        Холимог жагсаалтад зөвхөн дулааны мөр дээр эхний/эцсийн заалт, усны суурь хураамжийг засах боломжгүй.
+                      </>
+                    )}
+                    {modalNeedsWater && modalNeedsHeat && (
+                      <>
+                        <span className="font-medium text-gray-700">Ус + дулаан:</span> тоолуур &quot;Ус+дулаан&quot;
+                        — ус, дулааны баганууд хамт харагдана. Дулааны дүн эхлээд заалтаас тооцогдохоос гадна{' '}
+                        <strong>«Дулаан» нүднээс</strong> гараар засаж, хадгалахад хадгалагдана.
+                      </>
+                    )}
+                  </p>
                 </div>
 
                 {message && (
@@ -1628,6 +2155,9 @@ export default function ReadingsContent() {
                       }}
                       onGridReady={(e) => e.api.sizeColumnsToFit()}
                       onCellValueChanged={handleCellValueChanged}
+                      suppressContextMenu={true}
+                      preventDefaultOnContextMenu={true}
+                      onCellContextMenu={handleModalCellContextMenu}
                       pagination={false}
                       domLayout="normal"
                       singleClickEdit={true}
@@ -1638,12 +2168,40 @@ export default function ReadingsContent() {
                     />
                   </div>
                 </div>
+                {modalExcelExportMenu && (
+                  <div
+                    ref={modalExcelExportMenuRef}
+                    style={{
+                      position: 'fixed',
+                      top: modalExcelExportMenu.y,
+                      left: modalExcelExportMenu.x,
+                      zIndex: 99999,
+                      background: 'white',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 6,
+                      boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+                      padding: 6,
+                      minWidth: 220,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModalExcelExportMenu(null)
+                        exportModalXlsx()
+                      }}
+                      className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
+                    >
+                      Excel файл болгох
+                    </button>
+                  </div>
+                )}
 
                 {/* Footer buttons */}
                 <div className="flex justify-end gap-3 mt-4 pt-4 border-t">
                   <button
                     type="button"
-                    onClick={handleCloseAddModal}
+                    onClick={() => handleCloseAddModal()}
                     className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   >
                     Цуцлах
@@ -1783,6 +2341,16 @@ export default function ReadingsContent() {
                     onClick={() => {
                       setExcelExportMenu(null)
                       exportReadingsGrid()
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
+                  >
+                    CSV файл болгох
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExcelExportMenu(null)
+                      exportReadingsGridXlsx()
                     }}
                     className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
                   >

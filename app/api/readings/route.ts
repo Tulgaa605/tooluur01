@@ -2,75 +2,73 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getManagedCustomerOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import {
+  type BillingMode,
+  computeReadingMoney,
+  computeReadingMoneySplit,
+  getHeatTariffRatesForPeriod,
+  getWaterTariffRatesForPeriod,
+  normalizeBillingMode,
+} from '@/lib/meter-reading-calc'
+
+function waterUsageFromReading(r: { startValue?: unknown; endValue?: unknown; usage?: unknown }): number {
+  const s = Number(r.startValue ?? 0)
+  const e = Number(r.endValue ?? 0)
+  const diff = e > s ? e - s : 0
+  if (diff > 0) return diff
+  const u = Number(r.usage ?? 0)
+  return Number.isFinite(u) && u >= 0 ? u : 0
+}
+
+function parseClientHeatUsage(
+  data: { heatUsage?: unknown },
+  billingMode: BillingMode
+): number | undefined {
+  const includeHeat = billingMode === 'HEAT' || billingMode === 'WATER_HEAT'
+  if (!includeHeat) return undefined
+  if (!('heatUsage' in data)) return undefined
+  const raw = (data as any).heatUsage
+  if (raw === undefined || raw === null || raw === '') return undefined
+  const n = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.').trim())
+  if (!Number.isFinite(n) || n < 0) return undefined
+  return Math.round(n * 100) / 100
+}
+import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
+
+async function ensureOfficeOrganizationId(user: { userId: string; organizationId?: string | null; email?: string; name?: string }) {
+  if (user.organizationId) return user.organizationId
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { id: true, email: true, name: true, organizationId: true, role: true },
+  })
+  if (dbUser?.organizationId) return dbUser.organizationId
+  // STAFF (ACCOUNTANT/MANAGER) дээр organizationId хоосон байж болно → албан байгууллага үүсгээд холбоно.
+  const roleStr = String(dbUser?.role ?? '')
+  if (roleStr !== Role.ACCOUNTANT && roleStr !== Role.MANAGER) return null
+  const currentYear = new Date().getFullYear()
+  const orgName = `${(dbUser?.name ?? user.name ?? 'Accountant').trim()} (${(dbUser?.email ?? user.email ?? user.userId).trim()})`
+  const org = await prisma.organization.create({
+    data: {
+      name: orgName,
+      category: 'ORGANIZATION',
+      baseCleanFee: 0,
+      baseDirtyFee: 0,
+      year: currentYear,
+      createdByUserId: user.userId,
+      updatedByUserId: user.userId,
+    },
+  })
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: { organizationId: org.id },
+  })
+  return org.id
+}
 
 function getNextPeriod(year: number, month: number): { year: number; month: number } {
   if (month === 12) return { year: year + 1, month: 1 }
   return { year, month: month + 1 }
-}
-
-/** Байгууллагын тухайн сарын тарифын утгыг олно: шугамын голч (PipeFee), organization tariff, төрлийн тариф эсвэл байгууллагын суурь. */
-async function getTariffRatesForPeriod(
-  organizationId: string,
-  year: number,
-  month: number
-): Promise<{ baseClean: number; baseDirty: number; cleanPerM3: number; dirtyPerM3: number }> {
-  const org = await prisma.organization.findUnique({
-    where: { id: organizationId },
-    select: { category: true, connectionNumber: true, baseCleanFee: true, baseDirtyFee: true },
-  })
-  if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
-
-  let baseClean = 0
-  let baseDirty = 0
-  let cleanPerM3 = 0
-  let dirtyPerM3 = 0
-
-  const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
-  if (!Number.isNaN(pipeDiam)) {
-    const pipeFee = await prisma.pipeFee.findUnique({
-      where: { diameterMm: pipeDiam },
-      select: { baseCleanFee: true, baseDirtyFee: true },
-    })
-    if (pipeFee) {
-      baseClean = pipeFee.baseCleanFee ?? 0
-      baseDirty = pipeFee.baseDirtyFee ?? 0
-    }
-  }
-
-  const orgTariff = await prisma.organizationTariff.findUnique({
-    where: { organizationId_year_month: { organizationId, year, month } },
-    select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
-  })
-  if (orgTariff) {
-    if (Number.isNaN(pipeDiam)) {
-      baseClean = orgTariff.baseCleanFee ?? 0
-      baseDirty = orgTariff.baseDirtyFee ?? 0
-    }
-    cleanPerM3 = orgTariff.cleanPerM3 ?? 0
-    dirtyPerM3 = orgTariff.dirtyPerM3 ?? 0
-    return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
-  }
-
-  const catRow = await prisma.categoryTariff.findUnique({
-    where: { category: org.category },
-    select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
-  })
-  if (catRow) {
-    if (Number.isNaN(pipeDiam)) {
-      baseClean = catRow.baseCleanFee ?? 0
-      baseDirty = catRow.baseDirtyFee ?? 0
-    }
-    cleanPerM3 = catRow.cleanPerM3 ?? 0
-    dirtyPerM3 = catRow.dirtyPerM3 ?? 0
-    return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
-  }
-
-  if (Number.isNaN(pipeDiam)) {
-    baseClean = org.baseCleanFee ?? 0
-    baseDirty = org.baseDirtyFee ?? 0
-  }
-  return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
 }
 
 export async function POST(request: NextRequest) {
@@ -79,44 +77,87 @@ export async function POST(request: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    const officeOrgId = await ensureOfficeOrganizationId(user)
     const data = await request.json()
 
     // Get meter to find organization
     const meter = await prisma.meter.findUnique({
       where: { id: data.meterId },
+      select: { id: true, organizationId: true, billingMode: true },
     })
 
     if (!meter) {
       return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
     }
 
-    // Нягтлан: зөвхөн өөрийн хамрах хүрээнд (албан + бүртгэсэн харилцагч) тоолуур дээр заалт
-    if (!(await organizationIdInScope(user, meter.organizationId))) {
-      return NextResponse.json(
-        { error: 'Энэ байгууллагын заалт оруулах эрхгүй' },
-        { status: 403 }
-      )
+    // Нягтлан: зөвхөн өөрийн алба + өөрийн бүртгэсэн харилцагч (managedByOrganizationId)-ын дээр заалт оруулна.
+    const office = officeOrgId ?? user.organizationId
+    if (!office) {
+      return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
+    }
+    if (meter.organizationId !== office) {
+      const org = await prisma.organization.findUnique({
+        where: { id: meter.organizationId },
+        select: { id: true, managedByOrganizationId: true },
+      })
+      if (!org) {
+        return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
+      }
+      if (org.managedByOrganizationId == null) {
+        // Эзэнгүй байгууллагыг тухайн алба анх удаа заалт оруулах үед claim хийнэ.
+        await prisma.organization.update({
+          where: { id: org.id },
+          data: { managedByOrganizationId: office },
+        })
+      } else if (org.managedByOrganizationId !== office) {
+        return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
+      }
     }
 
-    const usage = data.endValue - data.startValue
-    if (usage < 0) {
+    const billingMode = normalizeBillingMode(meter.billingMode)
+    const waterUsage = data.endValue - data.startValue
+    // Ус+дулаан: м³/м²-ийг модал дээр хэрэглэгч оруулж болно. Оруулаагүй бол усны зөрүүг ашиглана.
+    const heatUsage =
+      billingMode === 'WATER_HEAT'
+        ? (parseClientHeatUsage(data, billingMode) ?? (waterUsage > 0 ? waterUsage : 0))
+        : (parseClientHeatUsage(data, billingMode) ?? 0)
+    const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
+    if (waterUsage < 0) {
       return NextResponse.json(
         { error: 'Эцсийн заалт эхний заалтаас их байх ёстой' },
         { status: 400 }
       )
     }
 
-    const tariff = await getTariffRatesForPeriod(meter.organizationId, data.year, data.month)
-    const baseClean = tariff.baseClean
-    const baseDirty = tariff.baseDirty
-    const cleanPerM3 = tariff.cleanPerM3
-    const dirtyPerM3 = tariff.dirtyPerM3
+    const orgForCategory = await prisma.organization.findUnique({
+      where: { id: meter.organizationId },
+      select: { category: true },
+    })
+    const orgCategory = orgForCategory?.category ?? 'HOUSEHOLD'
 
-    const cleanAmount = usage * cleanPerM3 + baseClean
-    const dirtyAmount = usage * dirtyPerM3 + baseDirty
-    const subtotal = cleanAmount + dirtyAmount
-    const vat = subtotal * 0.1
-    const total = subtotal + vat
+    const [waterTariff, heatTariff] = await Promise.all([
+      getWaterTariffRatesForPeriod(meter.organizationId, data.year, data.month),
+      getHeatTariffRatesForPeriod(meter.organizationId, data.year, data.month),
+    ])
+    const finalMoney =
+      billingMode === 'WATER_HEAT'
+        ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
+        : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
+    const {
+      baseClean,
+      baseDirty,
+      cleanPerM3,
+      dirtyPerM3,
+      heatBase,
+      heatPerM3,
+      heatPerM2,
+      cleanAmount,
+      dirtyAmount,
+      heatAmount,
+      subtotal,
+      vat,
+      total,
+    } = finalMoney
 
     // Check if reading already exists
     const existing = await prisma.meterReading.findUnique({
@@ -130,10 +171,33 @@ export async function POST(request: NextRequest) {
     })
 
     if (existing) {
-      return NextResponse.json(
-        { error: 'Энэ сарын заалт аль хэдийн оруулсан байна' },
-        { status: 400 }
-      )
+      // Давхар оруулах үед error өгөхийн оронд тухайн сарын заалтыг шинэчилнэ.
+      // (UI талд «хадгалах» дарахад идемпотент байж, хэрэглэгч алдаа харахгүй.)
+      const updated = await prisma.meterReading.update({
+        where: { id: existing.id },
+        data: {
+          startValue: data.startValue,
+          endValue: data.endValue,
+          heatUsage,
+          usage,
+          baseClean,
+          baseDirty,
+          cleanPerM3,
+          dirtyPerM3,
+          cleanAmount,
+          dirtyAmount,
+          heatBase,
+          heatPerM3,
+          heatPerM2,
+          heatAmount,
+          subtotal,
+          vat,
+          total,
+          updatedByUserId: user.userId,
+        },
+      })
+      const [withRel] = await attachOrgsAndMetersToReadings([updated])
+      return NextResponse.json({ ...withRel, _updatedExisting: true })
     }
 
     const reading = await prisma.meterReading.create({
@@ -144,6 +208,7 @@ export async function POST(request: NextRequest) {
         year: data.year,
         startValue: data.startValue,
         endValue: data.endValue,
+        heatUsage,
         usage,
         baseClean,
         baseDirty,
@@ -151,6 +216,10 @@ export async function POST(request: NextRequest) {
         dirtyPerM3,
         cleanAmount,
         dirtyAmount,
+        heatBase,
+        heatPerM3,
+        heatPerM2,
+        heatAmount,
         subtotal,
         vat,
         total,
@@ -179,16 +248,18 @@ export async function GET(request: NextRequest) {
     }
     const { searchParams } = new URL(request.url)
 
-    // USER: өөрийн байгууллага. Нягтлан/захирал: зөвхөн бүртгэсэн харилцагч (албан өөрийн заалт энд бүү ор).
+    // USER: өөрийн байгууллага. Нягтлан/захирал: өөрийн алба + бүртгэсэн харилцагч (аль алины заалт харагдана).
     let where: any = {}
     const roleStr = String(user.role)
     if (roleStr === Role.USER) {
       if (!user.organizationId) return NextResponse.json([])
       where.organizationId = user.organizationId
     } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-      const customerIds = await getManagedCustomerOrganizationIds(user)
-      if (customerIds.length === 0) return NextResponse.json([])
-      where.organizationId = { in: customerIds }
+      // Зарим staff token дээр organizationId хоосон байж болно → GET дээр ч автоматаар сэргээнэ.
+      const officeOrgId = await ensureOfficeOrganizationId(user)
+      const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId ?? user.organizationId })
+      if (scoped.length === 0) return NextResponse.json([])
+      where.organizationId = { in: scoped }
     }
 
     const month = searchParams.get('month')
@@ -218,35 +289,15 @@ export async function GET(request: NextRequest) {
 
     const shouldRecalculate = searchParams.get('recalculate') === '1'
 
-    const readings = await prisma.meterReading.findMany({
+    const rawReadings = await prisma.meterReading.findMany({
       where,
-      include: {
-        meter: {
-          select: {
-            meterNumber: true,
-          },
-        },
-        organization: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            phone: true,
-            users: {
-              where: {
-                phone: { not: null },
-              },
-              select: { phone: true },
-            },
-          },
-        },
-      },
       orderBy: [
         { year: 'desc' },
         { month: 'desc' },
       ],
       ...(take ? { take } : {}),
     })
+    const readings = await attachOrgsAndMetersToReadings(rawReadings)
 
     // Хурдны үндсэн горим: хадгалсан дүнг шууд буцаана.
     if (!shouldRecalculate) {
@@ -254,32 +305,47 @@ export async function GET(request: NextRequest) {
     }
 
     // Сонголтоор (recalculate=1) тарифаар дүнг дахин тооцоолж буцаана.
-    const tariffCache = new Map<string, Awaited<ReturnType<typeof getTariffRatesForPeriod>>>()
+    type TariffPair = {
+      water: Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>
+      heat: Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>
+    }
+    const tariffCache = new Map<string, TariffPair>()
     const result = await Promise.all(
       readings.map(async (r) => {
         const cacheKey = `${r.organizationId}-${r.year}-${r.month}`
-        let tariff = tariffCache.get(cacheKey)
-        if (!tariff) {
-          tariff = await getTariffRatesForPeriod(r.organizationId, r.year, r.month)
-          tariffCache.set(cacheKey, tariff)
+        let pair = tariffCache.get(cacheKey)
+        if (!pair) {
+          const [water, heat] = await Promise.all([
+            getWaterTariffRatesForPeriod(r.organizationId, r.year, r.month),
+            getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month),
+          ])
+          pair = { water, heat }
+          tariffCache.set(cacheKey, pair)
         }
-        const usage = r.usage ?? 0
-        const cleanAmount = usage * tariff.cleanPerM3 + tariff.baseClean
-        const dirtyAmount = usage * tariff.dirtyPerM3 + tariff.baseDirty
-        const subtotal = cleanAmount + dirtyAmount
-        const vat = subtotal * 0.1
-        const total = subtotal + vat
+        const orgCategory = (r as any).organization?.category ?? 'HOUSEHOLD'
+        const billingMode = normalizeBillingMode((r as any).meter?.billingMode)
+        const waterUsage = waterUsageFromReading(r)
+        const heatUsage = Number((r as any).heatUsage ?? 0) || 0
+        const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
+        const money =
+          billingMode === 'WATER_HEAT'
+            ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, pair.water, pair.heat)
+            : computeReadingMoney(usage, orgCategory, billingMode, pair.water, pair.heat)
         return {
           ...r,
-          baseClean: tariff.baseClean,
-          baseDirty: tariff.baseDirty,
-          cleanPerM3: tariff.cleanPerM3,
-          dirtyPerM3: tariff.dirtyPerM3,
-          cleanAmount,
-          dirtyAmount,
-          subtotal,
-          vat,
-          total,
+          baseClean: money.baseClean,
+          baseDirty: money.baseDirty,
+          cleanPerM3: money.cleanPerM3,
+          dirtyPerM3: money.dirtyPerM3,
+          heatBase: money.heatBase,
+          heatPerM3: money.heatPerM3,
+          heatPerM2: money.heatPerM2,
+          cleanAmount: money.cleanAmount,
+          dirtyAmount: money.dirtyAmount,
+          heatAmount: money.heatAmount,
+          subtotal: money.subtotal,
+          vat: money.vat,
+          total: money.total,
         }
       })
     )
@@ -318,7 +384,6 @@ export async function PUT(request: NextRequest) {
     // Get existing reading to get meterId and calculate usage
     const existingReading = await prisma.meterReading.findUnique({
       where: { id },
-      include: { meter: true },
     })
 
     if (!existingReading) {
@@ -327,6 +392,11 @@ export async function PUT(request: NextRequest) {
         { status: 404 }
       )
     }
+
+    const meterForBilling = await prisma.meter.findUnique({
+      where: { id: existingReading.meterId },
+      select: { billingMode: true },
+    })
 
     if (
       String(user.role) === Role.ACCOUNTANT ||
@@ -340,37 +410,58 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const usage = data.endValue - data.startValue
-    if (usage < 0) {
+    const billingMode = normalizeBillingMode(meterForBilling?.billingMode)
+    const waterUsage = data.endValue - data.startValue
+    const heatUsage =
+      billingMode === 'WATER_HEAT'
+        ? (parseClientHeatUsage(data, billingMode) ?? (waterUsage > 0 ? waterUsage : 0))
+        : (parseClientHeatUsage(data, billingMode) ?? 0)
+    const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
+    if (waterUsage < 0) {
       return NextResponse.json(
         { error: 'Эцсийн заалт эхний заалтаас их байх ёстой' },
         { status: 400 }
       )
     }
 
-    // Одоогийн тарифаар дүнг дахин тооцоолно (байгууллагын тариф зөрүүгээр үржигдэнэ)
-    const tariff = await getTariffRatesForPeriod(
-      existingReading.organizationId,
-      data.year,
-      data.month
-    )
-    const baseClean = tariff.baseClean
-    const baseDirty = tariff.baseDirty
-    const cleanPerM3 = tariff.cleanPerM3
-    const dirtyPerM3 = tariff.dirtyPerM3
-    const cleanAmount = usage * cleanPerM3 + baseClean
-    const dirtyAmount = usage * dirtyPerM3 + baseDirty
-    const subtotal = cleanAmount + dirtyAmount
-    const vat = subtotal * 0.1
-    const total = subtotal + vat
+    const orgForCategory = await prisma.organization.findUnique({
+      where: { id: existingReading.organizationId },
+      select: { category: true },
+    })
+    const orgCategory = orgForCategory?.category ?? 'HOUSEHOLD'
 
-    const reading = await prisma.meterReading.update({
+    const [waterTariff, heatTariff] = await Promise.all([
+      getWaterTariffRatesForPeriod(existingReading.organizationId, data.year, data.month),
+      getHeatTariffRatesForPeriod(existingReading.organizationId, data.year, data.month),
+    ])
+    const finalMoney =
+      billingMode === 'WATER_HEAT'
+        ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
+        : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
+    const {
+      baseClean,
+      baseDirty,
+      cleanPerM3,
+      dirtyPerM3,
+      heatBase,
+      heatPerM3,
+      heatPerM2,
+      cleanAmount,
+      dirtyAmount,
+      heatAmount,
+      subtotal,
+      vat,
+      total,
+    } = finalMoney
+
+    const updatedRow = await prisma.meterReading.update({
       where: { id },
       data: {
         month: data.month,
         year: data.year,
         startValue: data.startValue,
         endValue: data.endValue,
+        heatUsage,
         usage,
         baseClean,
         baseDirty,
@@ -378,26 +469,17 @@ export async function PUT(request: NextRequest) {
         dirtyPerM3,
         cleanAmount,
         dirtyAmount,
+        heatBase,
+        heatPerM3,
+        heatPerM2,
+        heatAmount,
         subtotal,
         vat,
         total,
         updatedByUserId: user.userId,
       },
-      include: {
-        meter: {
-          select: {
-            meterNumber: true,
-          },
-        },
-        organization: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-      },
     })
+    const [reading] = await attachOrgsAndMetersToReadings([updatedRow])
 
     // Өмнөх сарын эцсийн заалт өөрчлөгдвөл дараагийн сарын эхний/эцсийн заалтыг автоматаар дагуулж шинэчилнэ.
     const periodChanged =
@@ -431,32 +513,53 @@ export async function PUT(request: NextRequest) {
           nextEndValue = nextStartValue
         }
         const nextUsage = nextEndValue - nextStartValue
-        const nextTariff = await getTariffRatesForPeriod(
-          nextReading.organizationId,
-          nextPeriod.year,
-          nextPeriod.month
-        )
-        const nextCleanAmount = nextUsage * nextTariff.cleanPerM3 + nextTariff.baseClean
-        const nextDirtyAmount = nextUsage * nextTariff.dirtyPerM3 + nextTariff.baseDirty
-        const nextSubtotal = nextCleanAmount + nextDirtyAmount
-        const nextVat = nextSubtotal * 0.1
-        const nextTotal = nextSubtotal + nextVat
+        const [nextWater, nextHeat] = await Promise.all([
+          getWaterTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
+          getHeatTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
+        ])
+        const nextOrgCat = await prisma.organization.findUnique({
+          where: { id: nextReading.organizationId },
+          select: { category: true },
+        })
+        const nextMoney =
+          billingMode === 'WATER_HEAT'
+            ? computeReadingMoneySplit(
+                nextUsage,
+                // Дараагийн сарын дулааны хэрэглээг автоматаар дагуулахгүй (хэрэглэгч модал дээр тусад нь оруулна).
+                0,
+                nextOrgCat?.category ?? 'HOUSEHOLD',
+                billingMode,
+                nextWater,
+                nextHeat
+              )
+            : computeReadingMoney(
+                nextUsage,
+                nextOrgCat?.category ?? 'HOUSEHOLD',
+                billingMode,
+                nextWater,
+                nextHeat
+              )
 
         await prisma.meterReading.update({
           where: { id: nextReading.id },
           data: {
             startValue: nextStartValue,
             endValue: nextEndValue,
+            heatUsage: 0,
             usage: nextUsage,
-            baseClean: nextTariff.baseClean,
-            baseDirty: nextTariff.baseDirty,
-            cleanPerM3: nextTariff.cleanPerM3,
-            dirtyPerM3: nextTariff.dirtyPerM3,
-            cleanAmount: nextCleanAmount,
-            dirtyAmount: nextDirtyAmount,
-            subtotal: nextSubtotal,
-            vat: nextVat,
-            total: nextTotal,
+            baseClean: nextMoney.baseClean,
+            baseDirty: nextMoney.baseDirty,
+            cleanPerM3: nextMoney.cleanPerM3,
+            dirtyPerM3: nextMoney.dirtyPerM3,
+            heatBase: nextMoney.heatBase,
+            heatPerM3: nextMoney.heatPerM3,
+            heatPerM2: nextMoney.heatPerM2,
+            cleanAmount: nextMoney.cleanAmount,
+            dirtyAmount: nextMoney.dirtyAmount,
+            heatAmount: nextMoney.heatAmount,
+            subtotal: nextMoney.subtotal,
+            vat: nextMoney.vat,
+            total: nextMoney.total,
             updatedByUserId: user.userId,
           },
         })

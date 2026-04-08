@@ -6,6 +6,35 @@ import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 type OrgMini = { id: string; name: string; code: string | null }
 
+async function ensureOfficeOrganizationId(user: { userId: string; organizationId?: string | null; email?: string; name?: string }) {
+  if (user.organizationId) return user.organizationId
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { id: true, email: true, name: true, organizationId: true },
+  })
+  if (dbUser?.organizationId) return dbUser.organizationId
+
+  // Хуучин staff бүртгэлд organizationId хоосон байж болно. Энэ үед албан байгууллага үүсгээд холбоно.
+  const currentYear = new Date().getFullYear()
+  const orgName = `${(dbUser?.name ?? user.name ?? 'Accountant').trim()} (${(dbUser?.email ?? user.email ?? user.userId).trim()})`
+  const org = await prisma.organization.create({
+    data: {
+      name: orgName,
+      category: 'ORGANIZATION',
+      baseCleanFee: 0,
+      baseDirtyFee: 0,
+      year: currentYear,
+      createdByUserId: user.userId,
+      updatedByUserId: user.userId,
+    },
+  })
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: { organizationId: org.id },
+  })
+  return org.id
+}
+
 async function attachOrganizationsToMeters<T extends { organizationId: string }>(
   rows: T[]
 ): Promise<Array<T & { organization: OrgMini }>> {
@@ -29,10 +58,19 @@ export async function GET(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    // staff token дээр organizationId хоосон байвал автоматаар сэргээнэ
+    const officeOrgId = await ensureOfficeOrganizationId(user)
     // Нягтлан/захирал: зөвхөн өөрийн алба + өөрийн бүртгэсэн харилцагчдын тоолуурыг харна.
-    const scoped = await getScopedOrganizationIds(user)
+    const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
     if (scoped.length === 0) return NextResponse.json([])
-    const where: any = { organizationId: { in: scoped } }
+    // Өмнө нь энэ хэрэглэгч өөрөө нэмсэн тоолуур (createdByUserId) байвал scope-оос үл хамааран харуулна.
+    // Ингэснээр өмнө нэмсэн боловч байгууллагын managedBy холбоос дутуу үед ч “алгахгүй”.
+    const where: any = {
+      OR: [
+        { organizationId: { in: scoped } },
+        { createdByUserId: user.userId },
+      ],
+    }
 
     const rawMeters = await prisma.meter.findMany({
       where,
@@ -41,7 +79,9 @@ export async function GET(request: NextRequest) {
         meterNumber: true,
         organizationId: true,
         year: true,
+        billingMode: true,
         serviceStatus: true,
+        createdByUserId: true,
       },
       orderBy: { meterNumber: 'asc' },
     })
@@ -64,6 +104,7 @@ export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const officeOrgId = await ensureOfficeOrganizationId(user)
     const data = await request.json()
 
     const requested =
@@ -75,24 +116,61 @@ export async function POST(request: NextRequest) {
     }
     const orgId = requested
 
-    const scoped = await getScopedOrganizationIds(user)
-    if (!scoped.includes(orgId)) {
-      return NextResponse.json({ error: 'Энэ байгууллагад тоолуур бүртгэх эрхгүй' }, { status: 403 })
-    }
-
-    const orgExists = await prisma.organization.findUnique({
+    // Scope: өөрийн алба + өөрийн бүртгэсэн харилцагч.
+    // Хэрэв байгууллага эзэнгүй (managedByOrganizationId=null) бол тухайн алба анх тоолуур нэмэхэд "өөрийн" болгож бүртгэнэ.
+    const org = await prisma.organization.findUnique({
       where: { id: orgId },
-      select: { id: true },
+      select: { id: true, managedByOrganizationId: true },
     })
-    if (!orgExists) {
-      return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+    if (!org) return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+    const canUse =
+      (officeOrgId && org.id === officeOrgId) ||
+      (officeOrgId && org.managedByOrganizationId === officeOrgId)
+    if (!canUse) {
+      if (officeOrgId && org.managedByOrganizationId == null) {
+        await prisma.organization.update({
+          where: { id: orgId },
+          data: { managedByOrganizationId: officeOrgId },
+        })
+      } else {
+        return NextResponse.json({ error: 'Энэ байгууллагад тоолуур бүртгэх эрхгүй' }, { status: 403 })
+      }
     }
 
-    const meterNumber =
+    // org existence already checked above
+
+    const rawMeterNumber =
       typeof data.meterNumber === 'string' ? data.meterNumber.trim() : String(data.meterNumber ?? '').trim()
-    if (!meterNumber) {
-      return NextResponse.json({ error: 'Тоолуурын дугаар оруулна уу' }, { status: 400 })
+
+    // UI дээр хоосон орхивол 1-с эхэлсэн дарааллын дараагийн дугаарыг автоматаар олгоно.
+    const nextSequentialMeterNumber = async (): Promise<string> => {
+      // Тоолуурууд хуудсан дээр (GET) харагддаг scope-оос хамгийн их тоон дугаарыг олно.
+      const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
+      const where: any =
+        scoped.length === 0
+          ? { createdByUserId: user.userId }
+          : {
+              OR: [
+                { organizationId: { in: scoped } },
+                { createdByUserId: user.userId },
+              ],
+            }
+      const meters = await prisma.meter.findMany({
+        where,
+        select: { meterNumber: true },
+        take: 20000,
+      })
+      let maxN = 0
+      for (const m of meters) {
+        const s = String(m.meterNumber ?? '').trim()
+        if (!/^[0-9]+$/.test(s)) continue
+        const n = Number(s)
+        if (Number.isFinite(n) && n > maxN) maxN = n
+      }
+      return String(maxN + 1)
     }
+
+    const meterNumber = rawMeterNumber || (await nextSequentialMeterNumber())
 
     const currentYear = new Date().getFullYear()
     const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
@@ -102,16 +180,36 @@ export async function POST(request: NextRequest) {
       typeof data.serviceStatus === 'string' ? data.serviceStatus.trim().toUpperCase() : 'NORMAL'
     const serviceStatus =
       rawStatus === 'DAMAGED' || rawStatus === 'REPLACED' ? rawStatus : 'NORMAL'
-    const meter = await prisma.meter.create({
-      data: {
-        meterNumber,
-        organizationId: orgId,
-        year,
-        serviceStatus,
-        createdByUserId: user.userId,
-        updatedByUserId: user.userId,
-      },
-    })
+    const rawBilling =
+      typeof data.billingMode === 'string' ? data.billingMode.trim().toUpperCase() : 'WATER'
+    const billingMode =
+      rawBilling === 'HEAT' || rawBilling === 'WATER_HEAT' ? rawBilling : 'WATER'
+    // Давхардсан тохиолдолд (P2002) дараагийн дугаараар retry хийнэ (автоматаар олгосон үед).
+    let meter = null as any
+    const shouldAutoAssign = !rawMeterNumber
+    for (let attempt = 0; attempt < (shouldAutoAssign ? 25 : 1); attempt++) {
+      const candidate = attempt === 0 ? meterNumber : String(Number(meterNumber) + attempt)
+      try {
+        meter = await prisma.meter.create({
+          data: {
+            meterNumber: candidate,
+            organizationId: orgId,
+            year,
+            billingMode,
+            serviceStatus,
+            createdByUserId: user.userId,
+            updatedByUserId: user.userId,
+          },
+        })
+        break
+      } catch (e: any) {
+        if (e?.code === 'P2002' && shouldAutoAssign) continue
+        throw e
+      }
+    }
+    if (!meter) {
+      return NextResponse.json({ error: 'Тоолуурын дугаар олгоход алдаа гарлаа' }, { status: 500 })
+    }
 
     return NextResponse.json(meter)
   } catch (error: any) {
@@ -135,6 +233,7 @@ export async function PUT(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const officeOrgId = await ensureOfficeOrganizationId(user)
     const data = await request.json()
 
     if (!data.id) {
@@ -166,7 +265,7 @@ export async function PUT(request: NextRequest) {
 
     let nextOrgId = existing.organizationId
     if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
-      const scoped = await getScopedOrganizationIds(user)
+      const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
       if (!scoped.includes(existing.organizationId)) {
         return NextResponse.json({ error: 'Энэ тоолуурыг засах эрхгүй' }, { status: 403 })
       }
@@ -188,6 +287,15 @@ export async function PUT(request: NextRequest) {
           ? 'NORMAL'
           : undefined
 
+    const rawBilling =
+      typeof data.billingMode === 'string' ? data.billingMode.trim().toUpperCase() : undefined
+    const billingMode =
+      rawBilling === 'HEAT' || rawBilling === 'WATER_HEAT'
+        ? rawBilling
+        : rawBilling === 'WATER'
+          ? 'WATER'
+          : undefined
+
     const meter = await prisma.meter.update({
       where: { id: data.id },
       data: {
@@ -195,6 +303,7 @@ export async function PUT(request: NextRequest) {
         organizationId: nextOrgId,
         year,
         ...(serviceStatus !== undefined ? { serviceStatus } : {}),
+        ...(billingMode !== undefined ? { billingMode } : {}),
         updatedByUserId: user.userId,
       },
     })
@@ -222,6 +331,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const officeOrgId = await ensureOfficeOrganizationId(user)
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -246,7 +356,7 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    const scoped = await getScopedOrganizationIds(user)
+    const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
     if (!scoped.includes(meter.organizationId)) {
       return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
     }

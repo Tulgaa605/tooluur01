@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import { ensureHeatCategoryTariffsInDb } from '../lib/ensure-heat-category-tariffs'
 
 const prisma = new PrismaClient()
 
@@ -150,6 +151,9 @@ async function main() {
     } else {
       console.log('ℹ️  Хэрэглэгч 2 аль хэдийн байна:', user2.email)
     }
+
+    await ensureHeatCategoryTariffsInDb()
+    console.log('✅ Төрлийн дулааны тариф (Төсөвт/ААН/Айл өрх) шалгагдлаа')
 
     console.log('\n🎉 Seed амжилттай дууслаа!')
     console.log('\n📋 Тест бүртгэлүүд:')

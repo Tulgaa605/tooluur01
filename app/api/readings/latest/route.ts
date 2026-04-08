@@ -2,7 +2,37 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getManagedCustomerOrganizationIds } from '@/lib/org-scope'
+import { getScopedOrganizationIds } from '@/lib/org-scope'
+import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
+
+async function ensureOfficeOrganizationId(user: { userId: string; organizationId?: string | null; email?: string; name?: string }) {
+  if (user.organizationId) return user.organizationId
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.userId },
+    select: { id: true, email: true, name: true, organizationId: true, role: true },
+  })
+  if (dbUser?.organizationId) return dbUser.organizationId
+  const roleStr = String(dbUser?.role ?? '')
+  if (roleStr !== Role.ACCOUNTANT && roleStr !== Role.MANAGER) return null
+  const currentYear = new Date().getFullYear()
+  const orgName = `${(dbUser?.name ?? user.name ?? 'Accountant').trim()} (${(dbUser?.email ?? user.email ?? user.userId).trim()})`
+  const org = await prisma.organization.create({
+    data: {
+      name: orgName,
+      category: 'ORGANIZATION',
+      baseCleanFee: 0,
+      baseDirtyFee: 0,
+      year: currentYear,
+      createdByUserId: user.userId,
+      updatedByUserId: user.userId,
+    },
+  })
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: { organizationId: org.id },
+  })
+  return org.id
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,6 +41,7 @@ export async function GET(request: NextRequest) {
     if (!user) {
       throw new Error('Unauthorized')
     }
+    const officeOrgId = await ensureOfficeOrganizationId(user)
 
     const where: any = {}
     const roleStr = String(user.role)
@@ -18,38 +49,23 @@ export async function GET(request: NextRequest) {
       if (!user.organizationId) return NextResponse.json([])
       where.organizationId = user.organizationId
     } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-      const customerIds = await getManagedCustomerOrganizationIds(user)
-      if (customerIds.length === 0) return NextResponse.json([])
-      where.organizationId = { in: customerIds }
+      const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId ?? user.organizationId })
+      if (scoped.length === 0) return NextResponse.json([])
+      where.organizationId = { in: scoped }
     } else {
       return NextResponse.json([])
     }
 
     // Pull readings ordered by newest, then pick first per meter in code.
-    const readings = await prisma.meterReading.findMany({
+    const rawReadings = await prisma.meterReading.findMany({
       where,
-      include: {
-        meter: {
-          select: {
-            id: true,
-            meterNumber: true,
-            organizationId: true,
-          },
-        },
-        organization: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-      },
       orderBy: [
         { year: 'desc' },
         { month: 'desc' },
         { updatedAt: 'desc' },
       ],
     })
+    const readings = await attachOrgsAndMetersToReadings(rawReadings)
 
     const latestByMeter = new Map<string, any>()
     for (const r of readings) {

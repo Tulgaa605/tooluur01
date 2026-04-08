@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { ensureHeatCategoryTariffsInDb } from '@/lib/ensure-heat-category-tariffs'
 
 function parseNumberOrDefault(value: any, defaultValue: number) {
   if (typeof value === 'number') return value
@@ -72,31 +73,63 @@ async function upsertCategoryTariff(
     baseDirtyFee: number
     cleanPerM3: number
     dirtyPerM3: number
+    heatBaseFee: number
+    heatPerM3: number
+    heatPerM2: number
   },
   userId: string
 ) {
-  // `category_tariffs` дээр createdAt/updatedAt нь string болсон хуучин өгөгдөл байж болдог.
-  // Prisma DateTime хөрвүүлэх гэж алдаа гаргахгүй байлгахын тулд select-оор тэдгээрийг буцаахгүй.
-  await prisma.categoryTariff.upsert({
+  // Хуучин Mongo баримтууд createdAt-ийг string хадгалсан байвал `upsert`/`update` дотоодоор
+  // баримтыг DateTime болгож унших үед алдаа гарна. `updateMany` зөвхөн шинэчлэл хийнэ.
+  const upd = await prisma.categoryTariff.updateMany({
     where: { category: params.category },
-    create: {
-      category: params.category,
+    data: {
       baseCleanFee: params.baseCleanFee,
       baseDirtyFee: params.baseDirtyFee,
       cleanPerM3: params.cleanPerM3,
       dirtyPerM3: params.dirtyPerM3,
-      createdByUserId: userId,
+      heatBaseFee: params.heatBaseFee,
+      heatPerM3: params.heatPerM3,
+      heatPerM2: params.heatPerM2,
       updatedByUserId: userId,
     },
-    update: {
-      baseCleanFee: params.baseCleanFee,
-      baseDirtyFee: params.baseDirtyFee,
-      cleanPerM3: params.cleanPerM3,
-      dirtyPerM3: params.dirtyPerM3,
-      updatedByUserId: userId,
-    },
-    select: { id: true },
   })
+  if (upd.count > 0) return
+  try {
+    await prisma.categoryTariff.create({
+      data: {
+        category: params.category,
+        baseCleanFee: params.baseCleanFee,
+        baseDirtyFee: params.baseDirtyFee,
+        cleanPerM3: params.cleanPerM3,
+        dirtyPerM3: params.dirtyPerM3,
+        heatBaseFee: params.heatBaseFee,
+        heatPerM3: params.heatPerM3,
+        heatPerM2: params.heatPerM2,
+        createdByUserId: userId,
+        updatedByUserId: userId,
+      },
+    })
+  } catch (e: unknown) {
+    const code = e && typeof e === 'object' && 'code' in e ? (e as { code: string }).code : ''
+    if (code === 'P2002') {
+      await prisma.categoryTariff.updateMany({
+        where: { category: params.category },
+        data: {
+          baseCleanFee: params.baseCleanFee,
+          baseDirtyFee: params.baseDirtyFee,
+          cleanPerM3: params.cleanPerM3,
+          dirtyPerM3: params.dirtyPerM3,
+          heatBaseFee: params.heatBaseFee,
+          heatPerM3: params.heatPerM3,
+          heatPerM2: params.heatPerM2,
+          updatedByUserId: userId,
+        },
+      })
+      return
+    }
+    throw e
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -125,6 +158,9 @@ export async function GET(request: NextRequest) {
     const includeCategory = searchParams.get('includeCategory') === '1'
     if (!includeCategory) return NextResponse.json(tariffs)
 
+    // Төсөвт / ААН / Айл өрхийн дулааны үнэ DB-д 0 байвал албан жагсаалтаар автоматаар бөглөнө.
+    await ensureHeatCategoryTariffsInDb()
+
     // createdAt/updatedAt нь string байж болзошгүй тул DateTime талбаруудыг буцаахгүй.
     // Эрэмбэлэх шаардлагатай бол өгөгдлөө Compass/mongosh дээр Date болгоод дараа нь orderBy-г буцааж нэмж болно.
     const catRows = await prisma.categoryTariff.findMany({
@@ -135,6 +171,9 @@ export async function GET(request: NextRequest) {
         baseDirtyFee: true,
         cleanPerM3: true,
         dirtyPerM3: true,
+        heatBaseFee: true,
+        heatPerM3: true,
+        heatPerM2: true,
         createdByUserId: true,
         updatedByUserId: true,
       },
@@ -147,6 +186,9 @@ export async function GET(request: NextRequest) {
       baseDirtyFee: d.baseDirtyFee ?? 0,
       cleanPerM3: d.cleanPerM3 ?? 0,
       dirtyPerM3: d.dirtyPerM3 ?? 0,
+      heatBaseFee: d.heatBaseFee ?? 0,
+      heatPerM3: d.heatPerM3 ?? 0,
+      heatPerM2: d.heatPerM2 ?? 0,
       createdByUserId: d.createdByUserId,
       updatedByUserId: d.updatedByUserId,
       updatedAt: null,
@@ -198,8 +240,19 @@ export async function POST(request: NextRequest) {
     let baseDirtyFee = parseNumberOrDefault(data.baseDirtyFee, 0)
     const cleanPerM3 = parseNumberOrDefault(data.cleanPerM3, 0)
     const dirtyPerM3 = parseNumberOrDefault(data.dirtyPerM3, 0)
+    const heatBaseFee = parseNumberOrDefault(data.heatBaseFee, 0)
+    const heatPerM3 = parseNumberOrDefault(data.heatPerM3, 0)
+    const heatPerM2 = parseNumberOrDefault(data.heatPerM2, 0)
 
-    if (baseCleanFee < 0 || baseDirtyFee < 0 || cleanPerM3 < 0 || dirtyPerM3 < 0) {
+    if (
+      baseCleanFee < 0 ||
+      baseDirtyFee < 0 ||
+      cleanPerM3 < 0 ||
+      dirtyPerM3 < 0 ||
+      heatBaseFee < 0 ||
+      heatPerM3 < 0 ||
+      heatPerM2 < 0
+    ) {
       return NextResponse.json(
         { error: 'Тарифын утгууд сөрөг байж болохгүй' },
         { status: 400 }
@@ -239,6 +292,9 @@ export async function POST(request: NextRequest) {
               baseDirtyFee,
               cleanPerM3,
               dirtyPerM3,
+              heatBaseFee,
+              heatPerM3,
+              heatPerM2,
               updatedByUserId: user.userId,
             },
           })
@@ -251,6 +307,9 @@ export async function POST(request: NextRequest) {
               baseDirtyFee,
               cleanPerM3,
               dirtyPerM3,
+              heatBaseFee,
+              heatPerM3,
+              heatPerM2,
               createdByUserId: user.userId,
               updatedByUserId: user.userId,
             },
@@ -289,6 +348,9 @@ export async function POST(request: NextRequest) {
         baseDirtyFee,
         cleanPerM3,
         dirtyPerM3,
+        heatBaseFee,
+        heatPerM3,
+        heatPerM2,
       },
       user.userId
     )
@@ -306,6 +368,9 @@ export async function POST(request: NextRequest) {
       baseDirtyFee: number
       cleanPerM3: number
       dirtyPerM3: number
+      heatBaseFee: number
+      heatPerM3: number
+      heatPerM2: number
     }
 
     let created = 0
@@ -341,6 +406,9 @@ export async function POST(request: NextRequest) {
           baseDirtyFee: orgBaseDirty,
           cleanPerM3,
           dirtyPerM3,
+          heatBaseFee,
+          heatPerM3,
+          heatPerM2,
         }
         const ex = existingByOrgId.get(org.id)
         if (ex) {
@@ -374,6 +442,9 @@ export async function POST(request: NextRequest) {
                 baseDirtyFee: row.baseDirtyFee,
                 cleanPerM3: row.cleanPerM3,
                 dirtyPerM3: row.dirtyPerM3,
+                heatBaseFee: row.heatBaseFee,
+                heatPerM3: row.heatPerM3,
+                heatPerM2: row.heatPerM2,
                 updatedByUserId: user.userId,
               },
             })
@@ -425,10 +496,19 @@ export async function PUT(request: NextRequest) {
     if (data.baseDirtyFee !== undefined) patch.baseDirtyFee = parseNumberOrDefault(data.baseDirtyFee, 0)
     if (data.cleanPerM3 !== undefined) patch.cleanPerM3 = parseNumberOrDefault(data.cleanPerM3, 0)
     if (data.dirtyPerM3 !== undefined) patch.dirtyPerM3 = parseNumberOrDefault(data.dirtyPerM3, 0)
+    if (data.heatBaseFee !== undefined) patch.heatBaseFee = parseNumberOrDefault(data.heatBaseFee, 0)
+    if (data.heatPerM3 !== undefined) patch.heatPerM3 = parseNumberOrDefault(data.heatPerM3, 0)
+    if (data.heatPerM2 !== undefined) patch.heatPerM2 = parseNumberOrDefault(data.heatPerM2, 0)
 
-    const negatives = ['baseCleanFee', 'baseDirtyFee', 'cleanPerM3', 'dirtyPerM3'].some(
-      (k) => typeof patch[k] === 'number' && patch[k] < 0
-    )
+    const negatives = [
+      'baseCleanFee',
+      'baseDirtyFee',
+      'cleanPerM3',
+      'dirtyPerM3',
+      'heatBaseFee',
+      'heatPerM3',
+      'heatPerM2',
+    ].some((k) => typeof patch[k] === 'number' && patch[k] < 0)
     if (negatives) {
       return NextResponse.json(
         { error: 'Тарифын утгууд сөрөг байж болохгүй' },
@@ -476,13 +556,37 @@ export async function DELETE(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
+    const part = searchParams.get('part') // water | heat (optional)
     const kind = searchParams.get('kind')
     if (kind === 'category') {
       const category = searchParams.get('category')
       if (!category) {
         return NextResponse.json({ error: 'Хэрэглэгчийн төрөл (category) шаардлагатай' }, { status: 400 })
       }
-      await prisma.categoryTariff.deleteMany({ where: { category } })
+      if (part === 'water') {
+        await prisma.categoryTariff.updateMany({
+          where: { category },
+          data: {
+            baseCleanFee: 0,
+            baseDirtyFee: 0,
+            cleanPerM3: 0,
+            dirtyPerM3: 0,
+            updatedByUserId: user.userId,
+          },
+        })
+      } else if (part === 'heat') {
+        await prisma.categoryTariff.updateMany({
+          where: { category },
+          data: {
+            heatBaseFee: 0,
+            heatPerM3: 0,
+            heatPerM2: 0,
+            updatedByUserId: user.userId,
+          },
+        })
+      } else {
+        await prisma.categoryTariff.deleteMany({ where: { category } })
+      }
       return NextResponse.json({ success: true })
     }
     const id = searchParams.get('id')
@@ -501,7 +605,30 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    await prisma.organizationTariff.delete({ where: { id } })
+    if (part === 'water') {
+      await prisma.organizationTariff.update({
+        where: { id },
+        data: {
+          baseCleanFee: 0,
+          baseDirtyFee: 0,
+          cleanPerM3: 0,
+          dirtyPerM3: 0,
+          updatedByUserId: user.userId,
+        },
+      })
+    } else if (part === 'heat') {
+      await prisma.organizationTariff.update({
+        where: { id },
+        data: {
+          heatBaseFee: 0,
+          heatPerM3: 0,
+          heatPerM2: 0,
+          updatedByUserId: user.userId,
+        },
+      })
+    } else {
+      await prisma.organizationTariff.delete({ where: { id } })
+    }
     return NextResponse.json({ success: true })
   } catch (error: any) {
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {

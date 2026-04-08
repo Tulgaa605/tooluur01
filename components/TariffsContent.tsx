@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
+import { HEAT_CATEGORY_DEFAULT_RATES, heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
 
 type OrganizationCategory =
   | 'HOUSEHOLD'
@@ -42,6 +43,9 @@ interface Tariff {
   baseDirtyFee: number
   cleanPerM3: number
   dirtyPerM3: number
+  heatBaseFee?: number
+  heatPerM3?: number
+  heatPerM2?: number
   updatedAt?: string
 }
 
@@ -102,8 +106,11 @@ export default function TariffsContent() {
     dirtyPerM3: '',
     baseCleanFee: '',
     baseDirtyFee: '',
+    heatBaseFee: '',
+    heatPerM3: '',
+    heatPerM2: '',
   })
-  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'tariff' | 'pipe'; id: string } | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'tariff' | 'pipe'; id: string; part?: 'water' | 'heat' } | null>(null)
   const [tariffEditTarget, setTariffEditTarget] = useState<TariffEditTarget>({ mode: 'new' })
 
   const loadAll = async () => {
@@ -263,6 +270,22 @@ export default function TariffsContent() {
     return Array.from(picked.values())
   }, [sortedVisibleTariffs])
 
+  // Дулааны тариф зөвхөн 3 төрөл дээр байх ёстой.
+  const HEAT_CATEGORIES = useMemo(
+    () => new Set<OrganizationCategory>(['ORGANIZATION', 'BUSINESS', 'HOUSEHOLD']),
+    []
+  )
+  const latestHeatTariffsOnly = useMemo(() => {
+    return latestTariffsOnly.filter((t) => {
+      const cat =
+        t.kind === 'category'
+          ? (t.category as OrganizationCategory | undefined)
+          : (t.organization?.category as OrganizationCategory | undefined)
+      if (!cat) return false
+      return HEAT_CATEGORIES.has(cat)
+    })
+  }, [latestTariffsOnly, HEAT_CATEGORIES])
+
   const openTariffHistory = (t: Tariff) => {
     const category =
       t.kind === 'category'
@@ -320,6 +343,9 @@ export default function TariffsContent() {
       dirtyPerM3: '',
       baseCleanFee: '',
       baseDirtyFee: '',
+      heatBaseFee: '',
+      heatPerM3: '',
+      heatPerM2: '',
     })
     setSelectedCategory('')
     setShowTariffModal(true)
@@ -339,6 +365,9 @@ export default function TariffsContent() {
         dirtyPerM3: String(t.dirtyPerM3 ?? 0),
         baseCleanFee: '',
         baseDirtyFee: '',
+        heatBaseFee: String(t.heatBaseFee ?? 0),
+        heatPerM3: String(t.heatPerM3 ?? 0),
+        heatPerM2: String(t.heatPerM2 ?? 0),
       })
     } else {
       setTariffEditTarget({ mode: 'org', tariff: t })
@@ -351,6 +380,9 @@ export default function TariffsContent() {
         dirtyPerM3: String(t.dirtyPerM3 ?? 0),
         baseCleanFee: String(t.baseCleanFee ?? 0),
         baseDirtyFee: String(t.baseDirtyFee ?? 0),
+        heatBaseFee: String(t.heatBaseFee ?? 0),
+        heatPerM3: String(t.heatPerM3 ?? 0),
+        heatPerM2: String(t.heatPerM2 ?? 0),
       })
     }
     setShowTariffModal(true)
@@ -374,6 +406,9 @@ export default function TariffsContent() {
             dirtyPerM3: Number(form.dirtyPerM3) || 0,
             baseCleanFee: Number(form.baseCleanFee) || 0,
             baseDirtyFee: Number(form.baseDirtyFee) || 0,
+            heatBaseFee: Number(form.heatBaseFee) || 0,
+            heatPerM3: Number(form.heatPerM3) || 0,
+            heatPerM2: Number(form.heatPerM2) || 0,
           }),
         })
         const data = await res.json()
@@ -403,6 +438,9 @@ export default function TariffsContent() {
           baseDirtyFee: 0,
           cleanPerM3: Number(form.cleanPerM3) || 0,
           dirtyPerM3: Number(form.dirtyPerM3) || 0,
+          heatBaseFee: Number(form.heatBaseFee) || 0,
+          heatPerM3: Number(form.heatPerM3) || 0,
+          heatPerM2: Number(form.heatPerM2) || 0,
         }),
       })
       const data = await res.json()
@@ -424,13 +462,14 @@ export default function TariffsContent() {
     }
   }
 
-  const handleDelete = (id: string) => {
-    setDeleteConfirm({ type: 'tariff', id })
+  const handleDelete = (id: string, part?: 'water' | 'heat') => {
+    setDeleteConfirm({ type: 'tariff', id, part })
   }
 
   const doDeleteTariff = async () => {
     if (!deleteConfirm || deleteConfirm.type !== 'tariff') return
     const id = deleteConfirm.id
+    const part = deleteConfirm.part
     setDeleteConfirm(null)
     setSaving(true)
     setMessage(null)
@@ -438,8 +477,8 @@ export default function TariffsContent() {
       const t = tariffs.find((x) => x.id === id)
       const url =
         t?.kind === 'category' && t.category
-          ? `/api/tariffs?kind=category&category=${encodeURIComponent(t.category)}`
-          : `/api/tariffs?id=${id}`
+          ? `/api/tariffs?kind=category&category=${encodeURIComponent(t.category)}${part ? `&part=${part}` : ''}`
+          : `/api/tariffs?id=${id}${part ? `&part=${part}` : ''}`
       const res = await fetchWithAuth(url, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'Алдаа гарлаа')
@@ -528,7 +567,8 @@ export default function TariffsContent() {
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">Тариф</h2>
           <p className="mt-1 text-sm text-gray-600">
-            Төрлийн тарифаар м³-ийн үнэ оруулна. Суурь хураамж шугамын голчоор доорх хүснэгтээс автоматаар тооцогдоно.
+            Доор ус болон дулааны тарифыг <strong>тусдаа хүснэгтээр</strong> харуулна. Усны суурь хураамж шугамын голчоор доорх
+            хэсгээс автоматаар тооцогдоно.
           </p>
         </div>
         <button
@@ -552,105 +592,185 @@ export default function TariffsContent() {
         </div>
       )}
 
-      <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Он-Сар
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Хэрэглэгчийн төрөл
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Ц (₮/м³)
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Б (₮/м³)
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Үйлдэл
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {latestTariffsOnly.map((t) => (
-              <tr
-                key={t.id}
-                className="cursor-pointer hover:bg-gray-50"
-                onClick={() => openTariffHistory(t)}
-                title="Дарж өмнөх саруудын тариф харах"
-              >
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.kind === 'category' ? (
-                    (() => {
-                      const cat = t.category as OrganizationCategory | undefined
-                      const year =
-                        appliedCategoryPeriod &&
-                        cat &&
-                        appliedCategoryPeriod.category === cat
-                          ? appliedCategoryPeriod.year
-                          : current.year
-                      const month =
-                        appliedCategoryPeriod &&
-                        cat &&
-                        appliedCategoryPeriod.category === cat
-                          ? appliedCategoryPeriod.month
-                          : current.month
-                      return `${year}-${String(month).padStart(2, '0')}`
-                    })()
-                  ) : (
-                    `${t.year}-${String(t.month).padStart(2, '0')}`
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {t.kind === 'category'
-                    ? (t.category ? CATEGORY_LABELS[t.category] ?? t.category : '-')
-                    : t.organization?.category
-                      ? (CATEGORY_LABELS[t.organization.category as OrganizationCategory] ?? t.organization.category)
-                      : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {(t.cleanPerM3 ?? 0).toFixed(2)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {(t.dirtyPerM3 ?? 0).toFixed(2)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={(e) => handleEditTariff(t, e)}
-                      disabled={saving}
-                      className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
-                      title="Засах"
-                    >
-                      <PencilIcon className="h-5 w-5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDelete(t.id)
-                      }}
-                      disabled={saving}
-                      className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
-                      title="Устгах"
-                    >
-                      <TrashIcon className="h-5 w-5" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {latestTariffsOnly.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            Тариф олдсонгүй
+      {latestTariffsOnly.length === 0 ? (
+        <div className="bg-white shadow-sm rounded-lg border border-gray-200 text-center py-12 text-gray-500">
+          Тариф олдсонгүй
+        </div>
+      ) : (
+        <div className="space-y-8">
+          <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Он-Сар</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Хэрэглэгчийн төрөл
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ц (₮/м³)</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Б (₮/м³)</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Үйлдэл</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {latestTariffsOnly.map((t) => (
+                  <tr
+                    key={`water:${t.id}`}
+                    className="cursor-pointer hover:bg-gray-50"
+                    onClick={() => openTariffHistory(t)}
+                    title="Дарж өмнөх саруудын тариф харах"
+                  >
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {t.kind === 'category' ? (
+                        (() => {
+                          const cat = t.category as OrganizationCategory | undefined
+                          const year =
+                            appliedCategoryPeriod && cat && appliedCategoryPeriod.category === cat
+                              ? appliedCategoryPeriod.year
+                              : current.year
+                          const month =
+                            appliedCategoryPeriod && cat && appliedCategoryPeriod.category === cat
+                              ? appliedCategoryPeriod.month
+                              : current.month
+                          return `${year}-${String(month).padStart(2, '0')}`
+                        })()
+                      ) : (
+                        `${t.year}-${String(t.month).padStart(2, '0')}`
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {t.kind === 'category'
+                        ? (t.category ? CATEGORY_LABELS[t.category] ?? t.category : '-')
+                        : t.organization?.category
+                          ? CATEGORY_LABELS[t.organization.category as OrganizationCategory] ??
+                            t.organization.category
+                          : '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {(t.cleanPerM3 ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {(t.dirtyPerM3 ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => handleEditTariff(t, e)}
+                          disabled={saving}
+                          className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
+                          title="Засах"
+                        >
+                          <PencilIcon className="h-5 w-5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDelete(t.id, 'water')
+                          }}
+                          disabled={saving}
+                          className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                          title="Устгах"
+                        >
+                          <TrashIcon className="h-5 w-5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
+
+          <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Он-Сар</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Хэрэглэгчийн төрөл
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Суурь (₮/сар)</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">₮/м³</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">₮/м²</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Үйлдэл</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {latestHeatTariffsOnly.map((t) => (
+                  <tr
+                    key={`heat:${t.id}`}
+                    className="cursor-pointer hover:bg-gray-50"
+                    onClick={() => openTariffHistory(t)}
+                    title="Дарж өмнөх саруудын тариф харах"
+                  >
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {t.kind === 'category' ? (
+                        (() => {
+                          const cat = t.category as OrganizationCategory | undefined
+                          const year =
+                            appliedCategoryPeriod && cat && appliedCategoryPeriod.category === cat
+                              ? appliedCategoryPeriod.year
+                              : current.year
+                          const month =
+                            appliedCategoryPeriod && cat && appliedCategoryPeriod.category === cat
+                              ? appliedCategoryPeriod.month
+                              : current.month
+                          return `${year}-${String(month).padStart(2, '0')}`
+                        })()
+                      ) : (
+                        `${t.year}-${String(t.month).padStart(2, '0')}`
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {t.kind === 'category'
+                        ? (t.category ? CATEGORY_LABELS[t.category] ?? t.category : '-')
+                        : t.organization?.category
+                          ? CATEGORY_LABELS[t.organization.category as OrganizationCategory] ??
+                            t.organization.category
+                          : '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {(t.heatBaseFee ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {(t.heatPerM3 ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {(t.heatPerM2 ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => handleEditTariff(t, e)}
+                          disabled={saving}
+                          className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
+                          title="Засах"
+                        >
+                          <PencilIcon className="h-5 w-5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDelete(t.id, 'heat')
+                          }}
+                          disabled={saving}
+                          className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                          title="Устгах"
+                        >
+                          <TrashIcon className="h-5 w-5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Pipe fees by inlet diameter */}
       <div className="mt-8 bg-white p-6 rounded-lg border border-gray-200">
@@ -787,7 +907,18 @@ export default function TariffsContent() {
                       </p>
                       <select
                         value={selectedCategory}
-                        onChange={(e) => setSelectedCategory(e.target.value as OrganizationCategory | '')}
+                        onChange={(e) => {
+                          const v = e.target.value as OrganizationCategory | ''
+                          setSelectedCategory(v)
+                          if (tariffEditTarget.mode === 'new' && v) {
+                            const { heatPerM3, heatPerM2 } = heatDefaultsForCategory(v)
+                            setForm((p) => ({
+                              ...p,
+                              heatPerM3: String(heatPerM3),
+                              heatPerM2: String(heatPerM2),
+                            }))
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md disabled:bg-gray-100 disabled:text-gray-600"
                         required
                         disabled={tariffEditTarget.mode === 'category'}
@@ -840,65 +971,128 @@ export default function TariffsContent() {
                   </div>
                 </div>
 
-                {tariffEditTarget.mode === 'org' && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 space-y-4">
+                  <h4 className="text-sm font-semibold text-gray-900 border-b border-amber-200/80 pb-2">
+                    Усны тариф
+                  </h4>
+                  {tariffEditTarget.mode === 'org' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Цэвэр усны суурь (₮/сар)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={form.baseCleanFee}
+                          onChange={(e) => setForm((p) => ({ ...p, baseCleanFee: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Бохир усны суурь (₮/сар)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={form.baseDirtyFee}
+                          onChange={(e) => setForm((p) => ({ ...p, baseDirtyFee: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Цэвэр усны суурь (₮/сар)
+                        Цэвэр ус (₮/м³)
                       </label>
                       <input
                         type="number"
                         min={0}
                         step={0.01}
-                        value={form.baseCleanFee}
-                        onChange={(e) => setForm((p) => ({ ...p, baseCleanFee: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        value={form.cleanPerM3}
+                        onChange={(e) => setForm((p) => ({ ...p, cleanPerM3: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        placeholder="0"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Бохир усны суурь (₮/сар)
+                        Бохир ус (₮/м³)
                       </label>
                       <input
                         type="number"
                         min={0}
                         step={0.01}
-                        value={form.baseDirtyFee}
-                        onChange={(e) => setForm((p) => ({ ...p, baseDirtyFee: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        value={form.dirtyPerM3}
+                        onChange={(e) => setForm((p) => ({ ...p, dirtyPerM3: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        placeholder="0"
                       />
                     </div>
                   </div>
-                )}
+                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Цэвэр ус (₮/м³)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={form.cleanPerM3}
-                      onChange={(e) => setForm((p) => ({ ...p, cleanPerM3: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      placeholder="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Бохир ус (₮/м³)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={form.dirtyPerM3}
-                      onChange={(e) => setForm((p) => ({ ...p, dirtyPerM3: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      placeholder="0"
-                    />
+                <div className="rounded-lg border border-orange-200 bg-orange-50/40 p-4 space-y-4 mt-4">
+                  <h4 className="text-sm font-semibold text-gray-900 border-b border-orange-200/80 pb-2">
+                    Дулааны тариф
+                  </h4>
+                  <ul className="text-xs text-gray-600 list-disc list-inside space-y-0.5">
+                    {HEAT_CATEGORY_DEFAULT_RATES.map((row) => (
+                      <li key={row.category}>
+                        {row.labelMn}:{' '}
+                        {row.heatPerM3 > 0 ? `1 м³ × ${row.heatPerM3} ₮` : `1 м² × ${row.heatPerM2} ₮`}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Дулаан суурь (₮/сар)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={form.heatBaseFee}
+                        onChange={(e) => setForm((p) => ({ ...p, heatBaseFee: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Дулаан (₮/м³) — төсөвт, ААН
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={form.heatPerM3}
+                        onChange={(e) => setForm((p) => ({ ...p, heatPerM3: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Дулаан (₮/м²) — айл өрх
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={form.heatPerM2}
+                        onChange={(e) => setForm((p) => ({ ...p, heatPerM2: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                        placeholder="0"
+                      />
+                    </div>
                   </div>
                 </div>
 
