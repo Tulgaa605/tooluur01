@@ -21,6 +21,7 @@ interface Meter {
   organizationId: string
   billingMode?: MeterBillingMode | string
   serviceStatus?: MeterServiceStatus | string
+  defaultHeatUsage?: number | null
   organization: {
     name: string
   }
@@ -38,6 +39,7 @@ export default function MetersContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [households, setHouseholds] = useState<Organization[]>([])
   const [loading, setLoading] = useState(true)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const currentYear = new Date().getFullYear()
@@ -47,6 +49,8 @@ export default function MetersContent() {
   const [form, setForm] = useState({
     ownerType: '' as OwnerType | '',
     meterNumber: '',
+    /** HEAT / WATER_HEAT үед заавал (м³/м²) */
+    defaultHeatM3M2: '',
     organizationId: '',
     year: currentYear,
     serviceStatus: 'NORMAL' as MeterServiceStatus,
@@ -117,8 +121,15 @@ export default function MetersContent() {
         String(m.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
           ? 'Дулаан'
           : String(m.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
-            ? 'Ус+дулаан'
+            ? 'Дулаан ба ус'
             : 'Ус',
+      'м³/м²':
+        String(m.billingMode ?? 'WATER').toUpperCase() === 'HEAT' ||
+        String(m.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
+          ? (m.defaultHeatUsage != null && Number(m.defaultHeatUsage) > 0
+              ? Number(m.defaultHeatUsage).toFixed(2)
+              : '')
+          : '',
     }))
     const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
     const wb = XLSX.utils.book_new()
@@ -154,12 +165,27 @@ export default function MetersContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setMessage(null)
     if (!editingId && !form.ownerType) {
-      alert('Байгууллага эсвэл Хувь хүн сонгоно уу.')
+      setMessage({ type: 'error', text: 'Байгууллага эсвэл Хувь хүн сонгоно уу.' })
       return
     }
     if (!editingId && !form.organizationId) {
-      alert('Байгууллага эсвэл Хувь хүнийг сонгоно уу.')
+      setMessage({ type: 'error', text: 'Байгууллага эсвэл Хувь хүнийг сонгоно уу.' })
+      return
+    }
+    const meterNo = String(form.meterNumber ?? '').trim()
+    if (!meterNo) {
+      setMessage({ type: 'error', text: 'Тоолуурын дугаар заавал оруулна уу.' })
+      return
+    }
+    const needsHeat = form.billingMode === 'HEAT' || form.billingMode === 'WATER_HEAT'
+    const heatVal = parseFloat(String(form.defaultHeatM3M2 ?? '').replace(',', '.').trim())
+    if (needsHeat && (!Number.isFinite(heatVal) || heatVal <= 0)) {
+      setMessage({
+        type: 'error',
+        text: 'Дулаан / Ус+дулаан сонгосон бол м³/м² заавал оруулна уу (0-ээс их).',
+      })
       return
     }
     try {
@@ -167,18 +193,20 @@ export default function MetersContent() {
       const body = editingId
         ? {
             id: editingId,
-            meterNumber: form.meterNumber,
+            meterNumber: meterNo,
             organizationId: form.organizationId,
             year: form.year,
             serviceStatus: form.serviceStatus || 'NORMAL',
             billingMode: form.billingMode,
+            ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
           }
         : {
-            meterNumber: form.meterNumber,
+            meterNumber: meterNo,
             organizationId: form.organizationId,
             year: form.year,
             serviceStatus: form.serviceStatus || 'NORMAL',
             billingMode: form.billingMode,
+            ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
           }
 
       const res = await fetchWithAuth('/api/meters', {
@@ -190,16 +218,26 @@ export default function MetersContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
 
+      setMessage({ type: 'success', text: editingId ? 'Амжилттай шинэчиллээ' : 'Амжилттай хадгаллаа' })
       setShowForm(false)
       setEditingId(null)
-      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
+      setForm({
+        ownerType: '',
+        meterNumber: '',
+        defaultHeatM3M2: '',
+        organizationId: '',
+        year: currentYear,
+        serviceStatus: 'NORMAL',
+        billingMode: 'WATER',
+      })
       loadMeters()
     } catch (err: any) {
-      alert(err.message || 'Алдаа гарлаа')
+      setMessage({ type: 'error', text: err.message || 'Алдаа гарлаа' })
     }
   }
 
   const handleEdit = (meter: Meter) => {
+    setMessage(null)
     setEditingId(meter.id)
     const inHousehold = households.some(h => h.id === meter.organizationId)
     const st = String(meter.serviceStatus ?? 'NORMAL').toUpperCase()
@@ -211,6 +249,10 @@ export default function MetersContent() {
     setForm({
       ownerType: inHousehold ? 'household' : 'organization',
       meterNumber: meter.meterNumber,
+      defaultHeatM3M2:
+        meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
+          ? String(meter.defaultHeatUsage)
+          : '',
       organizationId: meter.organizationId,
       year: meter.year ?? currentYear,
       serviceStatus,
@@ -256,7 +298,16 @@ export default function MetersContent() {
           onClick={() => {
             setShowForm(!showForm)
             setEditingId(null)
-            setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
+            setMessage(null)
+            setForm({
+        ownerType: '',
+        meterNumber: '',
+        defaultHeatM3M2: '',
+        organizationId: '',
+        year: currentYear,
+        serviceStatus: 'NORMAL',
+        billingMode: 'WATER',
+      })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -272,7 +323,16 @@ export default function MetersContent() {
               onClick={() => {
                 setShowForm(false)
                 setEditingId(null)
-                setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
+                setMessage(null)
+                setForm({
+        ownerType: '',
+        meterNumber: '',
+        defaultHeatM3M2: '',
+        organizationId: '',
+        year: currentYear,
+        serviceStatus: 'NORMAL',
+        billingMode: 'WATER',
+      })
               }}
               aria-hidden="true"
             />
@@ -287,7 +347,16 @@ export default function MetersContent() {
                     onClick={() => {
                       setShowForm(false)
                       setEditingId(null)
-                      setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
+                      setMessage(null)
+                      setForm({
+        ownerType: '',
+        meterNumber: '',
+        defaultHeatM3M2: '',
+        organizationId: '',
+        year: currentYear,
+        serviceStatus: 'NORMAL',
+        billingMode: 'WATER',
+      })
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
                   >
@@ -297,6 +366,17 @@ export default function MetersContent() {
                     </svg>
                   </button>
                 </div>
+                {message && (
+                  <div
+                    className={`mb-4 rounded border p-3 text-sm ${
+                      message.type === 'success'
+                        ? 'bg-green-50 border-green-200 text-green-700'
+                        : 'bg-red-50 border-red-200 text-red-700'
+                    }`}
+                  >
+                    {message.text}
+                  </div>
+                )}
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
                     <div className="flex gap-6 mb-3">
@@ -344,21 +424,68 @@ export default function MetersContent() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Тооцооллын төрөл
                     </label>
-                    <select
-                      value={form.billingMode}
-                      onChange={(e) =>
-                        setForm((p) => ({ ...p, billingMode: e.target.value as MeterBillingMode }))
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    <div
+                      className="grid grid-cols-3 rounded-md border border-gray-300 overflow-hidden bg-white"
+                      role="group"
+                      aria-label="Тооцооллын төрөл"
                     >
-                      <option value="WATER">Ус</option>
-                      <option value="HEAT">Дулааны</option>
-                      <option value="WATER_HEAT">Дулаан — ус</option>
-                    </select>
+                      {(
+                        [
+                          { id: 'WATER', label: 'Ус' },
+                          { id: 'HEAT', label: 'Дулаан' },
+                          { id: 'WATER_HEAT', label: 'Дулаан ба ус' },
+                        ] as Array<{ id: MeterBillingMode; label: string }>
+                      ).map((opt, idx) => {
+                        const active = form.billingMode === opt.id
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              const billingMode = opt.id
+                              setForm((p) => ({
+                                ...p,
+                                billingMode,
+                                ...(billingMode === 'WATER' ? { defaultHeatM3M2: '' } : {}),
+                              }))
+                            }}
+                            className={[
+                              'px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500',
+                              active
+                                ? 'bg-primary-600 text-white'
+                                : 'bg-white text-gray-700 hover:bg-gray-50',
+                              idx === 1 ? 'border-x border-gray-300' : '',
+                            ].join(' ')}
+                            aria-pressed={active}
+                          >
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
                     <p className="mt-1 text-xs text-gray-500">
                       Айл өрхийн дулаан: м²-ээр; төсөвт байгууллага, ААН: м³-ээр (тариф хуудаснаас).
                     </p>
                   </div>
+                  {(form.billingMode === 'HEAT' || form.billingMode === 'WATER_HEAT') && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        м³/м² (заавал)
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={form.defaultHeatM3M2}
+                        onChange={(e) => setForm((prev) => ({ ...prev, defaultHeatM3M2: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        placeholder="Жишээ: 80.5"
+                        required
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Заалт оруулахад энэ утгаар анх бөглөгдөнө; сар бүр заалт дээр өөрчилж болно.
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Тоолуурын дугаар
@@ -368,6 +495,7 @@ export default function MetersContent() {
                       value={form.meterNumber}
                       onChange={(e) => setForm(prev => ({ ...prev, meterNumber: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      required
                     />
                   </div>
                   <div>
@@ -410,7 +538,16 @@ export default function MetersContent() {
                       onClick={() => {
                         setShowForm(false)
                         setEditingId(null)
-                        setForm({ ownerType: '', meterNumber: '', organizationId: '', year: currentYear, serviceStatus: 'NORMAL', billingMode: 'WATER' })
+                        setMessage(null)
+                        setForm({
+        ownerType: '',
+        meterNumber: '',
+        defaultHeatM3M2: '',
+        organizationId: '',
+        year: currentYear,
+        serviceStatus: 'NORMAL',
+        billingMode: 'WATER',
+      })
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                     >
@@ -450,6 +587,9 @@ export default function MetersContent() {
                 Тооцоо
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                м³/м²
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Үйлдэл
               </th>
             </tr>
@@ -477,8 +617,16 @@ export default function MetersContent() {
                   {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
                     ? 'Дулаан'
                     : String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
-                      ? 'Ус+дулаан'
+                      ? 'Дулаан ба ус'
                       : 'Ус'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                  {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT' ||
+                  String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
+                    ? (meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
+                        ? Number(meter.defaultHeatUsage).toFixed(2)
+                        : '-')
+                    : '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex gap-2">

@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
     // Get meter to find organization
     const meter = await prisma.meter.findUnique({
       where: { id: data.meterId },
-      select: { id: true, organizationId: true, billingMode: true },
+      select: { id: true, organizationId: true, billingMode: true, defaultHeatUsage: true },
     })
 
     if (!meter) {
@@ -116,11 +116,19 @@ export async function POST(request: NextRequest) {
 
     const billingMode = normalizeBillingMode(meter.billingMode)
     const waterUsage = data.endValue - data.startValue
-    // Ус+дулаан: м³/м²-ийг модал дээр хэрэглэгч оруулж болно. Оруулаагүй бол усны зөрүүг ашиглана.
+    // Дулааны хэрэглээ:
+    // - Клиентээс heatUsage ирвэл түүнийг ашиглана
+    // - Ирэхгүй бол тоолуурын defaultHeatUsage (м³/м²)-ийг ашиглана
+    // - WATER_HEAT дээр аль аль нь байхгүй бол усны зөрүүг fallback болгоно
+    const meterDefaultHeat =
+      Number.isFinite(Number((meter as any).defaultHeatUsage)) && Number((meter as any).defaultHeatUsage) > 0
+        ? Math.round(Number((meter as any).defaultHeatUsage) * 100) / 100
+        : 0
+    const clientHeat = parseClientHeatUsage(data, billingMode)
     const heatUsage =
       billingMode === 'WATER_HEAT'
-        ? (parseClientHeatUsage(data, billingMode) ?? (waterUsage > 0 ? waterUsage : 0))
-        : (parseClientHeatUsage(data, billingMode) ?? 0)
+        ? (clientHeat ?? (meterDefaultHeat > 0 ? meterDefaultHeat : waterUsage > 0 ? waterUsage : 0))
+        : (clientHeat ?? (meterDefaultHeat > 0 ? meterDefaultHeat : 0))
     const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
     if (waterUsage < 0) {
       return NextResponse.json(
@@ -259,7 +267,11 @@ export async function GET(request: NextRequest) {
       const officeOrgId = await ensureOfficeOrganizationId(user)
       const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId ?? user.organizationId })
       if (scoped.length === 0) return NextResponse.json([])
-      where.organizationId = { in: scoped }
+      // Scope-д таарах байгууллагуудын заалт + өмнө нь энэ хэрэглэгч өөрөө нэмсэн заалтуудыг алдахгүй.
+      where.OR = [
+        { organizationId: { in: scoped } },
+        { createdByUserId: user.userId },
+      ]
     }
 
     const month = searchParams.get('month')
@@ -369,6 +381,9 @@ export async function PUT(request: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    // staff token дээр organizationId хоосон байж болно → scope шалгалтаас өмнө сэргээнэ
+    const officeOrgId = await ensureOfficeOrganizationId(user)
+    const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -395,14 +410,17 @@ export async function PUT(request: NextRequest) {
 
     const meterForBilling = await prisma.meter.findUnique({
       where: { id: existingReading.meterId },
-      select: { billingMode: true },
+      select: { billingMode: true, defaultHeatUsage: true },
     })
 
     if (
       String(user.role) === Role.ACCOUNTANT ||
       String(user.role) === Role.MANAGER
     ) {
-      if (!(await organizationIdInScope(user, existingReading.organizationId))) {
+      const createdByMe =
+        (existingReading as any).createdByUserId != null &&
+        String((existingReading as any).createdByUserId) === String(user.userId)
+      if (!createdByMe && !(await organizationIdInScope(scopedUser as any, existingReading.organizationId))) {
         return NextResponse.json(
           { error: 'Энэ заалтыг засах эрхгүй' },
           { status: 403 }
@@ -412,10 +430,18 @@ export async function PUT(request: NextRequest) {
 
     const billingMode = normalizeBillingMode(meterForBilling?.billingMode)
     const waterUsage = data.endValue - data.startValue
+    const meterDefaultHeat =
+      Number.isFinite(Number((meterForBilling as any)?.defaultHeatUsage)) &&
+      Number((meterForBilling as any)?.defaultHeatUsage) > 0
+        ? Math.round(Number((meterForBilling as any)?.defaultHeatUsage) * 100) / 100
+        : 0
+    const clientHeat = parseClientHeatUsage(data, billingMode)
+    const existingHeat = Number((existingReading as any)?.heatUsage ?? 0) || 0
+    const fallbackHeat = existingHeat > 0 ? existingHeat : meterDefaultHeat > 0 ? meterDefaultHeat : 0
     const heatUsage =
       billingMode === 'WATER_HEAT'
-        ? (parseClientHeatUsage(data, billingMode) ?? (waterUsage > 0 ? waterUsage : 0))
-        : (parseClientHeatUsage(data, billingMode) ?? 0)
+        ? (clientHeat ?? (fallbackHeat > 0 ? fallbackHeat : waterUsage > 0 ? waterUsage : 0))
+        : (clientHeat ?? fallbackHeat)
     const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
     if (waterUsage < 0) {
       return NextResponse.json(
@@ -583,6 +609,8 @@ export async function DELETE(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const officeOrgId = await ensureOfficeOrganizationId(user)
+    const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')
 
@@ -604,7 +632,10 @@ export async function DELETE(request: NextRequest) {
       String(user.role) === Role.ACCOUNTANT ||
       String(user.role) === Role.MANAGER
     ) {
-      if (!(await organizationIdInScope(user, reading.organizationId))) {
+      const createdByMe =
+        (reading as any).createdByUserId != null &&
+        String((reading as any).createdByUserId) === String(user.userId)
+      if (!createdByMe && !(await organizationIdInScope(scopedUser as any, reading.organizationId))) {
         return NextResponse.json(
           { error: 'Энэ заалтыг устгах эрхгүй' },
           { status: 403 }

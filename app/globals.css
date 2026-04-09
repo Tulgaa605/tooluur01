@@ -8,3 +8,11 @@
   pointer-events: none;
   user-select: none;
 }
+
+/* Readings modal: эхний/эцсийн заалтын нүдийг төвд байрлуулах */
+.ag-cell.reading-modal-center {
+  text-align: center;
+}
+.ag-header-cell.reading-modal-center .ag-header-cell-label {
+  justify-content: center;
+}

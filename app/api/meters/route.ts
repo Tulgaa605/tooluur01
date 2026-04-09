@@ -81,6 +81,7 @@ export async function GET(request: NextRequest) {
         year: true,
         billingMode: true,
         serviceStatus: true,
+        defaultHeatUsage: true,
         createdByUserId: true,
       },
       orderBy: { meterNumber: 'asc' },
@@ -141,36 +142,10 @@ export async function POST(request: NextRequest) {
 
     const rawMeterNumber =
       typeof data.meterNumber === 'string' ? data.meterNumber.trim() : String(data.meterNumber ?? '').trim()
-
-    // UI дээр хоосон орхивол 1-с эхэлсэн дарааллын дараагийн дугаарыг автоматаар олгоно.
-    const nextSequentialMeterNumber = async (): Promise<string> => {
-      // Тоолуурууд хуудсан дээр (GET) харагддаг scope-оос хамгийн их тоон дугаарыг олно.
-      const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
-      const where: any =
-        scoped.length === 0
-          ? { createdByUserId: user.userId }
-          : {
-              OR: [
-                { organizationId: { in: scoped } },
-                { createdByUserId: user.userId },
-              ],
-            }
-      const meters = await prisma.meter.findMany({
-        where,
-        select: { meterNumber: true },
-        take: 20000,
-      })
-      let maxN = 0
-      for (const m of meters) {
-        const s = String(m.meterNumber ?? '').trim()
-        if (!/^[0-9]+$/.test(s)) continue
-        const n = Number(s)
-        if (Number.isFinite(n) && n > maxN) maxN = n
-      }
-      return String(maxN + 1)
+    if (!rawMeterNumber) {
+      return NextResponse.json({ error: 'Тоолуурын дугаар заавал оруулна уу' }, { status: 400 })
     }
-
-    const meterNumber = rawMeterNumber || (await nextSequentialMeterNumber())
+    const meterNumber = rawMeterNumber
 
     const currentYear = new Date().getFullYear()
     const year = typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100
@@ -184,32 +159,35 @@ export async function POST(request: NextRequest) {
       typeof data.billingMode === 'string' ? data.billingMode.trim().toUpperCase() : 'WATER'
     const billingMode =
       rawBilling === 'HEAT' || rawBilling === 'WATER_HEAT' ? rawBilling : 'WATER'
-    // Давхардсан тохиолдолд (P2002) дараагийн дугаараар retry хийнэ (автоматаар олгосон үед).
-    let meter = null as any
-    const shouldAutoAssign = !rawMeterNumber
-    for (let attempt = 0; attempt < (shouldAutoAssign ? 25 : 1); attempt++) {
-      const candidate = attempt === 0 ? meterNumber : String(Number(meterNumber) + attempt)
-      try {
-        meter = await prisma.meter.create({
-          data: {
-            meterNumber: candidate,
-            organizationId: orgId,
-            year,
-            billingMode,
-            serviceStatus,
-            createdByUserId: user.userId,
-            updatedByUserId: user.userId,
-          },
-        })
-        break
-      } catch (e: any) {
-        if (e?.code === 'P2002' && shouldAutoAssign) continue
-        throw e
+
+    let defaultHeatUsage: number | null = null
+    if (billingMode === 'HEAT' || billingMode === 'WATER_HEAT') {
+      const rawH =
+        typeof (data as any).defaultHeatUsage === 'number'
+          ? (data as any).defaultHeatUsage
+          : parseFloat(String((data as any).defaultHeatUsage ?? '').replace(',', '.').trim())
+      if (!Number.isFinite(rawH) || rawH <= 0) {
+        return NextResponse.json(
+          { error: 'Дулаан / Ус+дулаан тоолуурт м³/м² заавал оруулна уу (0-ээс их)' },
+          { status: 400 }
+        )
       }
+      defaultHeatUsage = Math.round(rawH * 100) / 100
     }
-    if (!meter) {
-      return NextResponse.json({ error: 'Тоолуурын дугаар олгоход алдаа гарлаа' }, { status: 500 })
-    }
+
+    const meter = await prisma.meter.create({
+      data: {
+        meterNumber,
+        organizationId: orgId,
+        year,
+        billingMode,
+        serviceStatus,
+        defaultHeatUsage:
+          billingMode === 'HEAT' || billingMode === 'WATER_HEAT' ? defaultHeatUsage : null,
+        createdByUserId: user.userId,
+        updatedByUserId: user.userId,
+      },
+    })
 
     return NextResponse.json(meter)
   } catch (error: any) {
@@ -252,7 +230,7 @@ export async function PUT(request: NextRequest) {
 
     const existing = await prisma.meter.findUnique({
       where: { id: data.id },
-      select: { organizationId: true },
+      select: { organizationId: true, billingMode: true, defaultHeatUsage: true, createdByUserId: true },
     })
     if (!existing) {
       return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
@@ -266,13 +244,35 @@ export async function PUT(request: NextRequest) {
     let nextOrgId = existing.organizationId
     if (String(user.role) === Role.ACCOUNTANT || String(user.role) === Role.MANAGER) {
       const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
-      if (!scoped.includes(existing.organizationId)) {
+      const createdByMe = existing.createdByUserId != null && String(existing.createdByUserId) === String(user.userId)
+      if (!scoped.includes(existing.organizationId) && !createdByMe) {
         return NextResponse.json({ error: 'Энэ тоолуурыг засах эрхгүй' }, { status: 403 })
       }
       if (data.organizationId != null && String(data.organizationId).trim() !== '') {
         const candidate = String(data.organizationId).trim()
+        // Шилжүүлэх эрх:
+        // - Ерөнхийдөө зөвхөн scope-д байгаа байгууллага руу
+        // - Гэхдээ өөрөө нэмсэн тоолуур дээр эзэнгүй (managedBy=null) байгууллагыг автоматаар claim хийж шилжүүлэхийг зөвшөөрнө
         if (!scoped.includes(candidate)) {
-          return NextResponse.json({ error: 'Энэ байгууллагад шилжүүлэх эрхгүй' }, { status: 403 })
+          if (!createdByMe) {
+            return NextResponse.json({ error: 'Энэ байгууллагад шилжүүлэх эрхгүй' }, { status: 403 })
+          }
+          const org = await prisma.organization.findUnique({
+            where: { id: candidate },
+            select: { id: true, managedByOrganizationId: true },
+          })
+          if (!org) {
+            return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 400 })
+          }
+          // officeOrgId нь ensureOfficeOrganizationId-аас ирдэг тул хоосон биш байх ёстой
+          if (org.managedByOrganizationId == null && officeOrgId) {
+            await prisma.organization.update({
+              where: { id: candidate },
+              data: { managedByOrganizationId: officeOrgId },
+            })
+          } else if (org.managedByOrganizationId !== officeOrgId) {
+            return NextResponse.json({ error: 'Энэ байгууллагад шилжүүлэх эрхгүй' }, { status: 403 })
+          }
         }
         nextOrgId = candidate
       }
@@ -296,6 +296,39 @@ export async function PUT(request: NextRequest) {
           ? 'WATER'
           : undefined
 
+    const nextBilling = String(billingMode ?? existing.billingMode ?? 'WATER').toUpperCase()
+
+    let defaultHeatUsageOut: number | null = null
+    if (nextBilling === 'WATER') {
+      defaultHeatUsageOut = null
+    } else if (nextBilling === 'HEAT' || nextBilling === 'WATER_HEAT') {
+      const bodyHas =
+        (data as any).defaultHeatUsage !== undefined &&
+        String((data as any).defaultHeatUsage).trim() !== ''
+      if (bodyHas) {
+        const rawH =
+          typeof (data as any).defaultHeatUsage === 'number'
+            ? (data as any).defaultHeatUsage
+            : parseFloat(String((data as any).defaultHeatUsage ?? '').replace(',', '.').trim())
+        if (!Number.isFinite(rawH) || rawH <= 0) {
+          return NextResponse.json(
+            { error: 'м³/м² 0-ээс их утгатай байх ёстой' },
+            { status: 400 }
+          )
+        }
+        defaultHeatUsageOut = Math.round(rawH * 100) / 100
+      } else {
+        const ex = Number(existing.defaultHeatUsage ?? 0)
+        if (ex > 0) defaultHeatUsageOut = Math.round(ex * 100) / 100
+        else {
+          return NextResponse.json(
+            { error: 'Дулаан / Ус+дулаан тоолуурт м³/м² заавал оруулна уу' },
+            { status: 400 }
+          )
+        }
+      }
+    }
+
     const meter = await prisma.meter.update({
       where: { id: data.id },
       data: {
@@ -304,6 +337,7 @@ export async function PUT(request: NextRequest) {
         year,
         ...(serviceStatus !== undefined ? { serviceStatus } : {}),
         ...(billingMode !== undefined ? { billingMode } : {}),
+        defaultHeatUsage: defaultHeatUsageOut,
         updatedByUserId: user.userId,
       },
     })
@@ -357,7 +391,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId })
-    if (!scoped.includes(meter.organizationId)) {
+    const createdByMe = meter.createdByUserId != null && String(meter.createdByUserId) === String(user.userId)
+    if (!scoped.includes(meter.organizationId) && !createdByMe) {
       return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
     }
     if (meter.readings.length > 0) {

@@ -107,6 +107,8 @@ model Meter {
   billingMode    String        @default("WATER")
   /// NORMAL | DAMAGED | REPLACED — хоосон/null = хэвийн (хуучин баримттай нийцэх).
   serviceStatus  String?
+  /// HEAT / WATER_HEAT: дулааны м³/м² — заалт оруулахад анхны утга; тоолуур бүртгэхэд заавал бөглөнө.
+  defaultHeatUsage Float?
   readings       MeterReading[]
   createdByUserId String?      @db.ObjectId
   updatedByUserId String?      @db.ObjectId
