@@ -259,7 +259,7 @@ export default function ReadingsContent() {
   const [readings, setReadings] = useState<Reading[]>([])
   const [readingsLoading, setReadingsLoading] = useState(false)
   const [filterMonth, setFilterMonth] = useState('')
-  const [filterYear, setFilterYear] = useState('')
+  const [filterYear, setFilterYear] = useState(() => String(new Date().getFullYear()))
   // “Бодолт” товч дарсан үед л тарифаар дахин тооцсон дүнг харуулна (recalculate=1).
   const [showCalculated, setShowCalculated] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -343,7 +343,11 @@ export default function ReadingsContent() {
   )
   const yearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear()
-    return [currentYear + 1, currentYear, currentYear - 1, currentYear - 2]
+    const minYear = currentYear - 2
+    const maxYear = Math.max(2030, currentYear + 1)
+    const years: number[] = []
+    for (let y = maxYear; y >= minYear; y--) years.push(y)
+    return years
   }, [])
 
   useEffect(() => {
@@ -2209,29 +2213,6 @@ export default function ReadingsContent() {
                     </div>
                     {loading && <span className="text-sm text-gray-500">Бэлтгэж байна...</span>}
                   </div>
-                  <p className="mt-3 text-xs text-gray-600">
-                    {modalNeedsWater && !modalNeedsHeat && (
-                      <>
-                        <span className="font-medium text-gray-700">Зөвхөн ус:</span> тоолуур &quot;Ус&quot; төрөлтэй —
-                        зөвхөн усны баганууд харагдана; <strong>дулааны багана харагдахгүй</strong>.
-                        Холимог жагсаалтад зөвхөн усны мөр дээр дулааны нүд идэвхгүй.
-                      </>
-                    )}
-                    {modalNeedsHeat && !modalNeedsWater && (
-                      <>
-                        <span className="font-medium text-gray-700">Зөвхөн дулаан:</span> тоолуур &quot;Дулаан&quot;
-                        төрөлтэй — дулааны хэрэглээ (<strong>м³/м²</strong>) тоолуурын бүртгэлээс ирнэ, энд зөвхөн заалт оруулна;{' '}
-                        <strong>усны (бохир/цэвэр) багана харагдахгүй</strong>.
-                        Холимог жагсаалтад зөвхөн дулааны мөр дээр эхний/эцсийн заалт, усны суурь хураамжийг засах боломжгүй.
-                      </>
-                    )}
-                    {modalNeedsWater && modalNeedsHeat && (
-                      <>
-                        <span className="font-medium text-gray-700">Ус + дулаан:</span> тоолуур &quot;Ус+дулаан&quot;
-                        — усны заалтыг энд оруулна; дулааны хэрэглээ (<strong>м³/м²</strong>) тоолуурын бүртгэлээс ашиглагдана.
-                      </>
-                    )}
-                  </p>
                 </div>
 
                 {message && (

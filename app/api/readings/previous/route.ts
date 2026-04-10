@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const meterId = searchParams.get('meterId')
     const month = parseInt(searchParams.get('month') || '1')
-    const year = parseInt(searchParams.get('year') || '2026')
+    const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()), 10)
 
     if (!meterId) {
       return NextResponse.json({ error: 'Тоолуурын ID шаардлагатай' }, { status: 400 })

@@ -463,9 +463,6 @@ export default function MetersContent() {
                         )
                       })}
                     </div>
-                    <p className="mt-1 text-xs text-gray-500">
-                      Айл өрхийн дулаан: м²-ээр; төсөвт байгууллага, ААН: м³-ээр (тариф хуудаснаас).
-                    </p>
                   </div>
                   {(form.billingMode === 'HEAT' || form.billingMode === 'WATER_HEAT') && (
                     <div>
@@ -527,10 +524,6 @@ export default function MetersContent() {
                       <option value="DAMAGED">Эвдэрсэн</option>
                       <option value="REPLACED">Солигдсон</option>
                     </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      «Эвдэрсэн», «Солигдсон» тоолуур нь заалтын үндсэн хүснэгтэнд харагдана; зөвхөн «заалт оруулах»
-                      цонхонд автоматаар орохгүй.
-                    </p>
                   </div>
                   <div className="flex justify-end gap-3 mt-4 pt-2">
                     <button

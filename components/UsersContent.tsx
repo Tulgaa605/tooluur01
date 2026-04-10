@@ -530,23 +530,37 @@ export default function UsersContent() {
           <nav className="-mb-px flex space-x-8">
             <button
               onClick={() => setActiveTab('users')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm inline-flex items-center gap-1.5 ${
                 activeTab === 'users'
                   ? 'border-primary-500 text-primary-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              Иргэн, хувь хүн
+              <span>Иргэн, хувь хүн</span>
+              <span
+                className={`tabular-nums font-normal ${
+                  activeTab === 'users' ? 'text-primary-600/85' : 'text-gray-400'
+                }`}
+              >
+                ({householdsLoading ? '…' : households.length})
+              </span>
             </button>
             <button
               onClick={() => setActiveTab('organizations')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm inline-flex items-center gap-1.5 ${
                 activeTab === 'organizations'
                   ? 'border-primary-500 text-primary-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              Бусад
+              <span>Бусад</span>
+              <span
+                className={`tabular-nums font-normal ${
+                  activeTab === 'organizations' ? 'text-primary-600/85' : 'text-gray-400'
+                }`}
+              >
+                ({orgsLoading ? '…' : orgs.length})
+              </span>
             </button>
           </nav>
         </div>
@@ -788,6 +802,16 @@ export default function UsersContent() {
             onChange={handleOrgExcelFileChange}
           />
           <div className="mb-6 flex justify-end gap-2">
+            
+            <button
+              type="button"
+              onClick={() => exportOrganizationsToExcel()}
+              className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 text-sm"
+              title="Жагсаалтыг Excel рүү татах"
+            >
+              <ArrowDownTrayIcon className="h-5 w-5 shrink-0" />
+              Excel татах
+            </button>
             <button
               type="button"
               disabled={importingOrgExcel}
@@ -797,15 +821,6 @@ export default function UsersContent() {
             >
               <DocumentArrowUpIcon className="h-5 w-5 shrink-0" />
               {importingOrgExcel ? 'Импортлох…' : 'Excel-ээс импорт'}
-            </button>
-            <button
-              type="button"
-              onClick={() => exportOrganizationsToExcel()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50 text-sm"
-              title="Жагсаалтыг Excel рүү татах"
-            >
-              <ArrowDownTrayIcon className="h-5 w-5 shrink-0" />
-              Excel татах
             </button>
             <button
               onClick={() => {
