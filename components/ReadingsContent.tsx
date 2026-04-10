@@ -343,10 +343,10 @@ export default function ReadingsContent() {
   )
   const yearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear()
-    const minYear = currentYear - 2
+    const minYear = currentYear
     const maxYear = Math.max(2030, currentYear + 1)
     const years: number[] = []
-    for (let y = maxYear; y >= minYear; y--) years.push(y)
+    for (let y = minYear; y <= maxYear; y++) years.push(y)
     return years
   }, [])
 
@@ -693,7 +693,8 @@ export default function ReadingsContent() {
       const api = params.api
       const node = params.node
 
-      // Өмнөх сарын эцсийн заалтыг өөрчилбөл дараагийн сарын эхний/эцсийн заалтыг дагуулж шинэчилнэ.
+      // Өмнөх сарын эцсийн заалтыг өөрчилбөл дараагийн саруудыг дагуулна: эх=эцсийн заалт тэнцүү бол хоёуланд нь carry;
+      // эцсийн заалтыг эхнээсээ ялгаатай бөглөсөн бол зөвхөн эхний заалтыг солино.
       let updatedNodes: any[] = []
       if (changedField === 'endValue' && reading.meterId && reading.month && reading.year) {
         const meterId = reading.meterId
@@ -719,11 +720,12 @@ export default function ReadingsContent() {
           const nextRow = newReadings.find((r) => r.meterId === meterId && r.month === nextMonth && r.year === nextYear)
           if (!nextRow) break
 
-          const hadManualNextEnd = Number(nextRow.endValue || 0) !== Number(nextRow.startValue || 0)
+          const prevStart = Number(nextRow.startValue || 0)
+          const prevEnd = Number(nextRow.endValue || 0)
+          const onlyUpdateStart = prevEnd !== prevStart
           nextRow.startValue = carried
 
-          if (!hadManualNextEnd) {
-            // Дараагийн сарын end өмнө нь бөглөгдөөгүй бол start/end-ийг хоёуланг нь carry хийнэ.
+          if (!onlyUpdateStart) {
             nextRow.endValue = carried
           }
 

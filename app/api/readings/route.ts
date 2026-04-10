@@ -66,9 +66,138 @@ async function ensureOfficeOrganizationId(user: { userId: string; organizationId
   return org.id
 }
 
-function getNextPeriod(year: number, month: number): { year: number; month: number } {
-  if (month === 12) return { year: year + 1, month: 1 }
-  return { year, month: month + 1 }
+function periodSortKey(year: number, month: number): number {
+  return year * 100 + month
+}
+
+function endReadingChanged(before: unknown, after: unknown): boolean {
+  const a = Number(before)
+  const b = Number(after)
+  if (!Number.isFinite(a) && !Number.isFinite(b)) return String(before) !== String(after)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return true
+  return Math.abs(a - b) > 1e-6
+}
+
+/**
+ * Тухайн сарын эцсийн заалт өөрчлөгдсөний дараа ижил тоолуурын бүх ДАРААГИЙХ заалтуудыг
+ * (сар алгассан ч) дараалан дагуулж шинэчилнө — зөвхөн дараагийн 1 сар биш.
+ *
+ * Дүрэм: дараагийн сарын усны эх/эцсийн заалт тэнцүү (зөрүүгүй) бол өмнөх сарын эцсийг
+ * эх болон эцсийн дээр хоёуланд нь тавина. Хэрэглэгч эцсийн заалтыг эхнээсээ ялгаатай
+ * бөглөж хадгалсан бол зөвхөн эхний заалтыг шинэчилж, эцсийг хадгална (доор нь end < start болохгүй).
+ */
+async function propagateLaterReadingsAfterEndChange(opts: {
+  meterId: string
+  billingMode: BillingMode
+  afterYear: number
+  afterMonth: number
+  carriedEnd: number
+  updatedByUserId: string
+}) {
+  const { meterId, billingMode, afterYear, afterMonth, updatedByUserId } = opts
+  let carried = opts.carriedEnd
+
+  const all = await prisma.meterReading.findMany({
+    where: { meterId },
+    select: {
+      id: true,
+      organizationId: true,
+      year: true,
+      month: true,
+      startValue: true,
+      endValue: true,
+      usage: true,
+      heatUsage: true,
+    },
+    orderBy: [{ year: 'asc' }, { month: 'asc' }],
+  })
+
+  const anchor = periodSortKey(afterYear, afterMonth)
+  const later = all.filter((r) => periodSortKey(r.year, r.month) > anchor)
+
+  for (const nextReading of later) {
+    const nextPeriod = { year: nextReading.year, month: nextReading.month }
+    const nextStartValue = carried
+    const prevStart = Number(nextReading.startValue ?? 0)
+    const preservedEnd = Number(nextReading.endValue ?? 0)
+    /** Эцсийн заалт эхнээсээ ялгаатай = хэрэглэгч бодитоор бөглөсөн → зөвхөн эхний заалтыг солино; тэнцүү бол эх+эцсийг хоёуланг нь carry */
+    const onlyUpdateStart = preservedEnd !== prevStart
+
+    let nextEndValue: number
+    if (onlyUpdateStart) {
+      nextEndValue = preservedEnd
+      if (nextEndValue < nextStartValue) nextEndValue = nextStartValue
+    } else {
+      nextEndValue = nextStartValue
+    }
+    const nextUsage = nextEndValue - nextStartValue
+
+    const preservedHeat = Number(nextReading.heatUsage ?? 0) || 0
+    const heatForSplit = billingMode === 'WATER' ? 0 : preservedHeat
+
+    const [nextWater, nextHeat] = await Promise.all([
+      getWaterTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
+      getHeatTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
+    ])
+    const nextOrgCat = await prisma.organization.findUnique({
+      where: { id: nextReading.organizationId },
+      select: { category: true },
+    })
+
+    const usageForMoney =
+      billingMode === 'HEAT'
+        ? preservedHeat > 0
+          ? preservedHeat
+          : nextUsage
+        : nextUsage
+
+    const nextMoney =
+      billingMode === 'WATER_HEAT'
+        ? computeReadingMoneySplit(
+            nextUsage,
+            heatForSplit,
+            nextOrgCat?.category ?? 'HOUSEHOLD',
+            billingMode,
+            nextWater,
+            nextHeat
+          )
+        : computeReadingMoney(
+            usageForMoney,
+            nextOrgCat?.category ?? 'HOUSEHOLD',
+            billingMode,
+            nextWater,
+            nextHeat
+          )
+
+    const nextHeatStored = billingMode === 'HEAT' || billingMode === 'WATER_HEAT' ? heatForSplit : 0
+    const nextUsageStored = billingMode === 'HEAT' ? usageForMoney : nextUsage
+
+    await prisma.meterReading.update({
+      where: { id: nextReading.id },
+      data: {
+        startValue: nextStartValue,
+        endValue: nextEndValue,
+        heatUsage: nextHeatStored,
+        usage: nextUsageStored,
+        baseClean: nextMoney.baseClean,
+        baseDirty: nextMoney.baseDirty,
+        cleanPerM3: nextMoney.cleanPerM3,
+        dirtyPerM3: nextMoney.dirtyPerM3,
+        heatBase: nextMoney.heatBase,
+        heatPerM3: nextMoney.heatPerM3,
+        heatPerM2: nextMoney.heatPerM2,
+        cleanAmount: nextMoney.cleanAmount,
+        dirtyAmount: nextMoney.dirtyAmount,
+        heatAmount: nextMoney.heatAmount,
+        subtotal: nextMoney.subtotal,
+        vat: nextMoney.vat,
+        total: nextMoney.total,
+        updatedByUserId,
+      },
+    })
+
+    carried = nextEndValue
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -204,6 +333,17 @@ export async function POST(request: NextRequest) {
           updatedByUserId: user.userId,
         },
       })
+      const endChanged = endReadingChanged(existing.endValue, data.endValue)
+      if (endChanged) {
+        await propagateLaterReadingsAfterEndChange({
+          meterId: data.meterId,
+          billingMode,
+          afterYear: Number(data.year),
+          afterMonth: Number(data.month),
+          carriedEnd: Number(data.endValue) || 0,
+          updatedByUserId: user.userId,
+        })
+      }
       const [withRel] = await attachOrgsAndMetersToReadings([updated])
       return NextResponse.json({ ...withRel, _updatedExisting: true })
     }
@@ -234,6 +374,16 @@ export async function POST(request: NextRequest) {
         createdBy: user.userId,
         createdByUserId: user.userId,
       },
+    })
+
+    // Шинэ сар анх хадгалагдсан ч дараагийн (жишээ нь 4-р) сарын эхний заалтыг дагуулна.
+    await propagateLaterReadingsAfterEndChange({
+      meterId: data.meterId,
+      billingMode,
+      afterYear: Number(data.year),
+      afterMonth: Number(data.month),
+      carriedEnd: Number(data.endValue) || 0,
+      updatedByUserId: user.userId,
     })
 
     return NextResponse.json(reading)
@@ -507,89 +657,20 @@ export async function PUT(request: NextRequest) {
     })
     const [reading] = await attachOrgsAndMetersToReadings([updatedRow])
 
-    // Өмнөх сарын эцсийн заалт өөрчлөгдвөл дараагийн сарын эхний/эцсийн заалтыг автоматаар дагуулж шинэчилнэ.
+    // Эцсийн заалт өөрчлөгдвөл ижил тоолуурын бүх дараагийн сарууд (алгассан ч) дагуулалтаар шинэчлэгдэнэ.
     const periodChanged =
       Number(existingReading.year) !== Number(data.year) ||
       Number(existingReading.month) !== Number(data.month)
-    const endChanged = Number(existingReading.endValue) !== Number(data.endValue)
+    const endChanged = endReadingChanged(existingReading.endValue, data.endValue)
     if (!periodChanged && endChanged) {
-      const nextPeriod = getNextPeriod(Number(data.year), Number(data.month))
-      const nextReading = await prisma.meterReading.findUnique({
-        where: {
-          meterId_month_year: {
-            meterId: existingReading.meterId,
-            month: nextPeriod.month,
-            year: nextPeriod.year,
-          },
-        },
-        select: { id: true, organizationId: true, startValue: true, endValue: true, usage: true },
+      await propagateLaterReadingsAfterEndChange({
+        meterId: existingReading.meterId,
+        billingMode,
+        afterYear: Number(data.year),
+        afterMonth: Number(data.month),
+        carriedEnd: Number(data.endValue) || 0,
+        updatedByUserId: user.userId,
       })
-
-      if (nextReading) {
-        const nextStartValue = Number(data.endValue) || 0
-        // Дараагийн сарын эцсийн заалтыг зөвхөн автоматаар (start=end, usage=0) байсан үед л дагуулж шинэчилнэ.
-        // Хэрэглэгч өөрөө эцсийн заалт оруулсан бол хадгалж үлдээнэ.
-        const wasAutoFilled =
-          Number(nextReading.usage ?? 0) === 0 &&
-          Number(nextReading.endValue ?? 0) === Number(nextReading.startValue ?? 0)
-        const preservedEnd = Number(nextReading.endValue ?? 0)
-        let nextEndValue = wasAutoFilled ? nextStartValue : preservedEnd
-        // start нэмэгдсэнээс болж end < start болох эрсдэлийг арилгана.
-        if (nextEndValue < nextStartValue) {
-          nextEndValue = nextStartValue
-        }
-        const nextUsage = nextEndValue - nextStartValue
-        const [nextWater, nextHeat] = await Promise.all([
-          getWaterTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
-          getHeatTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
-        ])
-        const nextOrgCat = await prisma.organization.findUnique({
-          where: { id: nextReading.organizationId },
-          select: { category: true },
-        })
-        const nextMoney =
-          billingMode === 'WATER_HEAT'
-            ? computeReadingMoneySplit(
-                nextUsage,
-                // Дараагийн сарын дулааны хэрэглээг автоматаар дагуулахгүй (хэрэглэгч модал дээр тусад нь оруулна).
-                0,
-                nextOrgCat?.category ?? 'HOUSEHOLD',
-                billingMode,
-                nextWater,
-                nextHeat
-              )
-            : computeReadingMoney(
-                nextUsage,
-                nextOrgCat?.category ?? 'HOUSEHOLD',
-                billingMode,
-                nextWater,
-                nextHeat
-              )
-
-        await prisma.meterReading.update({
-          where: { id: nextReading.id },
-          data: {
-            startValue: nextStartValue,
-            endValue: nextEndValue,
-            heatUsage: 0,
-            usage: nextUsage,
-            baseClean: nextMoney.baseClean,
-            baseDirty: nextMoney.baseDirty,
-            cleanPerM3: nextMoney.cleanPerM3,
-            dirtyPerM3: nextMoney.dirtyPerM3,
-            heatBase: nextMoney.heatBase,
-            heatPerM3: nextMoney.heatPerM3,
-            heatPerM2: nextMoney.heatPerM2,
-            cleanAmount: nextMoney.cleanAmount,
-            dirtyAmount: nextMoney.dirtyAmount,
-            heatAmount: nextMoney.heatAmount,
-            subtotal: nextMoney.subtotal,
-            vat: nextMoney.vat,
-            total: nextMoney.total,
-            updatedByUserId: user.userId,
-          },
-        })
-      }
     }
 
     return NextResponse.json(reading)
