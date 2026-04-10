@@ -10,12 +10,12 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  // Windows дээр .next дотор permission/lock асуудал үүсэж байвал distDir-ийг тусад нь салгаж өгнө
+  // Windows: олон CPU thread + том багц (ag-grid, xlsx) зарим серверт native worker crash (0xC0000409) өгнө
   distDir: '.next-build',
   webpack: (config, { dev }) => {
+    if (!dev) {
+      config.parallelism = 1
+    }
     if (dev) {
       config.watchOptions = config.watchOptions || {};
       config.watchOptions.ignored = [
