@@ -13,7 +13,7 @@
     "dev": "node scripts/clean-next-dev.js && npx cross-env NODE_ENV=development next dev --webpack",
     "dev:3001": "node scripts/clean-next-dev.js && npx cross-env NODE_ENV=development next dev -p 3001 --webpack",
     "dev:clean": "node -e \"try{require('fs').rmSync('.next-build',{recursive:true,force:true,maxRetries:12,retryDelay:150})}catch(e){}\" && npx cross-env NODE_ENV=development next dev --webpack",
-    "build": "prisma generate && node scripts/clean-next-build-types.js && next build --webpack",
+    "build": "prisma generate && node scripts/clean-next-build-types.js && cross-env NODE_OPTIONS=--max-old-space-size=8192 next build --webpack",
     "build:clean": "node -e \"try{require('fs').rmSync('.next-build',{recursive:true,force:true})}catch(e){}\" && pnpm build",
     "start": "next start",
     "lint": "next lint",
