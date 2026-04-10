@@ -5,9 +5,13 @@ const nextConfig = {
   // Олон lockfile (жишээ нь Desktop болон эцэг хавтас) байхад Next.js буруу root сонгохоос сэргийлнэ
   outputFileTracingRoot: path.join(__dirname),
   reactStrictMode: true,
-  // TS worker OOM (бага RAM сервер): NEXT_IGNORE_BUILD_ERRORS=1 + pnpm typecheck тусад нь
+  // Next.js-ийн build доторх TS worker зарим Windows/RAM орчинд OOM эсвэл 0xC0000409 (native crash) өгдөг.
+  // Төрөл шалгалтыг IDE + `pnpm typecheck` (CI) дээр хийнэ.
   typescript: {
-    ignoreBuildErrors: process.env.NEXT_IGNORE_BUILD_ERRORS === '1',
+    ignoreBuildErrors: true,
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
   },
   // Windows дээр .next дотор permission/lock асуудал үүсэж байвал distDir-ийг тусад нь салгаж өгнө
   distDir: '.next-build',
