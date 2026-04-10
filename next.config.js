@@ -10,6 +10,14 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  experimental: {
+    // Windows дээр static generation worker pool заримдаа 0xC0000409 өгч унах боломжтой.
+    // Worker дотор нэг дор хэдэн page боловсруулахыг багасгаж, worker тоог бууруулна.
+    staticGenerationMaxConcurrency: 1,
+    staticGenerationMinPagesPerWorker: 10000,
+    // Зарим Windows сервер дээр webpack build worker (thread) crash өгөх тохиолдолтой.
+    webpackBuildWorker: false,
+  },
   // Windows: олон CPU thread + том багц (ag-grid, xlsx) зарим серверт native worker crash (0xC0000409) өгнө
   distDir: '.next-build',
   webpack: (config, { dev }) => {
