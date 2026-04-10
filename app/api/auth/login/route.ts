@@ -43,8 +43,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Зарим хуучин бүртгэлд (ялангуяа ACCOUNTANT/MANAGER) organizationId хоосон үлдсэн байж болно.
-    // Тэгвэл scope-д тулгуурласан бүх үйлдлүүд (тоолуур/заалт/харилцагч) ажиллахгүй тул login үед засварлана.
     let organizationId = user.organizationId
     const role = user.role as Role
     if ((role === Role.ACCOUNTANT || role === Role.MANAGER) && !organizationId) {
