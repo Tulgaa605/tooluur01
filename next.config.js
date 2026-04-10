@@ -5,6 +5,10 @@ const nextConfig = {
   // Олон lockfile (жишээ нь Desktop болон эцэг хавтас) байхад Next.js буруу root сонгохоос сэргийлнэ
   outputFileTracingRoot: path.join(__dirname),
   reactStrictMode: true,
+  // TS worker OOM (бага RAM сервер): NEXT_IGNORE_BUILD_ERRORS=1 + pnpm typecheck тусад нь
+  typescript: {
+    ignoreBuildErrors: process.env.NEXT_IGNORE_BUILD_ERRORS === '1',
+  },
   // Windows дээр .next дотор permission/lock асуудал үүсэж байвал distDir-ийг тусад нь салгаж өгнө
   distDir: '.next-build',
   webpack: (config, { dev }) => {

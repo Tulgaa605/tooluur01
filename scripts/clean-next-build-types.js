@@ -1,20 +1,24 @@
 /**
- * Windows дээр production build үед .next-build/types цэвэрлэгээ ENOTEMPTY алдаа өгөхөөс сэргийлнэ.
- * Зөвхөн types хавтсыг retry-тэй устгана.
+ * Production build-ийн өмнө .next-build доторх types + dev stub-уудыг цэвэрлэнэ.
+ * `dev/types` нь `route.js` stub-тай үлдэж TypeScript build унадаг тул dev-ийг бүхэлд нь устгана.
  */
 const fs = require('fs')
 const path = require('path')
 
-const typesDir = path.join(process.cwd(), '.next-build', 'types')
+function rmWithRetry(dir) {
+  if (!fs.existsSync(dir)) return
+  fs.rmSync(dir, {
+    recursive: true,
+    force: true,
+    maxRetries: 12,
+    retryDelay: 150,
+  })
+}
+
+const root = process.cwd()
 try {
-  if (fs.existsSync(typesDir)) {
-    fs.rmSync(typesDir, {
-      recursive: true,
-      force: true,
-      maxRetries: 12,
-      retryDelay: 150,
-    })
-  }
+  rmWithRetry(path.join(root, '.next-build', 'types'))
+  rmWithRetry(path.join(root, '.next-build', 'dev'))
 } catch (e) {
   console.warn('[clean-next-build-types]', e.message)
 }
