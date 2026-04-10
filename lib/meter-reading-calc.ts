@@ -3,19 +3,24 @@ import {
   type BillingMode,
   type HeatTariffRates,
   applyManualHeatAmountToMoney,
+  applyWaterChargeSplitToWaterRates,
   computeReadingMoneySplit,
   computeReadingMoney,
+  effectiveWaterChargeSplit,
   normalizeBillingMode,
   type ReadingMoneySnapshot,
+  type WaterChargeSplit,
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
 
-export type { BillingMode, HeatTariffRates, ReadingMoneySnapshot, WaterTariffRates }
+export type { BillingMode, HeatTariffRates, ReadingMoneySnapshot, WaterChargeSplit, WaterTariffRates }
 export {
   applyManualHeatAmountToMoney,
+  applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveWaterChargeSplit,
   normalizeBillingMode,
 }
 

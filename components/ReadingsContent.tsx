@@ -9,8 +9,10 @@ import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { PlusIcon } from '@heroicons/react/24/outline'
 import * as XLSX from 'xlsx'
 import {
+  applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveWaterChargeSplit,
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
@@ -29,6 +31,20 @@ function readingRowUsesWater(r: Reading): boolean {
 function readingRowUsesHeat(r: Reading): boolean {
   const m = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
   return m === 'HEAT' || m === 'WATER_HEAT'
+}
+
+function waterRatesForReadingCalc(reading: Reading) {
+  const billingMode = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
+  const raw = {
+    baseClean: reading.baseClean || 0,
+    baseDirty: reading.baseDirty || 0,
+    cleanPerM3: reading.cleanPerM3 || 0,
+    dirtyPerM3: reading.dirtyPerM3 || 0,
+  }
+  return applyWaterChargeSplitToWaterRates(
+    raw,
+    effectiveWaterChargeSplit(reading.meter?.waterChargeSplit, billingMode)
+  )
 }
 
 /** Заалт оруулах модал: сонгосон он/сарт тохирох мөр эсэх */
@@ -180,6 +196,8 @@ interface Meter {
   meterNumber: string
   organizationId: string
   billingMode?: string | null
+  /** BOTH | CLEAN_ONLY | DIRTY_ONLY */
+  waterChargeSplit?: string | null
   serviceStatus?: string | null
   /** Тоолуур бүртгэлээс: дулааны анхны м³/м² */
   defaultHeatUsage?: number | null
@@ -234,6 +252,7 @@ interface Reading {
     id?: string
     meterNumber: string
     billingMode?: string | null
+    waterChargeSplit?: string | null
   }
   organizationId?: string
   organization?: {
@@ -284,12 +303,7 @@ export default function ReadingsContent() {
           : 0
       reading.usage = usage
     }
-    const water = {
-      baseClean: reading.baseClean || 0,
-      baseDirty: reading.baseDirty || 0,
-      cleanPerM3: reading.cleanPerM3 || 0,
-      dirtyPerM3: reading.dirtyPerM3 || 0,
-    }
+    const water = waterRatesForReadingCalc(reading)
     const heat = {
       heatBase: reading.heatBase || 0,
       heatPerM3: reading.heatPerM3 || 0,
@@ -657,12 +671,7 @@ export default function ReadingsContent() {
         reading.heatUsage = u
         const orgCategory = reading.organization?.category ?? 'HOUSEHOLD'
         const billingMode = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
-        const water = {
-          baseClean: reading.baseClean || 0,
-          baseDirty: reading.baseDirty || 0,
-          cleanPerM3: reading.cleanPerM3 || 0,
-          dirtyPerM3: reading.dirtyPerM3 || 0,
-        }
+        const water = waterRatesForReadingCalc(reading)
         const heat = {
           heatBase: reading.heatBase || 0,
           heatPerM3: reading.heatPerM3 || 0,
@@ -1122,7 +1131,12 @@ export default function ReadingsContent() {
       meterId: meter?.id,
       billingMode: meter ? String(meter.billingMode ?? 'WATER') : 'WATER',
       meter: meter
-        ? { id: meter.id, meterNumber: meter.meterNumber, billingMode: meter.billingMode }
+        ? {
+            id: meter.id,
+            meterNumber: meter.meterNumber,
+            billingMode: meter.billingMode,
+            waterChargeSplit: meter.waterChargeSplit ?? null,
+          }
         : undefined,
       month,
       year,
@@ -1654,6 +1668,7 @@ export default function ReadingsContent() {
             id: meter.id,
             meterNumber: meter.meterNumber,
             billingMode: meter.billingMode,
+            waterChargeSplit: meter.waterChargeSplit ?? null,
           }
           const org = organizations.find((o) => o.id === meter.organizationId)
           if (org) {

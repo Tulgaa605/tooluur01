@@ -13,6 +13,34 @@ export type WaterTariffRates = {
   dirtyPerM3: number
 }
 
+/** Усны төлбөр: цэвэр ба/эсвэл бохирыг тоолуур тус бүрээр сонгоно. */
+export type WaterChargeSplit = 'BOTH' | 'CLEAN_ONLY' | 'DIRTY_ONLY'
+
+export function effectiveWaterChargeSplit(
+  stored: string | null | undefined,
+  billingMode: BillingMode
+): WaterChargeSplit {
+  if (billingMode === 'HEAT') return 'BOTH'
+  const s = String(stored ?? 'BOTH').trim().toUpperCase()
+  if (s === 'CLEAN_ONLY') return 'CLEAN_ONLY'
+  if (s === 'DIRTY_ONLY') return 'DIRTY_ONLY'
+  return 'BOTH'
+}
+
+/** Тарифын хуулбар дээр цэвэр эсвэл бохирыг 0 болгож заалт тооцно. */
+export function applyWaterChargeSplitToWaterRates(
+  water: WaterTariffRates,
+  split: WaterChargeSplit
+): WaterTariffRates {
+  if (split === 'CLEAN_ONLY') {
+    return { ...water, baseDirty: 0, dirtyPerM3: 0 }
+  }
+  if (split === 'DIRTY_ONLY') {
+    return { ...water, baseClean: 0, cleanPerM3: 0 }
+  }
+  return { ...water }
+}
+
 export type HeatTariffRates = {
   heatBase: number
   heatPerM3: number

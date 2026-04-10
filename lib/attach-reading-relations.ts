@@ -13,6 +13,7 @@ export type MeterForReading = {
   id: string
   meterNumber: string
   billingMode: string | null
+  waterChargeSplit?: string | null
   organizationId?: string
 }
 
@@ -49,7 +50,7 @@ export async function attachOrgsAndMetersToReadings<
       ? []
       : prisma.meter.findMany({
           where: { id: { in: meterIds } },
-          select: { id: true, meterNumber: true, billingMode: true, organizationId: true },
+          select: { id: true, meterNumber: true, billingMode: true, waterChargeSplit: true, organizationId: true },
         }),
   ])
 

@@ -109,6 +109,8 @@ model Meter {
   serviceStatus  String?
   /// HEAT / WATER_HEAT: дулааны м³/м² — заалт оруулахад анхны утга; тоолуур бүртгэхэд заавал бөглөнө.
   defaultHeatUsage Float?
+  /// Ус / Ус+дулаан: BOTH | CLEAN_ONLY | DIRTY_ONLY — аль төлбөрийг тооцох (null = BOTH).
+  waterChargeSplit String?
   readings       MeterReading[]
   createdByUserId String?      @db.ObjectId
   updatedByUserId String?      @db.ObjectId

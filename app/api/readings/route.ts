@@ -5,11 +5,14 @@ import { Role } from '@/lib/role'
 import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 import {
   type BillingMode,
+  applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveWaterChargeSplit,
   getHeatTariffRatesForPeriod,
   getWaterTariffRatesForPeriod,
   normalizeBillingMode,
+  type WaterTariffRates,
 } from '@/lib/meter-reading-calc'
 
 function waterUsageFromReading(r: { startValue?: unknown; endValue?: unknown; usage?: unknown }): number {
@@ -70,6 +73,17 @@ function periodSortKey(year: number, month: number): number {
   return year * 100 + month
 }
 
+function waterTariffAdjustedForMeter(
+  raw: WaterTariffRates,
+  billingMode: BillingMode,
+  waterChargeSplit: string | null | undefined
+): WaterTariffRates {
+  return applyWaterChargeSplitToWaterRates(
+    raw,
+    effectiveWaterChargeSplit(waterChargeSplit, billingMode)
+  )
+}
+
 function endReadingChanged(before: unknown, after: unknown): boolean {
   const a = Number(before)
   const b = Number(after)
@@ -89,12 +103,14 @@ function endReadingChanged(before: unknown, after: unknown): boolean {
 async function propagateLaterReadingsAfterEndChange(opts: {
   meterId: string
   billingMode: BillingMode
+  waterChargeSplit?: string | null
   afterYear: number
   afterMonth: number
   carriedEnd: number
   updatedByUserId: string
 }) {
   const { meterId, billingMode, afterYear, afterMonth, updatedByUserId } = opts
+  const split = opts.waterChargeSplit
   let carried = opts.carriedEnd
 
   const all = await prisma.meterReading.findMany({
@@ -135,10 +151,11 @@ async function propagateLaterReadingsAfterEndChange(opts: {
     const preservedHeat = Number(nextReading.heatUsage ?? 0) || 0
     const heatForSplit = billingMode === 'WATER' ? 0 : preservedHeat
 
-    const [nextWater, nextHeat] = await Promise.all([
+    const [nextWaterRaw, nextHeat] = await Promise.all([
       getWaterTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
       getHeatTariffRatesForPeriod(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
     ])
+    const nextWater = waterTariffAdjustedForMeter(nextWaterRaw, billingMode, split)
     const nextOrgCat = await prisma.organization.findUnique({
       where: { id: nextReading.organizationId },
       select: { category: true },
@@ -212,7 +229,13 @@ export async function POST(request: NextRequest) {
     // Get meter to find organization
     const meter = await prisma.meter.findUnique({
       where: { id: data.meterId },
-      select: { id: true, organizationId: true, billingMode: true, defaultHeatUsage: true },
+      select: {
+        id: true,
+        organizationId: true,
+        billingMode: true,
+        defaultHeatUsage: true,
+        waterChargeSplit: true,
+      },
     })
 
     if (!meter) {
@@ -272,10 +295,11 @@ export async function POST(request: NextRequest) {
     })
     const orgCategory = orgForCategory?.category ?? 'HOUSEHOLD'
 
-    const [waterTariff, heatTariff] = await Promise.all([
+    const [waterTariffRaw, heatTariff] = await Promise.all([
       getWaterTariffRatesForPeriod(meter.organizationId, data.year, data.month),
       getHeatTariffRatesForPeriod(meter.organizationId, data.year, data.month),
     ])
+    const waterTariff = waterTariffAdjustedForMeter(waterTariffRaw, billingMode, meter.waterChargeSplit)
     const finalMoney =
       billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
@@ -338,6 +362,7 @@ export async function POST(request: NextRequest) {
         await propagateLaterReadingsAfterEndChange({
           meterId: data.meterId,
           billingMode,
+          waterChargeSplit: meter.waterChargeSplit,
           afterYear: Number(data.year),
           afterMonth: Number(data.month),
           carriedEnd: Number(data.endValue) || 0,
@@ -380,6 +405,7 @@ export async function POST(request: NextRequest) {
     await propagateLaterReadingsAfterEndChange({
       meterId: data.meterId,
       billingMode,
+      waterChargeSplit: meter.waterChargeSplit,
       afterYear: Number(data.year),
       afterMonth: Number(data.month),
       carriedEnd: Number(data.endValue) || 0,
@@ -467,32 +493,35 @@ export async function GET(request: NextRequest) {
     }
 
     // Сонголтоор (recalculate=1) тарифаар дүнг дахин тооцоолж буцаана.
-    type TariffPair = {
-      water: Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>
-      heat: Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>
-    }
-    const tariffCache = new Map<string, TariffPair>()
+    const rawWaterCache = new Map<string, Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>>()
+    const heatOnlyCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
     const result = await Promise.all(
       readings.map(async (r) => {
         const cacheKey = `${r.organizationId}-${r.year}-${r.month}`
-        let pair = tariffCache.get(cacheKey)
-        if (!pair) {
-          const [water, heat] = await Promise.all([
-            getWaterTariffRatesForPeriod(r.organizationId, r.year, r.month),
-            getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month),
-          ])
-          pair = { water, heat }
-          tariffCache.set(cacheKey, pair)
+        let rawWater = rawWaterCache.get(cacheKey)
+        if (!rawWater) {
+          rawWater = await getWaterTariffRatesForPeriod(r.organizationId, r.year, r.month)
+          rawWaterCache.set(cacheKey, rawWater)
+        }
+        let heat = heatOnlyCache.get(cacheKey)
+        if (!heat) {
+          heat = await getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month)
+          heatOnlyCache.set(cacheKey, heat)
         }
         const orgCategory = (r as any).organization?.category ?? 'HOUSEHOLD'
         const billingMode = normalizeBillingMode((r as any).meter?.billingMode)
+        const water = waterTariffAdjustedForMeter(
+          rawWater,
+          billingMode,
+          (r as any).meter?.waterChargeSplit
+        )
         const waterUsage = waterUsageFromReading(r)
         const heatUsage = Number((r as any).heatUsage ?? 0) || 0
         const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
         const money =
           billingMode === 'WATER_HEAT'
-            ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, pair.water, pair.heat)
-            : computeReadingMoney(usage, orgCategory, billingMode, pair.water, pair.heat)
+            ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, water, heat)
+            : computeReadingMoney(usage, orgCategory, billingMode, water, heat)
         return {
           ...r,
           baseClean: money.baseClean,
@@ -560,7 +589,7 @@ export async function PUT(request: NextRequest) {
 
     const meterForBilling = await prisma.meter.findUnique({
       where: { id: existingReading.meterId },
-      select: { billingMode: true, defaultHeatUsage: true },
+      select: { billingMode: true, defaultHeatUsage: true, waterChargeSplit: true },
     })
 
     if (
@@ -606,10 +635,15 @@ export async function PUT(request: NextRequest) {
     })
     const orgCategory = orgForCategory?.category ?? 'HOUSEHOLD'
 
-    const [waterTariff, heatTariff] = await Promise.all([
+    const [waterTariffRaw, heatTariff] = await Promise.all([
       getWaterTariffRatesForPeriod(existingReading.organizationId, data.year, data.month),
       getHeatTariffRatesForPeriod(existingReading.organizationId, data.year, data.month),
     ])
+    const waterTariff = waterTariffAdjustedForMeter(
+      waterTariffRaw,
+      billingMode,
+      meterForBilling?.waterChargeSplit
+    )
     const finalMoney =
       billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
@@ -666,6 +700,7 @@ export async function PUT(request: NextRequest) {
       await propagateLaterReadingsAfterEndChange({
         meterId: existingReading.meterId,
         billingMode,
+        waterChargeSplit: meterForBilling?.waterChargeSplit,
         afterYear: Number(data.year),
         afterMonth: Number(data.month),
         carriedEnd: Number(data.endValue) || 0,

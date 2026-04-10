@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { MagnifyingGlassIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
 import * as XLSX from 'xlsx'
@@ -13,6 +13,7 @@ interface Organization {
 
 type MeterServiceStatus = 'NORMAL' | 'DAMAGED' | 'REPLACED'
 type MeterBillingMode = 'WATER' | 'HEAT' | 'WATER_HEAT'
+type WaterChargeSplit = 'BOTH' | 'CLEAN_ONLY' | 'DIRTY_ONLY'
 
 interface Meter {
   id: string
@@ -20,6 +21,7 @@ interface Meter {
   year: number
   organizationId: string
   billingMode?: MeterBillingMode | string
+  waterChargeSplit?: string | null
   serviceStatus?: MeterServiceStatus | string
   defaultHeatUsage?: number | null
   organization: {
@@ -44,6 +46,7 @@ export default function MetersContent() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const currentYear = new Date().getFullYear()
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
   const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
   const [form, setForm] = useState({
@@ -55,6 +58,7 @@ export default function MetersContent() {
     year: currentYear,
     serviceStatus: 'NORMAL' as MeterServiceStatus,
     billingMode: 'WATER' as MeterBillingMode,
+    waterChargeSplit: 'BOTH' as WaterChargeSplit,
   })
 
   useEffect(() => {
@@ -106,6 +110,16 @@ export default function MetersContent() {
     return arr
   }, [households])
 
+  const metersFiltered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return meters
+    return meters.filter((m) => {
+      const name = String(m.organization?.name ?? '').toLowerCase()
+      const num = String(m.meterNumber ?? '').toLowerCase()
+      return name.includes(q) || num.includes(q)
+    })
+  }, [meters, searchQuery])
+
   const exportMetersXlsx = () => {
     const rows = meters.map((m) => ({
       'Тоолуурын дугаар': m.meterNumber ?? '',
@@ -123,6 +137,14 @@ export default function MetersContent() {
           : String(m.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
             ? 'Дулаан ба ус'
             : 'Ус',
+      'Ус (цэвэр/бохир)':
+        String(m.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
+          ? '—'
+          : String(m.waterChargeSplit ?? 'BOTH').toUpperCase() === 'CLEAN_ONLY'
+            ? 'Зөвхөн цэвэр'
+            : String(m.waterChargeSplit ?? 'BOTH').toUpperCase() === 'DIRTY_ONLY'
+              ? 'Зөвхөн бохир'
+              : 'Цэвэр + бохир',
       'м³/м²':
         String(m.billingMode ?? 'WATER').toUpperCase() === 'HEAT' ||
         String(m.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
@@ -190,6 +212,10 @@ export default function MetersContent() {
     }
     try {
       const method = editingId ? 'PUT' : 'POST'
+      const waterSplitBody =
+        form.billingMode === 'WATER' || form.billingMode === 'WATER_HEAT'
+          ? { waterChargeSplit: form.waterChargeSplit }
+          : {}
       const body = editingId
         ? {
             id: editingId,
@@ -198,6 +224,7 @@ export default function MetersContent() {
             year: form.year,
             serviceStatus: form.serviceStatus || 'NORMAL',
             billingMode: form.billingMode,
+            ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
           }
         : {
@@ -206,6 +233,7 @@ export default function MetersContent() {
             year: form.year,
             serviceStatus: form.serviceStatus || 'NORMAL',
             billingMode: form.billingMode,
+            ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
           }
 
@@ -229,6 +257,7 @@ export default function MetersContent() {
         year: currentYear,
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
+        waterChargeSplit: 'BOTH',
       })
       loadMeters()
     } catch (err: any) {
@@ -246,6 +275,9 @@ export default function MetersContent() {
     const bm = String(meter.billingMode ?? 'WATER').toUpperCase()
     const billingMode: MeterBillingMode =
       bm === 'HEAT' || bm === 'WATER_HEAT' ? (bm as MeterBillingMode) : 'WATER'
+    const wcs = String(meter.waterChargeSplit ?? 'BOTH').toUpperCase()
+    const waterChargeSplit: WaterChargeSplit =
+      wcs === 'CLEAN_ONLY' || wcs === 'DIRTY_ONLY' ? (wcs as WaterChargeSplit) : 'BOTH'
     setForm({
       ownerType: inHousehold ? 'household' : 'organization',
       meterNumber: meter.meterNumber,
@@ -257,6 +289,7 @@ export default function MetersContent() {
       year: meter.year ?? currentYear,
       serviceStatus,
       billingMode,
+      waterChargeSplit,
     })
     setShowForm(true)
   }
@@ -307,6 +340,7 @@ export default function MetersContent() {
         year: currentYear,
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
+        waterChargeSplit: 'BOTH',
       })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
@@ -332,6 +366,7 @@ export default function MetersContent() {
         year: currentYear,
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
+        waterChargeSplit: 'BOTH',
       })
               }}
               aria-hidden="true"
@@ -356,6 +391,7 @@ export default function MetersContent() {
         year: currentYear,
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
+        waterChargeSplit: 'BOTH',
       })
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
@@ -464,6 +500,33 @@ export default function MetersContent() {
                       })}
                     </div>
                   </div>
+                  {(form.billingMode === 'WATER' || form.billingMode === 'WATER_HEAT') && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Усны төлбөр (цэвэр / бохир)
+                      </label>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-5">
+                        {(
+                          [
+                            { id: 'BOTH' as WaterChargeSplit, label: 'Цэвэр ус бохир ус' },
+                            { id: 'CLEAN_ONLY' as WaterChargeSplit, label: 'Цэвэр ус' },
+                            { id: 'DIRTY_ONLY' as WaterChargeSplit, label: 'Бохир ус' },
+                          ] as const
+                        ).map((opt) => (
+                          <label key={opt.id} className="inline-flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="waterChargeSplit"
+                              checked={form.waterChargeSplit === opt.id}
+                              onChange={() => setForm((p) => ({ ...p, waterChargeSplit: opt.id }))}
+                              className="text-primary-600 border-gray-300"
+                            />
+                            <span className="text-sm text-gray-800">{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {(form.billingMode === 'HEAT' || form.billingMode === 'WATER_HEAT') && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -540,6 +603,7 @@ export default function MetersContent() {
         year: currentYear,
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
+        waterChargeSplit: 'BOTH',
       })
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
@@ -561,6 +625,22 @@ export default function MetersContent() {
       )}
 
       <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50/80">
+          <div className="relative max-w-lg">
+            <MagnifyingGlassIcon
+              className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400"
+              aria-hidden
+            />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Хэрэглэгчийн нэр, тоолуурын дугаараар хайх…"
+              className="w-full rounded-md border border-gray-300 py-2 pl-10 pr-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              aria-label="Хайлт"
+            />
+          </div>
+        </div>
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
@@ -580,6 +660,9 @@ export default function MetersContent() {
                 Тооцоо
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                Ус (ц/б)
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 м³/м²
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -588,7 +671,7 @@ export default function MetersContent() {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {meters.map((meter) => (
+            {metersFiltered.map((meter) => (
               <tr key={meter.id}>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {meter.meterNumber}
@@ -612,6 +695,15 @@ export default function MetersContent() {
                     : String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
                       ? 'Дулаан ба ус'
                       : 'Ус'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                  {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
+                    ? '—'
+                    : String(meter.waterChargeSplit ?? 'BOTH').toUpperCase() === 'CLEAN_ONLY'
+                      ? 'Цэвэр ус'
+                      : String(meter.waterChargeSplit ?? 'BOTH').toUpperCase() === 'DIRTY_ONLY'
+                        ? 'Бохир ус'
+                        : 'Цэвэр ус бохир ус'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
                   {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT' ||
@@ -646,6 +738,11 @@ export default function MetersContent() {
         {meters.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             Тоолуур олдсонгүй
+          </div>
+        )}
+        {meters.length > 0 && metersFiltered.length === 0 && (
+          <div className="text-center py-12 text-gray-500">
+            Хайлтын үр дүн олдсонгүй
           </div>
         )} 
       </div>

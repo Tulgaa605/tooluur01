@@ -6,6 +6,14 @@ import { getScopedOrganizationIds } from '@/lib/org-scope'
 
 type OrgMini = { id: string; name: string; code: string | null }
 
+function parseWaterChargeSplit(raw: unknown, billingMode: string): string | null {
+  const bm = String(billingMode || 'WATER').toUpperCase()
+  if (bm !== 'WATER' && bm !== 'WATER_HEAT') return null
+  const s = String(raw ?? 'BOTH').trim().toUpperCase()
+  if (s === 'CLEAN_ONLY' || s === 'DIRTY_ONLY') return s
+  return 'BOTH'
+}
+
 async function ensureOfficeOrganizationId(user: { userId: string; organizationId?: string | null; email?: string; name?: string }) {
   if (user.organizationId) return user.organizationId
   const dbUser = await prisma.user.findUnique({
@@ -82,6 +90,7 @@ export async function GET(request: NextRequest) {
         billingMode: true,
         serviceStatus: true,
         defaultHeatUsage: true,
+        waterChargeSplit: true,
         createdByUserId: true,
       },
       orderBy: { meterNumber: 'asc' },
@@ -175,6 +184,9 @@ export async function POST(request: NextRequest) {
       defaultHeatUsage = Math.round(rawH * 100) / 100
     }
 
+    const waterChargeSplit =
+      billingMode === 'HEAT' ? null : parseWaterChargeSplit((data as any).waterChargeSplit, billingMode)
+
     const meter = await prisma.meter.create({
       data: {
         meterNumber,
@@ -184,6 +196,7 @@ export async function POST(request: NextRequest) {
         serviceStatus,
         defaultHeatUsage:
           billingMode === 'HEAT' || billingMode === 'WATER_HEAT' ? defaultHeatUsage : null,
+        waterChargeSplit,
         createdByUserId: user.userId,
         updatedByUserId: user.userId,
       },
@@ -230,7 +243,13 @@ export async function PUT(request: NextRequest) {
 
     const existing = await prisma.meter.findUnique({
       where: { id: data.id },
-      select: { organizationId: true, billingMode: true, defaultHeatUsage: true, createdByUserId: true },
+      select: {
+        organizationId: true,
+        billingMode: true,
+        defaultHeatUsage: true,
+        waterChargeSplit: true,
+        createdByUserId: true,
+      },
     })
     if (!existing) {
       return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
@@ -329,6 +348,19 @@ export async function PUT(request: NextRequest) {
       }
     }
 
+    let nextWaterChargeSplit: string | null | undefined = undefined
+    if (nextBilling === 'HEAT') {
+      nextWaterChargeSplit = null
+    } else if ((data as any).waterChargeSplit !== undefined) {
+      nextWaterChargeSplit = parseWaterChargeSplit((data as any).waterChargeSplit, nextBilling)
+    } else if (
+      billingMode !== undefined &&
+      String(existing.billingMode ?? '').toUpperCase() === 'HEAT' &&
+      (nextBilling === 'WATER' || nextBilling === 'WATER_HEAT')
+    ) {
+      nextWaterChargeSplit = 'BOTH'
+    }
+
     const meter = await prisma.meter.update({
       where: { id: data.id },
       data: {
@@ -338,6 +370,7 @@ export async function PUT(request: NextRequest) {
         ...(serviceStatus !== undefined ? { serviceStatus } : {}),
         ...(billingMode !== undefined ? { billingMode } : {}),
         defaultHeatUsage: defaultHeatUsageOut,
+        ...(nextWaterChargeSplit !== undefined ? { waterChargeSplit: nextWaterChargeSplit } : {}),
         updatedByUserId: user.userId,
       },
     })
