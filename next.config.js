@@ -25,6 +25,10 @@ const nextConfig = {
       config.parallelism = 1
     }
     if (dev) {
+      // On some Windows / low-RAM environments webpack's persistent cache pack writing
+      // can OOM/crash the build worker. Disabling cache in dev trades a bit of speed
+      // for stability.
+      config.cache = false
       config.watchOptions = config.watchOptions || {};
       config.watchOptions.ignored = [
         ...(Array.isArray(config.watchOptions.ignored) ? config.watchOptions.ignored : [config.watchOptions.ignored].filter(Boolean)),
