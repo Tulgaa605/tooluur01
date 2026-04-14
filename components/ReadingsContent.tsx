@@ -284,6 +284,7 @@ export default function ReadingsContent() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
+  const [addModalSearch, setAddModalSearch] = useState('')
   const [newReadings, setNewReadings] = useState<Reading[]>([])
   const gridRef = useRef<AgGridReact>(null)
   // `mouse right` дарахад browser-ийн context menu гарч ирэхээс сэргийлж,
@@ -394,6 +395,17 @@ export default function ReadingsContent() {
     if (!showAddModal) return []
     return newReadings.filter((r) => r.year === addModalYear && r.month === addModalMonth)
   }, [showAddModal, newReadings, addModalYear, addModalMonth])
+
+  const searchedModalRows = useMemo(() => {
+    const q = addModalSearch.trim().toLowerCase()
+    if (!q) return visibleModalRows
+    return visibleModalRows.filter((r) => {
+      const orgName = String(r.organization?.name ?? '').toLowerCase()
+      const orgCode = String(r.organization?.code ?? '').toLowerCase()
+      const meterNo = String(r.meter?.meterNumber ?? '').toLowerCase()
+      return orgName.includes(q) || orgCode.includes(q) || meterNo.includes(q)
+    })
+  }, [visibleModalRows, addModalSearch])
 
   /** Заалт оруулах modal-д зөвхөн хэвийн тоолуурыг сонгох; үндсэн хүснэгтэд бүгдийг харуулна. */
   const metersForMeterSelect = useMemo(() => {
@@ -1504,6 +1516,7 @@ export default function ReadingsContent() {
 
   const handleCloseAddModal = (opts?: { keepMessage?: boolean }) => {
     setShowAddModal(false)
+    setAddModalSearch('')
     setNewReadings([])
     modalOriginalRowsRef.current = new Map()
     if (!opts?.keepMessage) setMessage(null)
@@ -2228,6 +2241,16 @@ export default function ReadingsContent() {
                         ))}
                       </select>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-gray-600">Хайх:</label>
+                      <input
+                        type="text"
+                        value={addModalSearch}
+                        onChange={(e) => setAddModalSearch(e.target.value)}
+                        placeholder="Нэр / РД / Тоолуур"
+                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-56"
+                      />
+                    </div>
                     {loading && <span className="text-sm text-gray-500">Бэлтгэж байна...</span>}
                   </div>
                 </div>
@@ -2250,7 +2273,7 @@ export default function ReadingsContent() {
                       theme="legacy"
                       reactiveCustomComponents
                       ref={modalGridRef}
-                      rowData={visibleModalRows}
+                      rowData={searchedModalRows}
                       columnDefs={modalColumnDefs}
                       getRowId={(params: any) =>
                         params.data?.id ??
