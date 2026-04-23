@@ -61,6 +61,21 @@ function modalRowIsActivePeriod(
   )
 }
 
+/**
+ * `/api/readings/previous` хариу: `endValue: null` эсвэл `isFirst: true` үед ямар ч түүх байхгүй.
+ * `Number(null)` нь 0 тул түүнийг «өмнөх заалт 0» гэж буруу ойлгож болохгүй.
+ */
+function endValueFromReadingsPreviousPayload(data: unknown): number | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as { endValue?: unknown; isFirst?: boolean; error?: unknown }
+  if (d.error) return null
+  if (d.isFirst === true) return null
+  if (d.endValue === null || d.endValue === undefined) return null
+  const n = typeof d.endValue === 'number' ? d.endValue : Number(d.endValue)
+  if (!Number.isFinite(n)) return null
+  return n
+}
+
 function filterReadingGridColumnsByBilling(
   cols: ColDef<Reading>[],
   needsWater: boolean,
@@ -265,6 +280,8 @@ interface Reading {
   usageWaterDiffSum?: number
   heatReadingSum?: number
   _isNew?: boolean
+  /** Заалт оруулах modal: өмнөх сарын эцсийн заалтаас эхний заалт тодорхойлогдсон бол эхний нүдийг түгжинэ */
+  _modalStartLocked?: boolean
 }
 
 export default function ReadingsContent() {
@@ -745,6 +762,7 @@ export default function ReadingsContent() {
           const prevEnd = Number(nextRow.endValue || 0)
           const onlyUpdateStart = prevEnd !== prevStart
           nextRow.startValue = carried
+          nextRow._modalStartLocked = true
 
           if (!onlyUpdateStart) {
             nextRow.endValue = carried
@@ -1069,6 +1087,7 @@ export default function ReadingsContent() {
     year: number,
     startValue: number,
     pipes: PipeFee[],
+    opts?: { modalStartLocked?: boolean },
   ): Reading => {
     let baseClean = 0
     let baseDirty = 0
@@ -1133,6 +1152,7 @@ export default function ReadingsContent() {
 
     const row: Reading = {
       _isNew: true,
+      _modalStartLocked: opts?.modalStartLocked,
       organizationId: org.id,
       organization: {
         id: org.id,
@@ -1200,21 +1220,23 @@ export default function ReadingsContent() {
         for (const period of periods) {
           const currentKey = `${period.year}-${period.month}`
           const currentList = currentReadingsByKey?.[currentKey] ?? []
-          const existingForMeter = meter
-            ? currentList.find((r) => r.meterId === meter.id)
-            : undefined
-          if (existingForMeter) {
-            rows.push({ ...existingForMeter, _isNew: false })
-            continue
-          }
-
           const prevMonth = period.month === 1 ? 12 : period.month - 1
           const prevYear = period.month === 1 ? period.year - 1 : period.year
           const key = `${prevYear}-${prevMonth}`
           const prevList = prevReadingsByKey[key] ?? []
           const prevForMeter = meter ? prevList.find((r) => r.meterId === meter.id) : undefined
+          const modalStartLocked = !!(meter && prevForMeter)
+
+          const existingForMeter = meter
+            ? currentList.find((r) => r.meterId === meter.id)
+            : undefined
+          if (existingForMeter) {
+            rows.push({ ...existingForMeter, _isNew: false, _modalStartLocked: modalStartLocked })
+            continue
+          }
+
           const startValue = prevForMeter != null ? (prevForMeter.endValue ?? 0) : 0
-          rows.push(buildOneRow(org, meter, period.month, period.year, startValue, pipes))
+          rows.push(buildOneRow(org, meter, period.month, period.year, startValue, pipes, { modalStartLocked }))
         }
       }
     }
@@ -1309,9 +1331,8 @@ export default function ReadingsContent() {
               )
               if (!res.ok) return null
               const data = await res.json().catch(() => null)
-              if (!data || data.error) return null
-              const endValue = typeof data.endValue === 'number' ? data.endValue : Number(data.endValue)
-              if (!Number.isFinite(endValue)) return null
+              const endValue = endValueFromReadingsPreviousPayload(data)
+              if (endValue === null) return null
               return { meterId, endValue }
             } catch {
               return null
@@ -1442,9 +1463,8 @@ export default function ReadingsContent() {
                 )
                 if (!res.ok) return null
                 const data = await res.json().catch(() => null)
-                if (!data || data.error) return null
-                const endValue = typeof data.endValue === 'number' ? data.endValue : Number(data.endValue)
-                if (!Number.isFinite(endValue)) return null
+                const endValue = endValueFromReadingsPreviousPayload(data)
+                if (endValue === null) return null
                 return { meterId, endValue }
               } catch {
                 return null
@@ -1805,19 +1825,22 @@ export default function ReadingsContent() {
       colId: 'startValue',
       field: 'startValue',
       ...numberColStyle,
-      suppressNavigable: (params: any) => !readingRowUsesWater(params.data),
+      suppressNavigable: (params: any) =>
+        !readingRowUsesWater(params.data) || !!(showAddModal && params.data?._modalStartLocked),
       cellClass: (params: any) => {
-        const disabled = !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : ''
+        const waterOff = !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : ''
+        const locked =
+          showAddModal && readingRowUsesWater(params.data) && params.data?._modalStartLocked
+            ? 'reading-billing-cell-disabled'
+            : ''
         const centered = showAddModal ? 'reading-modal-center' : ''
-        return [disabled, centered].filter(Boolean).join(' ')
+        return [waterOff, locked, centered].filter(Boolean).join(' ')
       },
       headerClass: showAddModal ? 'reading-modal-center' : numberColStyle.headerClass,
       editable: (params: any) =>
         modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
-        // Заалт оруулах modal: 1-р сар дээр л эхний заалтыг гараар засна.
-        // 2-12 сар дээр өмнөх сарын эцсийн заалтаас автоматаар эхний заалтыг авна.
-        addModalMonth === 1 &&
-        readingRowUsesWater(params.data),
+        readingRowUsesWater(params.data) &&
+        !params.data?._modalStartLocked,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
