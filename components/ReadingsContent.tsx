@@ -284,6 +284,62 @@ interface Reading {
   _modalStartLocked?: boolean
 }
 
+type ModalDataBundleResponse = {
+  byKey: Record<string, Reading[]>
+  carryEndByMeterId: Record<string, number>
+  firstPrevKey: string
+  firstPrevYear: number
+  firstPrevMonth: number
+}
+
+/** POST /api/readings/modal-data хариуг buildRowsForYearAndMonths-д оруулах Record болгоно. */
+function mergeModalBundleIntoPrevMaps(
+  data: ModalDataBundleResponse,
+  inModalOverrides?: Map<string, number>
+): Record<string, Reading[]> {
+  const readingsByKey: Record<string, Reading[]> = {}
+  for (const [k, arr] of Object.entries(data.byKey)) {
+    readingsByKey[k] = Array.isArray(arr) ? arr.map((r) => ({ ...r })) : []
+  }
+  const fpKey = data.firstPrevKey
+  const fpList = [...(readingsByKey[fpKey] ?? [])]
+  const seen = new Set(fpList.map((r) => r.meterId).filter(Boolean))
+  for (const [meterId, endValue] of Object.entries(data.carryEndByMeterId ?? {})) {
+    if (seen.has(meterId)) continue
+    fpList.push({
+      _isNew: false,
+      meterId,
+      month: data.firstPrevMonth,
+      year: data.firstPrevYear,
+      startValue: endValue,
+      endValue: endValue,
+    } as Reading)
+    seen.add(meterId)
+  }
+  readingsByKey[fpKey] = fpList
+
+  if (inModalOverrides && inModalOverrides.size > 0) {
+    const prevList = [...(readingsByKey[fpKey] ?? [])]
+    for (const [meterId, endValue] of inModalOverrides) {
+      const idx = prevList.findIndex((x) => x.meterId === meterId)
+      if (idx >= 0) {
+        prevList[idx] = { ...prevList[idx], startValue: endValue, endValue }
+      } else {
+        prevList.push({
+          _isNew: false,
+          meterId,
+          month: data.firstPrevMonth,
+          year: data.firstPrevYear,
+          startValue: endValue,
+          endValue,
+        } as Reading)
+      }
+    }
+    readingsByKey[fpKey] = prevList
+  }
+  return readingsByKey
+}
+
 export default function ReadingsContent() {
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [allMeters, setAllMeters] = useState<Meter[]>([])
@@ -291,7 +347,11 @@ export default function ReadingsContent() {
   const [categoryTariffs, setCategoryTariffs] = useState<CategoryTariff[]>([])
   const [pipeFees, setPipeFees] = useState<PipeFee[]>([])
   const [loading, setLoading] = useState(false)
+  /** Заалтын modal-оос batch хадгалалт явагдаж байгаа эсэх */
+  const [modalSaving, setModalSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  /** Batch хадгалалтын дараа дэлгэцийн дээр тодорхой харагдах амжилтын мэдэгдэл */
+  const [saveSuccessToast, setSaveSuccessToast] = useState<string | null>(null)
   const [readings, setReadings] = useState<Reading[]>([])
   const [readingsLoading, setReadingsLoading] = useState(false)
   const [filterMonth, setFilterMonth] = useState('')
@@ -302,6 +362,10 @@ export default function ReadingsContent() {
   const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
   const [addModalSearch, setAddModalSearch] = useState('')
+  /** Заалт оруулах modal: байгууллагын төрлөөр шүүх (хурдан товчлуур) */
+  const [addModalOrgCategory, setAddModalOrgCategory] = useState<
+    'ALL' | 'HOUSEHOLD' | 'ORGANIZATION' | 'BUSINESS'
+  >('ALL')
   const [newReadings, setNewReadings] = useState<Reading[]>([])
   const gridRef = useRef<AgGridReact>(null)
   // `mouse right` дарахад browser-ийн context menu гарч ирэхээс сэргийлж,
@@ -366,6 +430,9 @@ export default function ReadingsContent() {
       }
     >
   >(new Map())
+  /** Modal-оос batch хадгалалт давхар илгээгдэхээс сэргийлнэ */
+  const modalBatchSaveInFlightRef = useRef(false)
+  const saveSuccessToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const numberColStyle = useMemo(
     () => ({
       cellClass: 'ag-right-aligned-cell',
@@ -414,15 +481,22 @@ export default function ReadingsContent() {
   }, [showAddModal, newReadings, addModalYear, addModalMonth])
 
   const searchedModalRows = useMemo(() => {
+    let rows = visibleModalRows
+    if (addModalOrgCategory !== 'ALL') {
+      rows = rows.filter((r) => {
+        const cat = String(r.organization?.category ?? 'HOUSEHOLD').toUpperCase()
+        return cat === addModalOrgCategory
+      })
+    }
     const q = addModalSearch.trim().toLowerCase()
-    if (!q) return visibleModalRows
-    return visibleModalRows.filter((r) => {
+    if (!q) return rows
+    return rows.filter((r) => {
       const orgName = String(r.organization?.name ?? '').toLowerCase()
       const orgCode = String(r.organization?.code ?? '').toLowerCase()
       const meterNo = String(r.meter?.meterNumber ?? '').toLowerCase()
       return orgName.includes(q) || orgCode.includes(q) || meterNo.includes(q)
     })
-  }, [visibleModalRows, addModalSearch])
+  }, [visibleModalRows, addModalSearch, addModalOrgCategory])
 
   /** Заалт оруулах modal-д зөвхөн хэвийн тоолуурыг сонгох; үндсэн хүснэгтэд бүгдийг харуулна. */
   const metersForMeterSelect = useMemo(() => {
@@ -1243,40 +1317,73 @@ export default function ReadingsContent() {
     return rows
   }, [buildOneRow, pipeFees])
 
+  const loadModalReadingsBundle = useCallback(
+    async (
+      periods: Array<{ year: number; month: number }>,
+      anchorYear: number,
+      anchorMonth: number,
+      meterIds: string[],
+      inModalOverrides?: Map<string, number>
+    ): Promise<Record<string, Reading[]>> => {
+      const res = await fetchWithAuth('/api/readings/modal-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          periods,
+          anchorYear,
+          anchorMonth,
+          meterIds,
+        }),
+      })
+      const data = (await res.json().catch(() => null)) as ModalDataBundleResponse | { error?: string } | null
+      if (!res.ok || !data || (data as { error?: string }).error) {
+        const err = (data as { error?: string })?.error
+        throw new Error(err || 'Заалтын өгөгдөл татахад алдаа')
+      }
+      return mergeModalBundleIntoPrevMaps(data as ModalDataBundleResponse, inModalOverrides)
+    },
+    []
+  )
+
   const handleOpenAddModal = async () => {
     const currentMonth = new Date().getMonth() + 1
     const currentYear = new Date().getFullYear()
     setAddModalYear(currentYear)
     setAddModalMonth(currentMonth)
     setShowAddModal(true)
+    setAddModalOrgCategory('ALL')
     setMessage(null)
     setLoading(true)
     setNewReadings([])
     try {
-      const [orgRes, meterRes, pipeRes] = await Promise.all([
-        fetchWithAuth('/api/organizations?customersOnly=1'),
-        fetchWithAuth('/api/meters'),
-        fetchWithAuth('/api/pipe-fees'),
-      ])
-      const orgData = await orgRes.json()
-      const meterData = await meterRes.json()
-      const orgListRaw: Organization[] = orgRes.ok && Array.isArray(orgData) ? orgData : organizations
-      const metersListRaw: Meter[] = meterRes.ok && Array.isArray(meterData) ? meterData : allMeters
+      let orgListRaw: Organization[] = organizations
+      let metersListRaw: Meter[] = allMeters
+      let pipes: PipeFee[] = pipeFees
+
+      if (!organizations.length || !allMeters.length || !pipeFees.length) {
+        const [orgRes, meterRes, pipeRes] = await Promise.all([
+          fetchWithAuth('/api/organizations?customersOnly=1'),
+          fetchWithAuth('/api/meters'),
+          fetchWithAuth('/api/pipe-fees'),
+        ])
+        const orgData = await orgRes.json()
+        const meterData = await meterRes.json()
+        orgListRaw = orgRes.ok && Array.isArray(orgData) ? orgData : []
+        metersListRaw = meterRes.ok && Array.isArray(meterData) ? meterData : []
+        const pipeData = await pipeRes.json().catch(() => [])
+        pipes = Array.isArray(pipeData) ? pipeData : []
+        if (orgRes.ok && Array.isArray(orgData)) setOrganizations(orgListRaw)
+        if (meterRes.ok && Array.isArray(meterData)) setAllMeters(metersListRaw)
+        if (Array.isArray(pipeData)) setPipeFees(pipes)
+      }
 
       // Заалт оруулахад зөвхөн «тоолуур бүртгэлтэй» харилцагчдыг л гаргана.
       // (Тоолуургүй байгууллагад placeholder мөр үүсгэхгүй.)
       const orgIdsWithAnyMeter = new Set<string>(metersListRaw.map((m) => m.organizationId).filter(Boolean))
       const orgList: Organization[] = orgListRaw.filter((o) => orgIdsWithAnyMeter.has(o.id))
-      // Организацийн жагсаалт (customersOnly=1) нь зөвхөн scope доторхыг авчирдаг.
-      // Тиймээс meter жагсаалтаас мөн scope-оос гадуурх (өөр албанд харьяалсан) тоолуурыг хасна,
-      // ингэснээр /api/readings болон /api/readings/previous дээр 403 үүсгэхгүй.
       const allowedOrgIds = new Set<string>(orgList.map((o) => o.id))
       const metersList: Meter[] = metersListRaw.filter((m) => allowedOrgIds.has(m.organizationId))
 
-      if (orgRes.ok && Array.isArray(orgData)) setOrganizations(orgList)
-      if (meterRes.ok && Array.isArray(meterData)) setAllMeters(metersList)
-      const pipeData = await pipeRes.json().catch(() => [])
-      const pipes: PipeFee[] = Array.isArray(pipeData) ? pipeData : pipeFees
       const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
 
       // Modal дээр сонгосон (year, month)-оос 12 сар хүртэл + дараагийн оны 1 сар хүртэлх бүх period-ийг харуулна.
@@ -1286,91 +1393,20 @@ export default function ReadingsContent() {
       }
       periods.push({ year: currentYear + 1, month: 1 })
 
-      const prevKeysNeeded = new Map<string, { year: number; month: number }>()
-      for (const p of periods) {
-        const pm = p.month === 1 ? 12 : p.month - 1
-        const py = p.month === 1 ? p.year - 1 : p.year
-        prevKeysNeeded.set(`${py}-${pm}`, { year: py, month: pm })
-      }
-
-      const currentKeysNeeded = new Map<string, { year: number; month: number }>()
-      for (const p of periods) {
-        currentKeysNeeded.set(`${p.year}-${p.month}`, p)
-      }
-
-      const prevReadingsByKey: Record<string, Reading[]> = {}
-      await Promise.all(
-        Array.from(prevKeysNeeded.values()).map(async (p) => {
-          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
-          const data = res.ok ? await res.json() : []
-          prevReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
-        })
-      )
-
-      // Сар алгассан үед өмнөх сарын бичлэг байхгүй бол "хамгийн сүүлийн өмнөх" заалтаас эхний заалтыг авна.
-      // Энэ нь зөвхөн эхний period (currentYear,currentMonth)-д хэрэгжинэ.
-      const prevMonthForFirst = currentMonth === 1 ? 12 : currentMonth - 1
-      const prevYearForFirst = currentMonth === 1 ? currentYear - 1 : currentYear
-      const firstPrevKey = `${prevYearForFirst}-${prevMonthForFirst}`
-      const firstPrevList = prevReadingsByKey[firstPrevKey] ? [...prevReadingsByKey[firstPrevKey]] : []
-      const hasPrevForMeter = new Set<string>()
-      for (const r of firstPrevList) {
-        if (r?.meterId) hasPrevForMeter.add(String(r.meterId))
-      }
-
-      const meterIds = eligibleMeters.map((m) => m.id).filter(Boolean)
-      const concurrency = 10
-      for (let i = 0; i < meterIds.length; i += concurrency) {
-        const chunk = meterIds.slice(i, i + concurrency)
-        const results = await Promise.all(
-          chunk.map(async (meterId) => {
-            if (hasPrevForMeter.has(meterId)) return null
-            try {
-              const res = await fetchWithAuth(
-                `/api/readings/previous?meterId=${meterId}&month=${currentMonth}&year=${currentYear}`
-              )
-              if (!res.ok) return null
-              const data = await res.json().catch(() => null)
-              const endValue = endValueFromReadingsPreviousPayload(data)
-              if (endValue === null) return null
-              return { meterId, endValue }
-            } catch {
-              return null
-            }
-          })
-        )
-
-        for (const r of results) {
-          if (!r) continue
-          firstPrevList.push({
-            _isNew: false,
-            meterId: r.meterId,
-            month: prevMonthForFirst,
-            year: prevYearForFirst,
-            startValue: r.endValue,
-            endValue: r.endValue,
-          } as Reading)
-          hasPrevForMeter.add(r.meterId)
-        }
-      }
-      prevReadingsByKey[firstPrevKey] = firstPrevList
-
-      const currentReadingsByKey: Record<string, Reading[]> = {}
-      await Promise.all(
-        Array.from(currentKeysNeeded.values()).map(async (p) => {
-          const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
-          const data = res.ok ? await res.json() : []
-          currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
-        })
+      const readingsByKey = await loadModalReadingsBundle(
+        periods,
+        currentYear,
+        currentMonth,
+        eligibleMeters.map((m) => m.id).filter(Boolean)
       )
 
       const rows = buildRowsForYearAndMonths(
         orgList,
         eligibleMeters,
         periods,
-        prevReadingsByKey,
+        readingsByKey,
         pipes,
-        currentReadingsByKey,
+        readingsByKey,
         metersList,
       )
       setNewReadings(rows)
@@ -1405,10 +1441,8 @@ export default function ReadingsContent() {
       const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
       if (!Array.isArray(orgList)) setNewReadings([])
       else {
-        // Эхний period (y,m)-ийн previous period-ийн endValue-г override хийнэ.
         const prevMonthForFirst = m === 1 ? 12 : m - 1
         const prevYearForFirst = m === 1 ? y - 1 : y
-        const firstPrevKey = `${prevYearForFirst}-${prevMonthForFirst}`
 
         // Өмнөх сар одоогийн periods-д байхгүй бол newReadings-д үлдсэн тухайн сарын мөрүүд
         // (өөр эхний сараас үүссэн үлдэгдэл) — жинхэнэ өгөгдөл биш; эндээс override хийвэл
@@ -1426,102 +1460,21 @@ export default function ReadingsContent() {
           }
         }
 
-        // Хэрэгтэй бүх previous/current period-үүдийг fetch хийнэ.
-        const prevKeysNeeded = new Map<string, { year: number; month: number }>()
-        for (const p of periods) {
-          const pm = p.month === 1 ? 12 : p.month - 1
-          const py = p.month === 1 ? p.year - 1 : p.year
-          prevKeysNeeded.set(`${py}-${pm}`, { year: py, month: pm })
-        }
-
-        const prevReadingsByKey: Record<string, Reading[]> = {}
-        await Promise.all(
-          Array.from(prevKeysNeeded.values()).map(async ({ year: py, month: pm }) => {
-            const res = await fetchWithAuth(`/api/readings?month=${pm}&year=${py}`)
-            const data = res.ok ? await res.json() : []
-            prevReadingsByKey[`${py}-${pm}`] = Array.isArray(data) ? data : []
-          })
-        )
-
-        // Сар алгассан үед эхний сонгосон period (y,m)-ийн startValue-г "хамгийн сүүлийн өмнөх" заалтаас авна.
-        // (prevMonthForFirst, prevYearForFirst) сард бичлэг байхгүй тоолуурт `/api/readings/previous` ашиглана.
-        const firstPrevList0 = prevReadingsByKey[firstPrevKey] ? [...prevReadingsByKey[firstPrevKey]] : []
-        const hasPrevForMeter0 = new Set<string>()
-        for (const r of firstPrevList0) {
-          if (r?.meterId) hasPrevForMeter0.add(String(r.meterId))
-        }
-        const meterIds0 = eligibleMeters.map((mm) => mm.id).filter(Boolean)
-        const concurrency0 = 10
-        for (let i = 0; i < meterIds0.length; i += concurrency0) {
-          const chunk = meterIds0.slice(i, i + concurrency0)
-          const results = await Promise.all(
-            chunk.map(async (meterId) => {
-              if (hasPrevForMeter0.has(meterId)) return null
-              try {
-                const res = await fetchWithAuth(
-                  `/api/readings/previous?meterId=${meterId}&month=${m}&year=${y}`
-                )
-                if (!res.ok) return null
-                const data = await res.json().catch(() => null)
-                const endValue = endValueFromReadingsPreviousPayload(data)
-                if (endValue === null) return null
-                return { meterId, endValue }
-              } catch {
-                return null
-              }
-            })
-          )
-          for (const r of results) {
-            if (!r) continue
-            firstPrevList0.push({
-              _isNew: false,
-              meterId: r.meterId,
-              month: prevMonthForFirst,
-              year: prevYearForFirst,
-              startValue: r.endValue,
-              endValue: r.endValue,
-            } as Reading)
-            hasPrevForMeter0.add(r.meterId)
-          }
-        }
-        prevReadingsByKey[firstPrevKey] = firstPrevList0
-
-        if (inModalOverrides.size > 0) {
-          const prevList = prevReadingsByKey[firstPrevKey] ? [...prevReadingsByKey[firstPrevKey]] : []
-          for (const [meterId, endValue] of inModalOverrides) {
-            const idx = prevList.findIndex((x) => x.meterId === meterId)
-            if (idx >= 0) {
-              prevList[idx] = { ...prevList[idx], startValue: endValue, endValue }
-            } else {
-              prevList.push({
-                _isNew: false,
-                meterId,
-                month: prevMonthForFirst,
-                year: prevYearForFirst,
-                startValue: endValue,
-                endValue,
-              } as Reading)
-            }
-          }
-          prevReadingsByKey[firstPrevKey] = prevList
-        }
-
-        const currentReadingsByKey: Record<string, Reading[]> = {}
-        await Promise.all(
-          periods.map(async (p) => {
-            const res = await fetchWithAuth(`/api/readings?month=${p.month}&year=${p.year}`)
-            const data = res.ok ? await res.json() : []
-            currentReadingsByKey[`${p.year}-${p.month}`] = Array.isArray(data) ? data : []
-          })
+        const readingsByKey = await loadModalReadingsBundle(
+          periods,
+          y,
+          m,
+          eligibleMeters.map((mm) => mm.id).filter(Boolean),
+          inModalOverrides.size > 0 ? inModalOverrides : undefined
         )
 
         const rows = buildRowsForYearAndMonths(
           orgList,
           eligibleMeters,
           periods,
-          prevReadingsByKey,
+          readingsByKey,
           undefined,
-          currentReadingsByKey,
+          readingsByKey,
           metersList,
         )
         setNewReadings(rows)
@@ -1532,17 +1485,18 @@ export default function ReadingsContent() {
     } finally {
       setLoading(false)
     }
-  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths, newReadings, snapshotRows])
+  }, [addModalYear, addModalMonth, organizations, allMeters, buildRowsForYearAndMonths, newReadings, snapshotRows, loadModalReadingsBundle])
 
   const handleCloseAddModal = (opts?: { keepMessage?: boolean }) => {
     setShowAddModal(false)
     setAddModalSearch('')
+    setAddModalOrgCategory('ALL')
     setNewReadings([])
     modalOriginalRowsRef.current = new Map()
     if (!opts?.keepMessage) setMessage(null)
   }
 
-  const handleSaveNewReadings = async () => {
+  const handleSaveNewReadings = () => {
     // Хадгалах үед edit хийгдэж байсан нүднүүдийн утгыг commit болгоно.
     // (Үгүй бол зарим мөрийн onCellValueChanged ажиллахгүй үлдэж, зөвхөн 1 мөр хадгалагдах асуудал гарч болно.)
     try {
@@ -1550,6 +1504,8 @@ export default function ReadingsContent() {
     } catch {
       /* ignore */
     }
+
+    if (modalBatchSaveInFlightRef.current) return
 
     const currentVisibleRows = newReadings.filter((r) => r.year === addModalYear && r.month === addModalMonth)
     const hasUserInput = (r: Reading) => {
@@ -1611,71 +1567,68 @@ export default function ReadingsContent() {
       return
     }
 
-    setLoading(true)
+    const items = rowsToSave.map((reading) => {
+      const bm = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
+      const row: Record<string, unknown> = {
+        meterId: reading.meterId!,
+        month: reading.month,
+        year: reading.year,
+        startValue: reading.startValue,
+        endValue: reading.endValue,
+      }
+      if (reading.id) row.id = reading.id
+      if (bm === 'HEAT' || bm === 'WATER_HEAT') {
+        row.heatUsage = Number(reading.heatUsage ?? 0)
+      }
+      return row
+    })
+
+    const savedYear = addModalYear
+    const savedMonth = addModalMonth
+    modalBatchSaveInFlightRef.current = true
+    setModalSaving(true)
     setMessage(null)
 
-    try {
-      const saveOne = async (reading: Reading) => {
-        const meterId = reading.meterId!
-        const bm = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
-        const body: Record<string, unknown> = {
-          meterId,
-          month: reading.month,
-          year: reading.year,
-          startValue: reading.startValue,
-          endValue: reading.endValue,
-          baseClean: reading.baseClean || 0,
-          baseDirty: reading.baseDirty || 0,
-          cleanPerM3: reading.cleanPerM3 || 0,
-          dirtyPerM3: reading.dirtyPerM3 || 0,
+    void (async () => {
+      try {
+        const res = await fetchWithAuth('/api/readings/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error((data as { error?: string }).error || 'Алдаа гарлаа')
+
+        setFilterYear(String(savedYear))
+        setFilterMonth(String(savedMonth))
+        setShowCalculated(false)
+        handleCloseAddModal()
+
+        if (saveSuccessToastTimeoutRef.current) {
+          clearTimeout(saveSuccessToastTimeoutRef.current)
+          saveSuccessToastTimeoutRef.current = null
         }
-        if (bm === 'HEAT' || bm === 'WATER_HEAT') {
-          body.heatUsage = Number(reading.heatUsage ?? 0)
-        }
-        const res = reading._isNew
-          ? await fetchWithAuth('/api/readings', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-            })
-          : await fetchWithAuth(`/api/readings?id=${reading.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                month: reading.month,
-                year: reading.year,
-                startValue: reading.startValue,
-                endValue: reading.endValue,
-                baseClean: reading.baseClean || 0,
-                baseDirty: reading.baseDirty || 0,
-                ...((bm === 'HEAT' || bm === 'WATER_HEAT')
-                  ? { heatUsage: Number(reading.heatUsage ?? 0) }
-                  : {}),
-              }),
-            })
-
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
+        requestAnimationFrame(() => {
+          setSaveSuccessToast('Амжилттай хадгаллаа')
+          saveSuccessToastTimeoutRef.current = setTimeout(() => {
+            setSaveSuccessToast(null)
+            saveSuccessToastTimeoutRef.current = null
+          }, 2000)
+        })
+        void fetchReadings({
+          silent: true,
+          year: savedYear,
+          month: savedMonth,
+          recalculate: false,
+        }).catch(() => {})
+      } catch (err: any) {
+        setMessage({ type: 'error', text: err?.message || 'Алдаа гарлаа' })
+        setTimeout(() => setMessage(null), 6000)
+      } finally {
+        modalBatchSaveInFlightRef.current = false
+        setModalSaving(false)
       }
-
-      const concurrency = 10
-      for (let i = 0; i < rowsToSave.length; i += concurrency) {
-        const chunk = rowsToSave.slice(i, i + concurrency)
-        await Promise.all(chunk.map((r) => saveOne(r)))
-      }
-
-      // Хадгалсны дараа “Бодолт” горимыг унтрааж (saved дүнгээр) refresh хийнэ.
-      setFilterYear(String(addModalYear))
-      setFilterMonth(String(addModalMonth))
-      setShowCalculated(false)
-      await fetchReadings({ silent: true, year: addModalYear, month: addModalMonth, recalculate: false })
-      setMessage({ type: 'success', text: `Амжилттай хадгаллаа` })
-      handleCloseAddModal({ keepMessage: true })
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Алдаа гарлаа' })
-    } finally {
-      setLoading(false)
-    }
+    })()
   }
 
   // Meter dropdown — reactive cell editor (onValueChange + stopEditing)
@@ -2176,8 +2129,27 @@ export default function ReadingsContent() {
     return () => clearTimeout(t)
   }, [showAddModal, newReadings.length])
 
+  useEffect(() => {
+    return () => {
+      if (saveSuccessToastTimeoutRef.current) {
+        clearTimeout(saveSuccessToastTimeoutRef.current)
+        saveSuccessToastTimeoutRef.current = null
+      }
+    }
+  }, [])
+
   return (
     <div className="px-4 sm:px-0">
+      {saveSuccessToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-6 left-1/2 z-[100] max-w-[min(90vw,28rem)] -translate-x-1/2 rounded-lg border border-green-200 bg-green-50 px-5 py-3 text-center text-sm font-semibold text-green-800 shadow-lg"
+        >
+          {saveSuccessToast}
+        </div>
+      )}
+
       <div className="mb-8 flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-900">Заалтын мэдээлэл</h2>
         <button
@@ -2208,7 +2180,9 @@ export default function ReadingsContent() {
             {/* Backdrop */}
             <div
               className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
-              onClick={() => handleCloseAddModal()}
+              onClick={() => {
+                if (!modalSaving) handleCloseAddModal()
+              }}
               aria-hidden
             />
 
@@ -2219,8 +2193,12 @@ export default function ReadingsContent() {
                   <h3 className="text-2xl font-semibold text-gray-900">Заалт оруулах</h3>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => handleCloseAddModal()}
-                      className="text-gray-400 hover:text-gray-500 focus:outline-none"
+                      type="button"
+                      onClick={() => {
+                        if (!modalSaving) handleCloseAddModal()
+                      }}
+                      disabled={modalSaving}
+                      className="text-gray-400 hover:text-gray-500 focus:outline-none disabled:opacity-40 disabled:pointer-events-none"
                     >
                       <span className="sr-only">Хаах</span>
                       <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2231,50 +2209,87 @@ export default function ReadingsContent() {
                 </div>
 
                 <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-gray-600">Он:</label>
-                      <select
-                        value={addModalYear}
-                        onChange={(e) => {
-                          const newYear = Number(e.target.value)
-                          setAddModalYear(newYear)
-                          handleAddModalApplyMonths(newYear, addModalMonth)
-                        }}
-                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"
-                      >
-                        {[new Date().getFullYear() + 1, new Date().getFullYear(), new Date().getFullYear() - 1].map((y) => (
-                          <option key={y} value={y}>{y}</option>
-                        ))}
-                      </select>
+                  <div className="flex flex-wrap items-center gap-3 justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(
+                        [
+                          { key: 'ALL' as const, label: 'Бүгд' },
+                          { key: 'HOUSEHOLD' as const, label: 'Хувь хүн' },
+                          { key: 'ORGANIZATION' as const, label: 'Төсөвт байгууллага' },
+                          { key: 'BUSINESS' as const, label: 'Аж ахуйн нэгж' },
+                        ] as const
+                      ).map(({ key, label }) => {
+                        const active = addModalOrgCategory === key
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            disabled={loading || modalSaving}
+                            onClick={() => setAddModalOrgCategory(key)}
+                            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+                              active
+                                ? 'bg-primary-600 text-white shadow-sm'
+                                : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-gray-600">Сар:</label>
-                      <select
-                        value={addModalMonth}
-                        onChange={(e) => {
-                          const newMonth = Number(e.target.value)
-                          setAddModalMonth(newMonth)
-                          handleAddModalApplyMonths(addModalYear, newMonth)
-                        }}
-                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-20"
-                      >
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
+                    <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4 ml-auto">
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-gray-600 whitespace-nowrap">Он:</label>
+                        <select
+                          value={addModalYear}
+                          disabled={loading || modalSaving}
+                          onChange={(e) => {
+                            const newYear = Number(e.target.value)
+                            setAddModalYear(newYear)
+                            handleAddModalApplyMonths(newYear, addModalMonth)
+                          }}
+                          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm disabled:opacity-50"
+                        >
+                          {[new Date().getFullYear() + 1, new Date().getFullYear(), new Date().getFullYear() - 1].map((y) => (
+                            <option key={y} value={y}>{y}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-gray-600 whitespace-nowrap">Сар:</label>
+                        <select
+                          value={addModalMonth}
+                          disabled={loading || modalSaving}
+                          onChange={(e) => {
+                            const newMonth = Number(e.target.value)
+                            setAddModalMonth(newMonth)
+                            handleAddModalApplyMonths(addModalYear, newMonth)
+                          }}
+                          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-20 disabled:opacity-50"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <label className="text-sm text-gray-600 whitespace-nowrap">Хайх:</label>
+                        <input
+                          type="text"
+                          value={addModalSearch}
+                          disabled={modalSaving}
+                          onChange={(e) => setAddModalSearch(e.target.value)}
+                          placeholder="Нэр / РД / Тоолуур"
+                          className="min-w-0 px-3 py-1.5 border border-gray-300 rounded-md text-sm w-44 sm:w-56"
+                        />
+                      </div>
+                      {modalSaving && (
+                        <span className="text-sm text-gray-600 font-medium whitespace-nowrap">Хадгалж байна...</span>
+                      )}
+                      {!modalSaving && loading && (
+                        <span className="text-sm text-gray-500 whitespace-nowrap">Бэлтгэж байна...</span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-gray-600">Хайх:</label>
-                      <input
-                        type="text"
-                        value={addModalSearch}
-                        onChange={(e) => setAddModalSearch(e.target.value)}
-                        placeholder="Нэр / РД / Тоолуур"
-                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm w-56"
-                      />
-                    </div>
-                    {loading && <span className="text-sm text-gray-500">Бэлтгэж байна...</span>}
                   </div>
                 </div>
 
@@ -2358,17 +2373,18 @@ export default function ReadingsContent() {
                   <button
                     type="button"
                     onClick={() => handleCloseAddModal()}
-                    className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    disabled={modalSaving}
+                    className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
                   >
                     Цуцлах
                   </button>
                   <button
                     type="button"
                     onClick={handleSaveNewReadings}
-                    disabled={loading}
+                    disabled={loading || modalSaving}
                     className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
                   >
-                    {loading ? 'Хадгалж байна...' : 'Хадгалах'}
+                    {modalSaving ? 'Хадгалж байна...' : 'Хадгалах'}
                   </button>
                 </div>
               </div>
