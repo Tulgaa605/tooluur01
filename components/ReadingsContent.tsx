@@ -2320,7 +2320,7 @@ export default function ReadingsContent() {
                       rowBuffer={15}
                       defaultColDef={{
                         sortable: true,
-                        filter: false,
+                        filter: true,
                         resizable: true,
                       }}
                       onGridReady={(e) => e.api.sizeColumnsToFit()}
