@@ -80,7 +80,6 @@ export default function UsersContent() {
     organizationId: '',
     code: '',
     address: '',
-    connectionNumber: '15',
   })
 
   // Хувь хүн (HOUSEHOLD) жагсаалт
@@ -98,7 +97,6 @@ export default function UsersContent() {
     address: '',
     phone: '',
     email: '',
-    connectionNumber: '',
     year: String(new Date().getFullYear()),
     // «Бусад» таб дээрх шинэ байгууллага — анхны утга HOUSEHOLD биш
     category: 'ORGANIZATION' as OrganizationCategory,
@@ -118,7 +116,6 @@ export default function UsersContent() {
       'Хаяг': h.address ?? '',
       'Утас': h.phone ?? '',
       'Имэйл': h.email ?? '',
-      'Шугамын хоолой': h.connectionNumber ?? '',
     }))
     const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
     const wb = XLSX.utils.book_new()
@@ -133,7 +130,6 @@ export default function UsersContent() {
       'Хаяг': o.address ?? '',
       'Утас': o.phone ?? '',
       'Имэйл': o.email ?? '',
-      'Шугамын хоолой': o.connectionNumber ?? '',
       'Он': o.year ?? '',
       'Хэрэглэгчийн төрөл': o.category ? (CATEGORY_LABELS[o.category] || o.category) : '',
     }))
@@ -216,7 +212,6 @@ export default function UsersContent() {
       organizationId: '',
       code: household.code || '',
       address: household.address || '',
-      connectionNumber: household.connectionNumber || '15',
     })
     setShowUserForm(true)
   }
@@ -263,7 +258,6 @@ export default function UsersContent() {
                 address: r.address?.trim() || null,
                 phone: r.phone?.trim() || null,
                 email: r.email?.trim() || null,
-                connectionNumber: (r.connectionNumber || '15').trim() || '15',
                 category: 'HOUSEHOLD',
                 autoCreateMeter: true,
               }),
@@ -342,7 +336,6 @@ export default function UsersContent() {
                 address: String(r.address ?? '').trim() || null,
                 phone: String(r.phone ?? '').trim() || null,
                 email: String(r.email ?? '').trim() || null,
-                connectionNumber: (String(r.connectionNumber ?? '') || '15').trim() || '15',
                 category,
                 ...(year ? { year } : {}),
                 autoCreateMeter: true,
@@ -391,7 +384,6 @@ export default function UsersContent() {
             address: userForm.address?.trim() || null,
             phone: userForm.phone?.trim() || null,
             email: userForm.email?.trim() || null,
-            connectionNumber: (userForm.connectionNumber || '15').trim() || '15',
             category: 'HOUSEHOLD',
           }),
         })
@@ -410,7 +402,6 @@ export default function UsersContent() {
             address: userForm.address?.trim() || null,
             phone: userForm.phone?.trim() || null,
             email: userForm.email?.trim() || null,
-            connectionNumber: (userForm.connectionNumber || '15').trim() || '15',
             category: 'HOUSEHOLD',
           }),
         })
@@ -420,7 +411,7 @@ export default function UsersContent() {
       }
       setShowUserForm(false)
       setEditingHouseholdId(null)
-      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
+      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '' })
       loadOrganizations()
       loadHouseholds()
     } catch (err: any) {
@@ -436,7 +427,6 @@ export default function UsersContent() {
       address: org.address || '',
       phone: org.phone || '',
       email: org.email || '',
-      connectionNumber: org.connectionNumber || '',
       year: String(org.year),
       category: (org.category || 'ORGANIZATION') as OrganizationCategory,
     })
@@ -493,7 +483,6 @@ export default function UsersContent() {
         address: '',
         phone: '',
         email: '',
-        connectionNumber: '',
         year: String(new Date().getFullYear()),
         category: 'ORGANIZATION' as OrganizationCategory,
       })
@@ -600,7 +589,7 @@ export default function UsersContent() {
                 onClick={() => {
                   if (!showUserForm) {
                     setEditingHouseholdId(null)
-                    setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '', connectionNumber: '15' })
+                    setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '' })
                   }
                   setShowUserForm(!showUserForm)
                 }}
@@ -624,7 +613,6 @@ export default function UsersContent() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хаяг</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Утас</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Имэйл</th>
-                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Шугамын хоолой</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Үйлдэл</th>
                   </tr>
                 </thead>
@@ -639,7 +627,6 @@ export default function UsersContent() {
                       <td className="px-4 py-3 text-sm text-gray-900">{h.address || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.phone || '-'}</td>
                       <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">{h.email || '-'}</td>
-                      <td className="px-3 py-2 text-sm text-gray-900 text-center">{h.connectionNumber || '-'}</td>
                       <td className="px-4 py-3 text-sm">
                         <div className="flex gap-2">
                           <button
@@ -754,16 +741,6 @@ export default function UsersContent() {
                               />
                             </div>
                           </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Шугамын хоолой</label>
-                            <input
-                              type="text"
-                              value={userForm.connectionNumber}
-                              onChange={(e) => setUserForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                              placeholder="15"
-                            />
-                          </div>
                         </>
                       <div className="mt-4 flex justify-end gap-3">
                         <button
@@ -832,7 +809,6 @@ export default function UsersContent() {
                     address: '',
                     phone: '',
                     email: '',
-                    connectionNumber: '',
                     year: String(new Date().getFullYear()),
                     category: 'ORGANIZATION' as OrganizationCategory,
                   })
@@ -932,17 +908,6 @@ export default function UsersContent() {
                             className="w-full px-3 py-2 border border-gray-300 rounded-md"
                           />
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Шугамын хоолой
-                          </label>
-                          <input
-                            type="text"
-                            value={orgForm.connectionNumber}
-                            onChange={(e) => setOrgForm(prev => ({ ...prev, connectionNumber: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                          />
-                        </div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1017,9 +982,6 @@ export default function UsersContent() {
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
                       Имэйл
                     </th>
-                    <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
-                      Шугамын хоолой
-                    </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Он
                     </th>
@@ -1046,9 +1008,6 @@ export default function UsersContent() {
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900">
                         {org.email || '-'}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-900 text-center">
-                        {org.connectionNumber || '-'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {org.year || '-'}

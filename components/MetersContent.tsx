@@ -26,6 +26,7 @@ interface Meter {
   defaultHeatUsage?: number | null
   organization: {
     name: string
+    connectionNumber?: string | null
   }
 }
 type OwnerType = 'organization' | 'household'
@@ -59,6 +60,7 @@ export default function MetersContent() {
     serviceStatus: 'NORMAL' as MeterServiceStatus,
     billingMode: 'WATER' as MeterBillingMode,
     waterChargeSplit: 'BOTH' as WaterChargeSplit,
+    pipeDiameterMm: '',
   })
 
   useEffect(() => {
@@ -152,6 +154,7 @@ export default function MetersContent() {
               ? Number(m.defaultHeatUsage).toFixed(2)
               : '')
           : '',
+      'Шугамын хоолой (мм)': m.organization?.connectionNumber ?? '',
     }))
     const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
     const wb = XLSX.utils.book_new()
@@ -202,6 +205,11 @@ export default function MetersContent() {
       return
     }
     const needsHeat = form.billingMode === 'HEAT' || form.billingMode === 'WATER_HEAT'
+    const pipeDiameter = parseInt(String(form.pipeDiameterMm ?? '').trim(), 10)
+    if (!Number.isInteger(pipeDiameter) || pipeDiameter <= 0) {
+      setMessage({ type: 'error', text: 'Шугамын хоолойн хэмжээ (мм) заавал оруулна уу.' })
+      return
+    }
     const heatVal = parseFloat(String(form.defaultHeatM3M2 ?? '').replace(',', '.').trim())
     if (needsHeat && (!Number.isFinite(heatVal) || heatVal <= 0)) {
       setMessage({
@@ -226,6 +234,7 @@ export default function MetersContent() {
             billingMode: form.billingMode,
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
+            pipeDiameterMm: pipeDiameter,
           }
         : {
             meterNumber: meterNo,
@@ -235,6 +244,7 @@ export default function MetersContent() {
             billingMode: form.billingMode,
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
+            pipeDiameterMm: pipeDiameter,
           }
 
       const res = await fetchWithAuth('/api/meters', {
@@ -258,6 +268,7 @@ export default function MetersContent() {
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
         waterChargeSplit: 'BOTH',
+        pipeDiameterMm: '',
       })
       loadMeters()
     } catch (err: any) {
@@ -290,6 +301,7 @@ export default function MetersContent() {
       serviceStatus,
       billingMode,
       waterChargeSplit,
+      pipeDiameterMm: String(meter.organization?.connectionNumber ?? ''),
     })
     setShowForm(true)
   }
@@ -341,6 +353,7 @@ export default function MetersContent() {
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
         waterChargeSplit: 'BOTH',
+        pipeDiameterMm: '',
       })
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
@@ -367,6 +380,7 @@ export default function MetersContent() {
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
         waterChargeSplit: 'BOTH',
+        pipeDiameterMm: '',
       })
               }}
               aria-hidden="true"
@@ -392,6 +406,7 @@ export default function MetersContent() {
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
         waterChargeSplit: 'BOTH',
+        pipeDiameterMm: '',
       })
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
@@ -548,6 +563,21 @@ export default function MetersContent() {
                   )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Шугамын хоолой (мм)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={form.pipeDiameterMm}
+                      onChange={(e) => setForm(prev => ({ ...prev, pipeDiameterMm: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="Жишээ: 15"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
                       Тоолуурын дугаар
                     </label>
                     <input
@@ -604,6 +634,7 @@ export default function MetersContent() {
         serviceStatus: 'NORMAL',
         billingMode: 'WATER',
         waterChargeSplit: 'BOTH',
+        pipeDiameterMm: '',
       })
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
@@ -641,100 +672,112 @@ export default function MetersContent() {
             />
           </div>
         </div>
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Тоолуурын дугаар
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Хэрэглэгч
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Он
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Төлөв
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Тооцоо
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Ус (ц/б)
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                м³/м²
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Үйлдэл
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {metersFiltered.map((meter) => (
-              <tr key={meter.id}>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {meter.meterNumber}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {meter.organization?.name || '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {meter.year || '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                  {String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'DAMAGED'
-                    ? 'Эвдэрсэн'
-                    : String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'REPLACED'
-                      ? 'Солигдсон'
-                      : 'Хэвийн'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                  {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
-                    ? 'Дулаан'
-                    : String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
-                      ? 'Дулаан ба ус'
-                      : 'Ус'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                  {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
-                    ? '—'
-                    : String(meter.waterChargeSplit ?? 'BOTH').toUpperCase() === 'CLEAN_ONLY'
-                      ? 'Цэвэр ус'
-                      : String(meter.waterChargeSplit ?? 'BOTH').toUpperCase() === 'DIRTY_ONLY'
-                        ? 'Бохир ус'
-                        : 'Цэвэр ус бохир ус'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                  {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT' ||
-                  String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
-                    ? (meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
-                        ? Number(meter.defaultHeatUsage).toFixed(2)
-                        : '-')
-                    : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleEdit(meter)}
-                       className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors"
-                      title="Засах"
-                    >
-                      <PencilIcon className="h-5 w-5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(meter.id)}
-                      className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
-                      title="Устгах"
-                    >
-                      <TrashIcon className="h-5 w-5" />
-                    </button>
-                  </div>
-                </td>
+        <div className="overflow-x-auto px-3 sm:px-4">
+          <table className="w-full min-w-[1000px] table-auto divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
+                  Тоолуурын дугаар
+                </th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-[15rem] min-w-[15rem] max-w-[15rem]">
+                  Хэрэглэгч
+                </th>
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                  Он
+                </th>
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                  Төлөв
+                </th>
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                  Тооцоо
+                </th>
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase leading-tight">
+                  Ус (ц/б)
+                </th>
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                  м³/м²
+                </th>
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase leading-tight">
+                  <span className="block whitespace-nowrap">Шугамын</span>
+                  <span className="block whitespace-nowrap">хоолой (мм)</span>
+                </th>
+                <th className="px-3 py-3 pr-4 text-right text-xs font-medium text-gray-500 uppercase">
+                  Үйлдэл
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {metersFiltered.map((meter) => (
+                <tr key={meter.id}>
+                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900 tabular-nums">
+                    {meter.meterNumber}
+                  </td>
+                  <td
+                    className="px-3 py-3 w-[15rem] min-w-[15rem] max-w-[15rem] text-sm text-gray-900 truncate"
+                    title={meter.organization?.name || undefined}
+                  >
+                    {meter.organization?.name || '-'}
+                  </td>
+                  <td className="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-900">
+                    {meter.year || '-'}
+                  </td>
+                  <td className="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-700">
+                    {String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'DAMAGED'
+                      ? 'Эвдэрсэн'
+                      : String(meter.serviceStatus ?? 'NORMAL').toUpperCase() === 'REPLACED'
+                        ? 'Солигдсон'
+                        : 'Хэвийн'}
+                  </td>
+                  <td className="px-2 py-3 text-center text-sm text-gray-700 leading-tight">
+                    {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
+                      ? 'Дулаан'
+                      : String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
+                        ? 'Дулаан ба ус'
+                        : 'Ус'}
+                  </td>
+                  <td className="px-2 py-3 text-center text-sm text-gray-600 leading-tight">
+                    {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT'
+                      ? '—'
+                      : String(meter.waterChargeSplit ?? 'BOTH').toUpperCase() === 'CLEAN_ONLY'
+                        ? 'Цэвэр ус'
+                        : String(meter.waterChargeSplit ?? 'BOTH').toUpperCase() === 'DIRTY_ONLY'
+                          ? 'Бохир ус'
+                          : 'Цэвэр ус бохир ус'}
+                  </td>
+                  <td className="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-700 tabular-nums">
+                    {String(meter.billingMode ?? 'WATER').toUpperCase() === 'HEAT' ||
+                    String(meter.billingMode ?? 'WATER').toUpperCase() === 'WATER_HEAT'
+                      ? (meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
+                          ? Number(meter.defaultHeatUsage).toFixed(2)
+                          : '-')
+                      : '-'}
+                  </td>
+                  <td className="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-700 tabular-nums">
+                    {meter.organization?.connectionNumber || '-'}
+                  </td>
+                  <td className="px-3 py-3 pr-4 whitespace-nowrap text-sm">
+                    <div className="flex justify-end gap-1">
+                      <button
+                        onClick={() => handleEdit(meter)}
+                        className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50 transition-colors"
+                        title="Засах"
+                      >
+                        <PencilIcon className="h-5 w-5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(meter.id)}
+                        className="text-red-600 hover:text-red-900 p-1 rounded hover:bg-red-50 transition-colors"
+                        title="Устгах"
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {meters.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             Тоолуур олдсонгүй
