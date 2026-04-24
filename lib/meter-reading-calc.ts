@@ -28,7 +28,8 @@ export {
 export async function getWaterTariffRatesForPeriod(
   organizationId: string,
   year: number,
-  month: number
+  month: number,
+  opts?: { pipeDiameterMm?: number | null }
 ): Promise<WaterTariffRates> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
@@ -41,7 +42,16 @@ export async function getWaterTariffRatesForPeriod(
   let cleanPerM3 = 0
   let dirtyPerM3 = 0
 
-  const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
+  let pipeDiam = NaN
+  const fromMeter =
+    opts?.pipeDiameterMm != null &&
+    Number.isFinite(Number(opts.pipeDiameterMm)) &&
+    Number(opts.pipeDiameterMm) > 0
+  if (fromMeter) {
+    pipeDiam = Math.trunc(Number(opts.pipeDiameterMm))
+  } else if (org.connectionNumber) {
+    pipeDiam = parseInt(String(org.connectionNumber).trim(), 10)
+  }
   if (!Number.isNaN(pipeDiam)) {
     const pipeFee = await prisma.pipeFee.findUnique({
       where: { diameterMm: pipeDiam },

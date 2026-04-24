@@ -60,6 +60,17 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
   })
   if (rows.length === 0) return
 
+  const meterPipeRow = await prisma.meter.findUnique({
+    where: { id: params.meterId },
+    select: { pipeDiameterMm: true },
+  })
+  const meterPipeMm =
+    meterPipeRow?.pipeDiameterMm != null &&
+    Number.isFinite(Number(meterPipeRow.pipeDiameterMm)) &&
+    Number(meterPipeRow.pipeDiameterMm) > 0
+      ? Math.trunc(Number(meterPipeRow.pipeDiameterMm))
+      : null
+
   const prevHeat = Math.round(Number(params.previousDefaultHeatUsage || 0) * 100) / 100
   const eps = 1e-6
   const targets = rows.filter((r) => {
@@ -83,7 +94,9 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
     const periodKey = `${params.organizationId}-${row.year}-${row.month}`
     let waterRaw = waterCache.get(periodKey)
     if (!waterRaw) {
-      waterRaw = await getWaterTariffRatesForPeriod(params.organizationId, row.year, row.month)
+      waterRaw = await getWaterTariffRatesForPeriod(params.organizationId, row.year, row.month, {
+        pipeDiameterMm: meterPipeMm,
+      })
       waterCache.set(periodKey, waterRaw)
     }
     let heatTariff = heatCache.get(periodKey)
@@ -204,6 +217,7 @@ export async function GET(request: NextRequest) {
         serviceStatus: true,
         defaultHeatUsage: true,
         waterChargeSplit: true,
+        pipeDiameterMm: true,
         createdByUserId: true,
       },
       orderBy: { meterNumber: 'asc' },
@@ -319,16 +333,11 @@ export async function POST(request: NextRequest) {
         defaultHeatUsage:
           billingMode === 'HEAT' || billingMode === 'WATER_HEAT' ? defaultHeatUsage : null,
         waterChargeSplit,
+        pipeDiameterMm: pipeDiameter,
         createdByUserId: user.userId,
         updatedByUserId: user.userId,
       },
     })
-    if (String(org.connectionNumber ?? '') !== String(pipeDiameter)) {
-      await prisma.organization.update({
-        where: { id: orgId },
-        data: { connectionNumber: String(pipeDiameter), updatedByUserId: user.userId },
-      })
-    }
 
     return NextResponse.json(meter)
   } catch (error: any) {
@@ -509,19 +518,10 @@ export async function PUT(request: NextRequest) {
         ...(billingMode !== undefined ? { billingMode } : {}),
         defaultHeatUsage: defaultHeatUsageOut,
         ...(nextWaterChargeSplit !== undefined ? { waterChargeSplit: nextWaterChargeSplit } : {}),
+        pipeDiameterMm: pipeDiameter,
         updatedByUserId: user.userId,
       },
     })
-    const orgForPipe = await prisma.organization.findUnique({
-      where: { id: nextOrgId },
-      select: { id: true, connectionNumber: true },
-    })
-    if (orgForPipe && String(orgForPipe.connectionNumber ?? '') !== String(pipeDiameter)) {
-      await prisma.organization.update({
-        where: { id: nextOrgId },
-        data: { connectionNumber: String(pipeDiameter), updatedByUserId: user.userId },
-      })
-    }
 
     const nextDefaultHeatUsage = Number(defaultHeatUsageOut ?? 0) || 0
     const finalWaterChargeSplit =

@@ -24,6 +24,8 @@ interface Meter {
   waterChargeSplit?: string | null
   serviceStatus?: MeterServiceStatus | string
   defaultHeatUsage?: number | null
+  /** Шугамын хоолой (мм) — тоолуур тус бүр */
+  pipeDiameterMm?: number | null
   organization: {
     name: string
     connectionNumber?: string | null
@@ -154,7 +156,10 @@ export default function MetersContent() {
               ? Number(m.defaultHeatUsage).toFixed(2)
               : '')
           : '',
-      'Шугамын хоолой (мм)': m.organization?.connectionNumber ?? '',
+      'Шугамын хоолой (мм)':
+        m.pipeDiameterMm != null && Number(m.pipeDiameterMm) > 0
+          ? String(m.pipeDiameterMm)
+          : (m.organization?.connectionNumber ?? ''),
     }))
     const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
     const wb = XLSX.utils.book_new()
@@ -301,7 +306,11 @@ export default function MetersContent() {
       serviceStatus,
       billingMode,
       waterChargeSplit,
-      pipeDiameterMm: String(meter.organization?.connectionNumber ?? ''),
+      pipeDiameterMm: String(
+        meter.pipeDiameterMm != null && Number(meter.pipeDiameterMm) > 0
+          ? meter.pipeDiameterMm
+          : (meter.organization?.connectionNumber ?? '')
+      ),
     })
     setShowForm(true)
   }
@@ -753,7 +762,9 @@ export default function MetersContent() {
                       : '-'}
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-700 tabular-nums">
-                    {meter.organization?.connectionNumber || '-'}
+                    {meter.pipeDiameterMm != null && Number(meter.pipeDiameterMm) > 0
+                      ? String(meter.pipeDiameterMm)
+                      : meter.organization?.connectionNumber || '-'}
                   </td>
                   <td className="px-3 py-3 pr-4 whitespace-nowrap text-sm">
                     <div className="flex justify-end gap-1">

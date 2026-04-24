@@ -151,6 +151,7 @@ export async function POST(request: NextRequest) {
         billingMode: true,
         defaultHeatUsage: true,
         waterChargeSplit: true,
+        pipeDiameterMm: true,
       },
     })
     const meterById = new Map(meters.map((m) => [m.id, m]))
@@ -174,11 +175,25 @@ export async function POST(request: NextRequest) {
     const heatTariffCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
     const orgCategoryCache = new Map<string, string>()
 
-    const waterCached = async (organizationId: string, year: number, month: number) => {
-      const k = `${organizationId}|${year}|${month}`
+    const waterCached = async (
+      organizationId: string,
+      year: number,
+      month: number,
+      pipeDiameterMm: number | null | undefined
+    ) => {
+      const pipeKey =
+        pipeDiameterMm != null &&
+        Number.isFinite(Number(pipeDiameterMm)) &&
+        Number(pipeDiameterMm) > 0
+          ? Math.trunc(Number(pipeDiameterMm))
+          : 'org'
+      const k = `${organizationId}|${year}|${month}|${pipeKey}`
       let v = waterTariffCache.get(k)
       if (!v) {
-        v = await getWaterTariffRatesForPeriod(organizationId, year, month)
+        v = await getWaterTariffRatesForPeriod(organizationId, year, month, {
+          pipeDiameterMm:
+            pipeKey === 'org' ? null : pipeKey,
+        })
         waterTariffCache.set(k, v)
       }
       return v
@@ -240,15 +255,22 @@ export async function POST(request: NextRequest) {
     const periodKeys = new Set<string>()
     for (const it of items) {
       const m = meterById.get(it.meterId)!
-      periodKeys.add(`${m.organizationId}\t${it.year}\t${it.month}`)
+      const pipeKey =
+        m.pipeDiameterMm != null &&
+        Number.isFinite(Number(m.pipeDiameterMm)) &&
+        Number(m.pipeDiameterMm) > 0
+          ? Math.trunc(Number(m.pipeDiameterMm))
+          : 'org'
+      periodKeys.add(`${m.organizationId}\t${it.year}\t${it.month}\t${pipeKey}`)
     }
     await Promise.all(
       [...periodKeys].map(async (pk) => {
-        const [orgId, ys, ms] = pk.split('\t')
+        const [orgId, ys, ms, pipePart] = pk.split('\t')
         const y = Number(ys)
         const mo = Number(ms)
+        const pipeOpt = pipePart === 'org' ? null : Number(pipePart)
         await Promise.all([
-          waterCached(orgId, y, mo),
+          waterCached(orgId, y, mo, pipeOpt),
           heatCached(orgId, y, mo),
           orgCatCached(orgId),
         ])
@@ -319,8 +341,14 @@ export async function POST(request: NextRequest) {
       }
 
       const orgCategory = await orgCatCached(meter.organizationId)
+      const pipeForItem =
+        meter.pipeDiameterMm != null &&
+        Number.isFinite(Number(meter.pipeDiameterMm)) &&
+        Number(meter.pipeDiameterMm) > 0
+          ? Math.trunc(Number(meter.pipeDiameterMm))
+          : null
       const [waterTariffRaw, heatTariff] = await Promise.all([
-        waterCached(meter.organizationId, item.year, item.month),
+        waterCached(meter.organizationId, item.year, item.month, pipeForItem),
         heatCached(meter.organizationId, item.year, item.month),
       ])
       const waterTariff = waterTariffAdjustedForMeter(waterTariffRaw, billingMode, meter.waterChargeSplit)

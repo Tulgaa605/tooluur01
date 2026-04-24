@@ -111,6 +111,8 @@ model Meter {
   defaultHeatUsage Float?
   /// Ус / Ус+дулаан: BOTH | CLEAN_ONLY | DIRTY_ONLY — аль төлбөрийг тооцох (null = BOTH).
   waterChargeSplit String?
+  /// Шугамын хоолойн голч (мм). Ижил хэрэглэгч олон тоолууртай үед тоолуур тус бүр өөр байж болно. null бол байгууллагын connectionNumber ашиглана.
+  pipeDiameterMm   Int?
   readings       MeterReading[]
   createdByUserId String?      @db.ObjectId
   updatedByUserId String?      @db.ObjectId

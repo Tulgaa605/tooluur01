@@ -62,15 +62,28 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
   const later = all.filter((r) => periodSortKey(r.year, r.month) > anchor)
   if (later.length === 0) return
 
+  const meterPipeRow = await prisma.meter.findUnique({
+    where: { id: meterId },
+    select: { pipeDiameterMm: true },
+  })
+  const meterPipeMm =
+    meterPipeRow?.pipeDiameterMm != null &&
+    Number.isFinite(Number(meterPipeRow.pipeDiameterMm)) &&
+    Number(meterPipeRow.pipeDiameterMm) > 0
+      ? Math.trunc(Number(meterPipeRow.pipeDiameterMm))
+      : null
+
   const waterTariffCache = new Map<string, Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>>()
   const heatTariffCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
   const orgCategoryCache = new Map<string, string>()
 
   const waterCached = async (organizationId: string, year: number, month: number) => {
-    const k = `${organizationId}|${year}|${month}`
+    const k = `${organizationId}|${year}|${month}|${meterPipeMm ?? 'org'}`
     let v = waterTariffCache.get(k)
     if (!v) {
-      v = await getWaterTariffRatesForPeriod(organizationId, year, month)
+      v = await getWaterTariffRatesForPeriod(organizationId, year, month, {
+        pipeDiameterMm: meterPipeMm,
+      })
       waterTariffCache.set(k, v)
     }
     return v

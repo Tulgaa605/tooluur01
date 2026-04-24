@@ -216,6 +216,8 @@ interface Meter {
   serviceStatus?: string | null
   /** Тоолуур бүртгэлээс: дулааны анхны м³/м² */
   defaultHeatUsage?: number | null
+  /** Шугамын хоолой (мм) — тоолуур тус бүр; null бол байгууллагын connectionNumber */
+  pipeDiameterMm?: number | null
   organization?: {
     name: string
     code?: string | null
@@ -268,6 +270,7 @@ interface Reading {
     meterNumber: string
     billingMode?: string | null
     waterChargeSplit?: string | null
+    pipeDiameterMm?: number | null
   }
   organizationId?: string
   organization?: {
@@ -1167,7 +1170,13 @@ export default function ReadingsContent() {
     let baseDirty = 0
     let cleanPerM3 = 0
     let dirtyPerM3 = 0
-    const pipeDiam = org.connectionNumber ? parseInt(String(org.connectionNumber).trim(), 10) : NaN
+    const pipeSource =
+      meter?.pipeDiameterMm != null &&
+      Number.isFinite(Number(meter.pipeDiameterMm)) &&
+      Number(meter.pipeDiameterMm) > 0
+        ? String(Math.trunc(Number(meter.pipeDiameterMm)))
+        : org.connectionNumber
+    const pipeDiam = pipeSource ? parseInt(String(pipeSource).trim(), 10) : NaN
     const pipeFee = !Number.isNaN(pipeDiam) && pipes.length > 0
       ? pipes.find((p) => p.diameterMm === pipeDiam)
       : undefined
@@ -1242,6 +1251,7 @@ export default function ReadingsContent() {
             meterNumber: meter.meterNumber,
             billingMode: meter.billingMode,
             waterChargeSplit: meter.waterChargeSplit ?? null,
+            pipeDiameterMm: meter.pipeDiameterMm ?? null,
           }
         : undefined,
       month,

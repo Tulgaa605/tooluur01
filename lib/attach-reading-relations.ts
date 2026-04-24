@@ -15,6 +15,7 @@ export type MeterForReading = {
   billingMode: string | null
   waterChargeSplit?: string | null
   organizationId?: string
+  pipeDiameterMm?: number | null
 }
 
 /**
@@ -50,7 +51,14 @@ export async function attachOrgsAndMetersToReadings<
       ? []
       : prisma.meter.findMany({
           where: { id: { in: meterIds } },
-          select: { id: true, meterNumber: true, billingMode: true, waterChargeSplit: true, organizationId: true },
+          select: {
+            id: true,
+            meterNumber: true,
+            billingMode: true,
+            waterChargeSplit: true,
+            organizationId: true,
+            pipeDiameterMm: true,
+          },
         }),
   ])
 
@@ -79,6 +87,7 @@ export async function attachOrgsAndMetersToReadings<
           meterNumber: '(Тоолуур олдсонгүй)',
           billingMode: null,
           organizationId: r.organizationId,
+          pipeDiameterMm: null,
         } satisfies MeterForReading),
     }
   })
