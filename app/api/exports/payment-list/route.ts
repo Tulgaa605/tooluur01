@@ -132,11 +132,31 @@ async function resolveOrganizationScope(request: NextRequest): Promise<ScopeResu
   const officeId = (process.env.PAYMENT_LIST_EXPORT_OFFICE_ORG_ID ?? '').trim()
 
   if (!envToken) {
+    if (!qToken) {
+      return NextResponse.json(
+        {
+          error: 'Нэвтрээгүй эсвэл export token байхгүй.',
+          hint:
+            'Хөтөчөөр шууд URL нээхэд cookie очихгүй. Сонголт 1: Апп-д нэвтэрээд ижил домэйноос дуудна уу, эсвэл Authorization: Bearer <JWT> header. Сонголт 2: Серверийн .env-д PAYMENT_LIST_EXPORT_TOKEN, PAYMENT_LIST_EXPORT_OFFICE_ORG_ID тохируулаад URL-д ?token=... нэмнэ (JWT шаардлагагүй).',
+        },
+        { status: 401 }
+      )
+    }
     return NextResponse.json(
       {
-        error: 'Гадаад хандагчийн API идэвхгүй. PAYMENT_LIST_EXPORT_TOKEN тохируулна уу.',
+        error: 'Сервер дээр PAYMENT_LIST_EXPORT_TOKEN тохируулаагүй байна.',
+        hint: 'URL-д token дамжуулсан бол .env дээр ижил утгыг PAYMENT_LIST_EXPORT_TOKEN гэж бичээд серверээ дахин асаана уу.',
       },
       { status: 503 }
+    )
+  }
+  if (!qToken) {
+    return NextResponse.json(
+      {
+        error: 'Export token (?token=) шаардлагатай.',
+        hint: 'Эсвэл нягтлан/захиралын JWT (Authorization: Bearer эсвэл нэвтрэлтийн cookie) ашиглана уу.',
+      },
+      { status: 401 }
     )
   }
   if (!tokensMatch(qToken, envToken)) {
@@ -158,9 +178,23 @@ async function resolveOrganizationScope(request: NextRequest): Promise<ScopeResu
     role: Role.MANAGER,
     organizationId: officeId,
   }
-  const scoped = await getScopedOrganizationIds(synthetic)
+  let scoped = await getScopedOrganizationIds(synthetic)
   if (scoped.length === 0) {
     return NextResponse.json({ error: 'Export scope хоосон' }, { status: 403 })
+  }
+  // `findManagedChildOrganizationIds` (raw Mongo) зарим сервер дээр хоосон буцааж болно.
+  // Prisma-аар `managedByOrganizationId`-ээр харилцагчдыг нэгтгэж export-ын хамрах хүрээг бүрэн болгоно.
+  try {
+    const children = await prisma.organization.findMany({
+      where: { managedByOrganizationId: officeId },
+      select: { id: true },
+      take: 10000,
+    })
+    const merged = new Set(scoped)
+    for (const c of children) merged.add(c.id)
+    scoped = Array.from(merged)
+  } catch {
+    /* Prisma алдаа гарвал анхны scoped үлдэнэ */
   }
   return { orgIds: scoped, auth: 'export_token' }
 }
