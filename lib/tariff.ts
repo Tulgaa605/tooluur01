@@ -64,7 +64,6 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
 
   let d = catDocs[0] as CategoryTariffDoc | undefined
   if (!d) {
-    // Category tariff байхгүй үед тухайн category-н хамгийн сүүлийн organization тарифыг fallback болгож авна.
     const orgsInCategory = await prisma.organization.findMany({
       where: { category: org.category },
       select: { id: true },

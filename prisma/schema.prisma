@@ -80,11 +80,8 @@ model OrganizationTariff {
   baseDirtyFee   Float        @default(0)
   cleanPerM3     Float        @default(0)
   dirtyPerM3     Float        @default(0)
-  /// Дулааны суурь (₮/сар)
   heatBaseFee    Float        @default(0)
-  /// Төсөвт / ААН: ₮/м³
   heatPerM3      Float        @default(0)
-  /// Айл өрх: ₮/м²
   heatPerM2      Float        @default(0)
   createdByUserId String?     @db.ObjectId
   updatedByUserId String?     @db.ObjectId
@@ -103,15 +100,10 @@ model Meter {
   organizationId String        @db.ObjectId
   organization   Organization  @relation(fields: [organizationId], references: [id])
   year           Int           @default(2026)
-  /// WATER | HEAT | WATER_HEAT — ус, дулаан, эсвэл хоёуланг нь тооцно.
   billingMode    String        @default("WATER")
-  /// NORMAL | DAMAGED | REPLACED — хоосон/null = хэвийн (хуучин баримттай нийцэх).
   serviceStatus  String?
-  /// HEAT / WATER_HEAT: дулааны м³/м² — заалт оруулахад анхны утга; тоолуур бүртгэхэд заавал бөглөнө.
   defaultHeatUsage Float?
-  /// Ус / Ус+дулаан: BOTH | CLEAN_ONLY | DIRTY_ONLY — аль төлбөрийг тооцох (null = BOTH).
   waterChargeSplit String?
-  /// Шугамын хоолойн голч (мм). Ижил хэрэглэгч олон тоолууртай үед тоолуур тус бүр өөр байж болно. null бол байгууллагын connectionNumber ашиглана.
   pipeDiameterMm   Int?
   readings       MeterReading[]
   createdByUserId String?      @db.ObjectId
@@ -134,7 +126,6 @@ model MeterReading {
   year           Int
   startValue     Float
   endValue       Float
-  /// Дулааны хэрэглээ (м³/м²). HEAT болон WATER_HEAT дээр UI-гээс орж хадгалагдана.
   heatUsage      Float        @default(0)
   usage          Float
   baseClean      Float        @default(0)
@@ -150,10 +141,18 @@ model MeterReading {
   subtotal       Float        @default(0)
   vat            Float        @default(0)
   total          Float        @default(0)
+  paidAmount     Float        @default(0)
+  /// SMS/банкны гүйлгээний утгад оруулах төлбөрийн код (илгээх тутамд шинэчлэгдэнэ)
+  paymentReference String?
   approved       Boolean      @default(false)
   approvedBy     String?
   approvedAt     DateTime?
-  /// Хуучин баримт: зөвхөн текстээр хадгалсан user id (шүүлтэд ашиглана).
+  ebarimtStatus  String?      @default("PENDING")
+  ebarimtSentAt  DateTime?
+  ebarimtBillId  String?
+  ebarimtQrData  String?
+  ebarimtLotteryCode String?
+  ebarimtLastError String?
   createdBy      String
   createdByUserId String?     @db.ObjectId
   updatedByUserId String?     @db.ObjectId
@@ -183,7 +182,6 @@ model PipeFee {
   @@map("pipe_fees")
 }
 
-// Албан байгууллага (нягтлан) бүр өөрийн шугамын суурь хураамжийг тусад нь тохируулна.
 model OfficePipeFee {
   id                   String       @id @default(auto()) @map("_id") @db.ObjectId
   officeOrganizationId String       @db.ObjectId
@@ -202,7 +200,6 @@ model OfficePipeFee {
   @@map("office_pipe_fees")
 }
 
-/// Төрлийн (category) тариф — `category_tariffs` цуглуулга.
 model CategoryTariff {
   id              String   @id @default(auto()) @map("_id") @db.ObjectId
   category        String   @unique

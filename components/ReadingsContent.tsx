@@ -23,6 +23,12 @@ ModuleRegistry.registerModules([AllCommunityModule])
 const WATER_GRID_FIELDS = new Set(['baseDirty', 'baseClean', 'dirtyAmount', 'cleanAmount'])
 const HEAT_GRID_FIELDS = new Set(['heatReading', 'heatAmount'])
 
+function formatMoney(value: unknown): string {
+  const n = Number(value ?? 0)
+  const safe = Number.isFinite(n) ? n : 0
+  return safe.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 function readingRowUsesWater(r: Reading): boolean {
   const m = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
   return m === 'WATER' || m === 'WATER_HEAT'
@@ -1879,7 +1885,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -1897,7 +1903,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -1915,7 +1921,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -1925,7 +1931,7 @@ export default function ReadingsContent() {
       ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -1935,7 +1941,7 @@ export default function ReadingsContent() {
       ...numberColStyle,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -1990,7 +1996,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -2004,7 +2010,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {
@@ -2018,7 +2024,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
     {

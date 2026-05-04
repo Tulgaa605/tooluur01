@@ -23,6 +23,22 @@ export function getDefaultSmsSender(): string {
   return ids[0] || '89980862'
 }
 
+/**
+ * Илгээх SMS-д ашиглах илгээгчийн дугаар.
+ * `.env`-ийн `SMS_SENDER_NUMBER` заавал байвал түүнийг эхэлж ашиглана (тусгай үйлчилгээний дугаар).
+ * Үгүй бол хүсэлтийн `fromPhone`, эсвэл `getDefaultSmsSender()`.
+ */
+export function resolveEffectiveSmsSender(clientFromBody: string | undefined): string {
+  const envSender = process.env.SMS_SENDER_NUMBER?.trim()
+  if (envSender) return envSender
+  const client =
+    typeof clientFromBody === 'string' && clientFromBody.trim()
+      ? clientFromBody.trim()
+      : ''
+  if (client) return client
+  return getDefaultSmsSender()
+}
+
 /** Сонголтонд гаргах жагсаалт (хоосон бол нэг анхдагч). */
 export function getSmsSenderChoices(): string[] {
   const ids = parseSmsSenderIds()

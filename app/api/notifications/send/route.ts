@@ -4,7 +4,8 @@ import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { organizationIdInScope } from '@/lib/org-scope'
 import { sendTextSms } from '@/lib/sms'
-import { getDefaultSmsSender } from '@/lib/sms-senders'
+import { resolveEffectiveSmsSender } from '@/lib/sms-senders'
+import { persistPaymentReference } from '@/lib/persist-payment-reference'
 
 export const runtime = 'nodejs'
 
@@ -14,10 +15,9 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
     const { readingId, fromPhone: fromPhoneRaw } = data
-    const fromPhone =
-      typeof fromPhoneRaw === 'string' && fromPhoneRaw.trim()
-        ? fromPhoneRaw.trim()
-        : getDefaultSmsSender()
+    const fromPhone = resolveEffectiveSmsSender(
+      typeof fromPhoneRaw === 'string' ? fromPhoneRaw : undefined
+    )
 
     if (!readingId) {
       return NextResponse.json(
@@ -90,19 +90,19 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    // Generate payment code (simple 6-digit code)
     const paymentCode = Math.floor(100000 + Math.random() * 900000).toString()
 
-    // Create message
-    const message = `Төлбөрийн мэдээлэл
-Байгууллага: ${reading.organization.name}${reading.organization.code ? ` (${reading.organization.code})` : ''}
-Тоолуурын дугаар: ${reading.meter.meterNumber}
-Сар: ${reading.year}-${String(reading.month).padStart(2, '0')}
-Хэрэглээ: ${reading.usage.toFixed(2)} м³
-Нийт төлбөр: ${reading.total.toFixed(2)} ₮
-Төлбөрийн код: ${paymentCode}
+    await persistPaymentReference(readingId, paymentCode)
 
-Энэ кодыг төлбөр төлөхдөө ашиглана уу.`
+    const message = `Төлбөрийн мэдээлэл
+    Байгууллага: ${reading.organization.name}${reading.organization.code ? ` (${reading.organization.code})` : ''}
+    Тоолуурын дугаар: ${reading.meter.meterNumber}
+    Сар: ${reading.year}-${String(reading.month).padStart(2, '0')}
+    Хэрэглээ: ${reading.usage.toFixed(2)} м³
+    Нийт төлбөр: ${reading.total.toFixed(2)} ₮
+    Төлбөрийн код: ${paymentCode}
+    
+    Энэ кодыг төлбөр төлөхдөө ашиглана уу.`
 
     const rawPhones = recipients
       .map((r) => r.phone)

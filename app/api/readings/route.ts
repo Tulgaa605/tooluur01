@@ -324,7 +324,7 @@ export async function GET(request: NextRequest) {
 
     const limitParam = Number(searchParams.get('limit') || 0)
     const take = Number.isFinite(limitParam) && limitParam > 0
-      ? Math.min(Math.trunc(limitParam), 500)
+      ? Math.min(Math.trunc(limitParam), 5000)
       : undefined
 
     const shouldRecalculate = searchParams.get('recalculate') === '1'
