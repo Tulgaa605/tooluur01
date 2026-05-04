@@ -204,9 +204,9 @@ function isObjectId24(s: string): boolean {
 }
 
 /**
- * `/api/readings` GET-тэй ижил хамрах хүрээ: нягтлан/захиралд
- * `organizationId in scope` **эсвэл** өөрийн `createdByUserId`-тай заалт орно.
- * (Зөвхөн scope-оор шүүвэл албанаас гадуурх өөрийн бүртгэл алдагдана.)
+ * JWT: `/api/readings` GET-тэй ижил — `organizationId in scope` эсвэл өөрийн `createdByUserId`.
+ * Export token + `createdByUserId`: JWT-г тэр хэрэглэгчээр орсонтой адил `OR` (scope **эсвэл** тэр хүний
+ * бүртгэл) — `(scope AND бүртгэгч)` гэсэн `AND` нь `createdByUserId` null хуучин заалтыг бүгдийг нь хасдаг.
  */
 function buildMeterReadingWhere(
   scope: ScopeResult,
@@ -214,18 +214,28 @@ function buildMeterReadingWhere(
   month: number,
   createdByUserId?: string
 ): Prisma.MeterReadingWhereInput {
-  const scopeOr: Prisma.MeterReadingWhereInput[] =
-    scope.auth === 'jwt'
-      ? [
-          { organizationId: { in: scope.orgIds } },
-          { createdByUserId: scope.user.userId },
-        ]
-      : [{ organizationId: { in: scope.orgIds } }]
+  if (scope.auth === 'export_token') {
+    if (!createdByUserId) {
+      return { year, month, organizationId: { in: scope.orgIds } }
+    }
+    return {
+      year,
+      month,
+      OR: [
+        { organizationId: { in: scope.orgIds } },
+        { createdByUserId: createdByUserId },
+        { createdBy: createdByUserId },
+      ],
+    }
+  }
 
   const base: Prisma.MeterReadingWhereInput = {
     year,
     month,
-    OR: scopeOr,
+    OR: [
+      { organizationId: { in: scope.orgIds } },
+      { createdByUserId: scope.user.userId },
+    ],
   }
 
   if (!createdByUserId) {
@@ -253,8 +263,8 @@ function buildMeterReadingWhere(
  * - `tab=all|unpaid|paid` — төлбөрийн хуудсын табтай ижил шүүлт (анхдагч `all`).
  * - `format=full|billing|summary` — `summary` зөвхөн: он, сар, хэрэглээ, нийт дүн, төлсөн дүн, тоолуурын дугаар.
  *   `billing` — төлбөрийн хуудсын үндсэн талбарууд. Анхдагч `full`.
- * - `createdByUserId=<ObjectId>` — зөвхөн тэр хэрэглэгчийн бүртгэсэн заалт (`createdByUserId` эсвэл `createdBy`).
- *   Нягтлан (`ACCOUNTANT`) зөвхөн өөрийн ID дамжуулж болно; захирал (`MANAGER`) бүх нягтлангийн ID.
+ * - `createdByUserId=<ObjectId>` — JWT: scope доторх + тэр бүртгэгчийн тэнцүү шүүлт. Export token: JWT-г
+ *   тэр хэрэглэгчээр нэвтэрсэнтэй адил `OR` (scope эсвэл тэр хүний бүртгэл). Нягтлан зөвхөн өөрийн ID.
  */
 export async function GET(request: NextRequest) {
   try {
