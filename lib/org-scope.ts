@@ -73,10 +73,6 @@ async function findManagedChildOrganizationIds(officeOrgId: string): Promise<str
   }
 }
 
-/**
- * Нягтлан/захирал: зөвхөн энэ албаас бүртгэсэн харилцагчдын байгууллагын id (албан өөрийн id орохгүй).
- * Заалт, тоолуурын жагсаалтад «өөрийн албан»-ыг хасахад хэрэглэнэ.
- */
 export async function getManagedCustomerOrganizationIds(
   user: TokenPayload
 ): Promise<string[]> {
@@ -86,7 +82,6 @@ export async function getManagedCustomerOrganizationIds(
   return findManagedChildOrganizationIds(user.organizationId)
 }
 
-/** Нягтлан/захирал: өөрийн албан байгууллага + түүний бүртгэсэн харилцагчдын organization id. Бусад эрх: зөвхөн өөрийн нэг id. */
 export async function getScopedOrganizationIds(user: TokenPayload): Promise<string[]> {
   if (!user.organizationId) return []
   const r = String(user.role)

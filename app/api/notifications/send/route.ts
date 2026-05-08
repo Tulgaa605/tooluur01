@@ -9,6 +9,20 @@ import { persistPaymentReference } from '@/lib/persist-payment-reference'
 
 export const runtime = 'nodejs'
 
+function resolvePublicOrigin(request: NextRequest): string {
+  const configured = (process.env.APP_PUBLIC_ORIGIN ?? '').trim()
+  if (configured) return configured.replace(/\/+$/, '')
+
+  const xfHost = (request.headers.get('x-forwarded-host') ?? '').trim()
+  const xfProto = (request.headers.get('x-forwarded-proto') ?? '').trim()
+  if (xfHost) {
+    const proto = xfProto || 'https'
+    return `${proto}://${xfHost}`.replace(/\/+$/, '')
+  }
+
+  return new URL(request.url).origin.replace(/\/+$/, '')
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
@@ -94,6 +108,13 @@ export async function POST(request: NextRequest) {
 
     await persistPaymentReference(readingId, paymentCode)
 
+    const exportToken = (process.env.PAYMENT_LIST_EXPORT_TOKEN ?? '').trim()
+    const publicOrigin = resolvePublicOrigin(request)
+    const breakdownUrl =
+      exportToken && exportToken.length > 0
+        ? `${publicOrigin}/${encodeURIComponent(exportToken)}/piv/${encodeURIComponent(reading.id)}`
+        : null
+
     const message = `Төлбөрийн мэдээлэл
     Байгууллага: ${reading.organization.name}${reading.organization.code ? ` (${reading.organization.code})` : ''}
     Тоолуурын дугаар: ${reading.meter.meterNumber}
@@ -101,7 +122,7 @@ export async function POST(request: NextRequest) {
     Хэрэглээ: ${reading.usage.toFixed(2)} м³
     Нийт төлбөр: ${reading.total.toFixed(2)} ₮
     Төлбөрийн код: ${paymentCode}
-    
+    ${breakdownUrl ? `\nТөлбөрийн задаргаа харах: ${breakdownUrl}\n` : '\n'}
     Энэ кодыг төлбөр төлөхдөө ашиглана уу.`
 
     const rawPhones = recipients

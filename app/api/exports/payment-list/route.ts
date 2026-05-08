@@ -254,6 +254,7 @@ function buildMeterReadingWhere(
 
 /**
  * Төлбөрийн жагсаалт (заалтууд) — тухайн сарын дүнг тарифаар дахин тооцоолно.
+ * Ижил логик: `GET /api/payment/list` (query нь адил).
  *
  * - Нягтлан / захирал: ижил JWT (`Authorization: Bearer …` эсвэл cookie) ашиглана.
  * - Гадаад хүн: `.env` дээр `PAYMENT_LIST_EXPORT_TOKEN`, `PAYMENT_LIST_EXPORT_OFFICE_ORG_ID`
