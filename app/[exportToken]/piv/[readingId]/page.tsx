@@ -223,13 +223,6 @@ export default async function PublicBillingBreakdownPage(props: {
             </div>
           </div>
 
-          {reading.paymentReference?.trim() ? (
-            <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm">
-              <div className="text-gray-600">Төлбөрийн код</div>
-              <div className="mt-1 font-mono text-gray-900">{reading.paymentReference.trim()}</div>
-            </div>
-          ) : null}
-
           <div className="mt-5 text-xs text-gray-500">
             Энэ хуудас нь зөвхөн мэдээлэл харах зориулалттай (төлбөр төлөх үйлдэл байхгүй).
           </div>

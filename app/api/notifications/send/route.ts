@@ -23,6 +23,38 @@ function resolvePublicOrigin(request: NextRequest): string {
   return new URL(request.url).origin.replace(/\/+$/, '')
 }
 
+function buildSmsMessage(input: {
+  organizationName: string
+  organizationCode?: string | null
+  meterNumber: string
+  year: number
+  month: number
+  usage: number
+  total: number
+  heatAmount?: number | null
+  paymentCode: string
+  breakdownUrl?: string | null
+}): string {
+  // Most SMS gateways will truncate around 160 chars for a single message (GSM-7).
+  // We prioritize keeping the URL intact; the prefix is shortened if needed.
+  const org = `${input.organizationName}${input.organizationCode ? ` (${input.organizationCode})` : ''}`
+  const prefix = `Нэр: ${org}. Тоолуур: ${input.meterNumber}. Хэрэглээ: ${input.usage.toFixed(2)}м³. Дүн: ${input.total.toFixed(2)}₮.`
+
+  const urlPart = input.breakdownUrl ? ` Задаргаа: ${input.breakdownUrl}` : ''
+  const full = `${prefix}${urlPart}`
+
+  const MAX = 159
+  if (full.length <= MAX) return full
+  if (!urlPart) return prefix.slice(0, MAX)
+
+  // Keep URL intact, trim prefix to fit.
+  const keep = urlPart
+  const availablePrefix = Math.max(0, MAX - keep.length)
+  const trimmedPrefix =
+    availablePrefix <= 3 ? '' : `${prefix.slice(0, availablePrefix - 3)}...`
+  return `${trimmedPrefix}${keep}`.slice(0, MAX)
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
@@ -115,15 +147,18 @@ export async function POST(request: NextRequest) {
         ? `${publicOrigin}/${encodeURIComponent(exportToken)}/piv/${encodeURIComponent(reading.id)}`
         : null
 
-    const message = `Төлбөрийн мэдээлэл
-    Байгууллага: ${reading.organization.name}${reading.organization.code ? ` (${reading.organization.code})` : ''}
-    Тоолуурын дугаар: ${reading.meter.meterNumber}
-    Сар: ${reading.year}-${String(reading.month).padStart(2, '0')}
-    Хэрэглээ: ${reading.usage.toFixed(2)} м³
-    Нийт төлбөр: ${reading.total.toFixed(2)} ₮
-    Төлбөрийн код: ${paymentCode}
-    ${breakdownUrl ? `\nТөлбөрийн задаргаа харах: ${breakdownUrl}\n` : '\n'}
-    Энэ кодыг төлбөр төлөхдөө ашиглана уу.`
+    const message = buildSmsMessage({
+      organizationName: reading.organization.name,
+      organizationCode: reading.organization.code,
+      meterNumber: reading.meter.meterNumber,
+      year: reading.year,
+      month: reading.month,
+      usage: reading.usage,
+      total: reading.total,
+      heatAmount: reading.heatAmount,
+      paymentCode,
+      breakdownUrl,
+    })
 
     const rawPhones = recipients
       .map((r) => r.phone)
