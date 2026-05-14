@@ -112,7 +112,7 @@ export default function UsersContent() {
     const rows = households.map((h) => ({
       'Овог': h.ovog ?? '',
       'Нэр': householdGivenName(h.name, h.ovog) ?? '',
-      'Код': h.code ?? '',
+      'Хүний регистр': h.code ?? '',
       'Хаяг': h.address ?? '',
       'Утас': h.phone ?? '',
       'Имэйл': h.email ?? '',
@@ -126,7 +126,7 @@ export default function UsersContent() {
   const exportOrganizationsToExcel = () => {
     const rows = orgs.map((o) => ({
       'Нэр': o.name ?? '',
-      'Код': o.code ?? '',
+      'Байгууллагийн регистр': o.code ?? '',
       'Хаяг': o.address ?? '',
       'Утас': o.phone ?? '',
       'Имэйл': o.email ?? '',
@@ -609,7 +609,7 @@ export default function UsersContent() {
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Овог</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Нэр</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хэрэглэгчийн код</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хүний регистр</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хаяг</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Утас</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Имэйл</th>
@@ -704,12 +704,13 @@ export default function UsersContent() {
                             </div>
                           </div>
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Хэрэглэгчийн код</label>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Хүний регистр</label>
                             <input
                               type="text"
                               value={userForm.code}
                               onChange={(e) => setUserForm(prev => ({ ...prev, code: e.target.value }))}
                               className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              placeholder="Регистрийн дугаар"
                             />
                           </div>
                           <div>
@@ -862,13 +863,14 @@ export default function UsersContent() {
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Хэрэглэгчийн код
+                            Байгууллагийн регистр
                           </label>
                           <input
                             type="text"
                             value={orgForm.code}
                             onChange={(e) => setOrgForm(prev => ({ ...prev, code: e.target.value }))}
                             className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            placeholder="Байгууллагийн регистрийн дугаар"
                           />
                         </div>
                       </div>
@@ -971,7 +973,7 @@ export default function UsersContent() {
                       Нэр
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Хэрэглэгчийн код
+                      Байгууллагийн регистр
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Хаяг

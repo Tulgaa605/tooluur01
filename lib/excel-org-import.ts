@@ -58,7 +58,16 @@ export function parseOrgRowsFromExcel(buf: ArrayBuffer): OrgExcelRow[] {
   for (const raw of json) {
     const r: OrgExcelRow = {
       name: cell(raw, ['Нэр', 'name']),
-      code: cell(raw, ['Код', 'code', 'Хэрэглэгчийн код', 'хэрэглэгчийнкод']),
+      code: cell(raw, [
+        'Код',
+        'code',
+        'Хэрэглэгчийн код',
+        'хэрэглэгчийнкод',
+        'Байгууллагийн регистр',
+        'байгууллагийнрегистр',
+        'Регистр',
+        'регистр',
+      ]),
       address: cell(raw, ['Хаяг', 'address']),
       phone: cell(raw, ['Утас', 'phone', 'утасны дугаар', 'утасныдугаар', 'mobile']),
       email: cell(raw, ['Имэйл', 'email', 'e-mail', 'mail']),
@@ -74,7 +83,7 @@ export function parseOrgRowsFromExcel(buf: ArrayBuffer): OrgExcelRow[] {
 
 export function downloadOrgExcelTemplate(filename = 'baiguullaga-jishee.xlsx') {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Нэр', 'Код', 'Хаяг', 'Утас', 'Имэйл', 'Шугамын хоолой', 'Хэрэглэгчийн төрөл', 'Он'],
+    ['Нэр', 'Байгууллагийн регистр', 'Хаяг', 'Утас', 'Имэйл', 'Шугамын хоолой', 'Хэрэглэгчийн төрөл', 'Он'],
     ['Жишээ байгууллага', 'B-001', 'Жишээ хаяг', '99112233', 'org@example.com', '15', 'BUSINESS', String(new Date().getFullYear())],
   ])
   const wb = XLSX.utils.book_new()

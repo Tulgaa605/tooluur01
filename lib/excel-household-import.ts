@@ -57,7 +57,18 @@ export function parseHouseholdRowsFromExcel(buf: ArrayBuffer): HouseholdExcelRow
   for (const raw of json) {
     const ovog = cell(raw, ['Овог', 'ovog', 'фамилия'])
     const givenName = cell(raw, ['Нэр', 'name', 'нер', 'givenname'])
-    const code = cell(raw, ['Код', 'code', 'Хэрэглэгчийн код', 'хэрэглэгчийнкод'])
+    const code = cell(raw, [
+      'Код',
+      'code',
+      'Хэрэглэгчийн код',
+      'хэрэглэгчийнкод',
+      'Хүний регистр',
+      'хүнийрегистр',
+      'Регистр',
+      'регистр',
+      'Регистрийн дугаар',
+      'регистрийндугаар',
+    ])
     const address = cell(raw, ['Хаяг', 'address'])
     const phone = cell(raw, ['Утас', 'phone', 'утасны дугаар', 'утасныдугаар', 'mobile'])
     const email = cell(raw, ['Имэйл', 'email', 'e-mail', 'mail'])
@@ -86,7 +97,7 @@ export function parseHouseholdRowsFromExcel(buf: ArrayBuffer): HouseholdExcelRow
 
 export function downloadHouseholdExcelTemplate(filename = 'herglechdiin-jishee.xlsx') {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Овог', 'Нэр', 'Код', 'Хаяг', 'Утас', 'Имэйл', 'Шугамын хоолой'],
+    ['Овог', 'Нэр', 'Хүний регистр', 'Хаяг', 'Утас', 'Имэйл', 'Шугамын хоолой'],
     ['Бат', 'Дорж', 'H-001', 'Жишээ хаяг', '99112233', 'dorj@example.com', '15'],
   ])
   const wb = XLSX.utils.book_new()
