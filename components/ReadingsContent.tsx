@@ -12,6 +12,7 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc-core'
@@ -224,6 +225,8 @@ interface Meter {
   defaultHeatUsage?: number | null
   /** Шугамын хоолой (мм) — тоолуур тус бүр; null бол байгууллагын connectionNumber */
   pipeDiameterMm?: number | null
+  /** Тоолуур тус бүрийн тарифын ангилал */
+  billingCategory?: string | null
   organization?: {
     name: string
     code?: string | null
@@ -234,6 +237,59 @@ interface Meter {
 function isMeterEligibleForReadingModal(m: Pick<Meter, 'serviceStatus'>): boolean {
   const s = String(m.serviceStatus ?? 'NORMAL').toUpperCase()
   return s === 'NORMAL'
+}
+
+type OrgCustomerCategory =
+  | 'ORGANIZATION'
+  | 'BUSINESS'
+  | 'TRANSPORT_DISPOSAL'
+  | 'TRANSPORT_RECEPTION'
+  | 'WATER_POINT'
+
+const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
+  ORGANIZATION: 'Төсөвт байгууллага',
+  BUSINESS: 'Аж ахуйн нэгж',
+  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
+  TRANSPORT_RECEPTION: 'Зөөврүүд хүлээн авах',
+  WATER_POINT: 'Ус түгээх байр',
+}
+
+type ModalCategoryFilter = 'ALL' | 'HOUSEHOLD' | OrgCustomerCategory
+
+const MODAL_CATEGORY_FILTER_BUTTONS: { key: ModalCategoryFilter; label: string }[] = [
+  { key: 'ALL', label: 'Бүгд' },
+  { key: 'HOUSEHOLD', label: 'Хувь хүн' },
+  ...(Object.keys(ORG_CUSTOMER_CATEGORY_LABELS) as OrgCustomerCategory[]).map((k) => ({
+    key: k as ModalCategoryFilter,
+    label: ORG_CUSTOMER_CATEGORY_LABELS[k],
+  })),
+]
+
+/** Заалтын modal: байгууллага + тоолуурын жагсаалтыг нэгтгэнэ (тоолууртай харилцагч бүрийн мөр). */
+function resolveModalOrgAndMeterLists(
+  orgListRaw: Organization[],
+  metersListRaw: Meter[]
+): { orgList: Organization[]; metersList: Meter[]; eligibleMeters: Meter[] } {
+  const orgIdsWithAnyMeter = new Set(metersListRaw.map((m) => m.organizationId).filter(Boolean))
+  const orgById = new Map<string, Organization>()
+  for (const o of orgListRaw) {
+    if (orgIdsWithAnyMeter.has(o.id)) orgById.set(o.id, o)
+  }
+  for (const m of metersListRaw) {
+    if (!m.organizationId || orgById.has(m.organizationId)) continue
+    orgById.set(m.organizationId, {
+      id: m.organizationId,
+      name: m.organization?.name ?? '(Харилцагч)',
+      category: undefined,
+    })
+  }
+  const orgList = [...orgById.values()].sort((a, b) =>
+    String(a.name ?? '').localeCompare(String(b.name ?? ''), 'mn')
+  )
+  const allowedOrgIds = new Set(orgList.map((o) => o.id))
+  const metersList = metersListRaw.filter((m) => m.organizationId && allowedOrgIds.has(m.organizationId))
+  const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
+  return { orgList, metersList, eligibleMeters }
 }
 
 interface ReadingForm {
@@ -277,6 +333,7 @@ interface Reading {
     billingMode?: string | null
     waterChargeSplit?: string | null
     pipeDiameterMm?: number | null
+    billingCategory?: string | null
   }
   organizationId?: string
   organization?: {
@@ -371,16 +428,17 @@ export default function ReadingsContent() {
   const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
   const [addModalSearch, setAddModalSearch] = useState('')
-  /** Заалт оруулах modal: байгууллагын төрлөөр шүүх (хурдан товчлуур) */
-  const [addModalOrgCategory, setAddModalOrgCategory] = useState<
-    'ALL' | 'HOUSEHOLD' | 'ORGANIZATION' | 'BUSINESS'
-  >('ALL')
+  /** Заалт оруулах modal: тоолуурын (эсвэл байгууллагын) тарифын төрлөөр шүүх */
+  const [addModalOrgCategory, setAddModalOrgCategory] = useState<ModalCategoryFilter>('ALL')
   const [newReadings, setNewReadings] = useState<Reading[]>([])
   const gridRef = useRef<AgGridReact>(null)
   // `mouse right` дарахад browser-ийн context menu гарч ирэхээс сэргийлж,
   // grid доторх үед өөрийн жижиг menu харуулж Excel export хийхээр salt.
   const applyReadingTotals = useCallback((reading: Reading) => {
-    const orgCategory = reading.organization?.category ?? 'HOUSEHOLD'
+    const orgCategory = effectiveBillingCategory(
+      reading.meter?.billingCategory,
+      reading.organization?.category
+    )
     const billingMode = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
     let usage: number
     const heatUsage = Math.max(0, Number(reading.heatUsage ?? 0))
@@ -493,7 +551,9 @@ export default function ReadingsContent() {
     let rows = visibleModalRows
     if (addModalOrgCategory !== 'ALL') {
       rows = rows.filter((r) => {
-        const cat = String(r.organization?.category ?? 'HOUSEHOLD').toUpperCase()
+        const cat = String(
+          effectiveBillingCategory(r.meter?.billingCategory, r.organization?.category ?? 'HOUSEHOLD')
+        ).toUpperCase()
         return cat === addModalOrgCategory
       })
     }
@@ -781,7 +841,10 @@ export default function ReadingsContent() {
       if (changedField === 'heatUsage' && readingRowUsesHeat(reading)) {
         const u = Math.max(0, Number(reading.heatUsage ?? 0))
         reading.heatUsage = u
-        const orgCategory = reading.organization?.category ?? 'HOUSEHOLD'
+        const orgCategory = effectiveBillingCategory(
+          reading.meter?.billingCategory,
+          reading.organization?.category
+        )
         const billingMode = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
         const water = waterRatesForReadingCalc(reading)
         const heat = {
@@ -1034,10 +1097,10 @@ export default function ReadingsContent() {
           ? Number(r.heatUsage ?? r.usage ?? 0) || 0
           : 0
       const orgId = r.organizationId
-      const category =
-        r.organization?.category ??
-        organizations.find((o) => o.id === orgId)?.category ??
-        'HOUSEHOLD'
+      const category = effectiveBillingCategory(
+        r.meter?.billingCategory,
+        r.organization?.category ?? organizations.find((o) => o.id === orgId)?.category ?? 'HOUSEHOLD'
+      )
 
       let heatBase = r.heatBase ?? 0
       let heatPerM3 = r.heatPerM3 ?? 0
@@ -1194,12 +1257,15 @@ export default function ReadingsContent() {
     let tariffForPeriod: OrganizationTariff | CategoryTariff | undefined =
       latestOrgTariffByOrgId.get(org.id)
 
-    if (!tariffForPeriod && org?.category) {
-      const latestCat = latestCategoryTariffByCategory.get(org.category)
-      if (latestCat) {
-        tariffForPeriod = latestCat
-      } else {
-        tariffForPeriod = latestOrgTariffByCategory.get(org.category)
+    if (!tariffForPeriod && org) {
+      const billingCat = effectiveBillingCategory(meter?.billingCategory, org.category)
+      if (billingCat) {
+        const latestCat = latestCategoryTariffByCategory.get(billingCat)
+        if (latestCat) {
+          tariffForPeriod = latestCat
+        } else {
+          tariffForPeriod = latestOrgTariffByCategory.get(billingCat)
+        }
       }
     }
     let heatBaseFee = 0
@@ -1258,6 +1324,7 @@ export default function ReadingsContent() {
             billingMode: meter.billingMode,
             waterChargeSplit: meter.waterChargeSplit ?? null,
             pipeDiameterMm: meter.pipeDiameterMm ?? null,
+            billingCategory: meter.billingCategory ?? null,
           }
         : undefined,
       month,
@@ -1297,10 +1364,24 @@ export default function ReadingsContent() {
   ): Reading[] => {
     const pipes = pipesOverride ?? pipeFees
     const fullRegistered = fullMetersForOrgCheck ?? metersList
+    const orgById = new Map(orgList.map((o) => [o.id, o]))
+    const orgIdsOrdered = [
+      ...new Set([
+        ...orgList.map((o) => o.id),
+        ...metersList.map((m) => m.organizationId).filter(Boolean),
+      ]),
+    ]
     const rows: Reading[] = []
-    for (const org of orgList) {
-      const metersForOrg = metersList.filter((m) => m.organizationId === org.id)
-      const orgHasRegisteredMeter = fullRegistered.some((m) => m.organizationId === org.id)
+    for (const orgId of orgIdsOrdered) {
+      const org =
+        orgById.get(orgId) ??
+        ({
+          id: orgId,
+          name:
+            metersList.find((m) => m.organizationId === orgId)?.organization?.name ?? '(Харилцагч)',
+        } as Organization)
+      const metersForOrg = metersList.filter((m) => m.organizationId === orgId)
+      const orgHasRegisteredMeter = fullRegistered.some((m) => m.organizationId === orgId)
       // Modal-д зөвхөн «хэвийн» тоолуур бүрт мөр үүсгэнэ. Бүх тоолуур эвдэрсэн/солигдсон бол мөр гаргахгүй.
       // Байгууллагад огт тоолуур бүртгэлгүй бол сонголттой нэг placeholder мөр.
       const metersToRender: Array<Meter | undefined> =
@@ -1393,14 +1474,10 @@ export default function ReadingsContent() {
         if (Array.isArray(pipeData)) setPipeFees(pipes)
       }
 
-      // Заалт оруулахад зөвхөн «тоолуур бүртгэлтэй» харилцагчдыг л гаргана.
-      // (Тоолуургүй байгууллагад placeholder мөр үүсгэхгүй.)
-      const orgIdsWithAnyMeter = new Set<string>(metersListRaw.map((m) => m.organizationId).filter(Boolean))
-      const orgList: Organization[] = orgListRaw.filter((o) => orgIdsWithAnyMeter.has(o.id))
-      const allowedOrgIds = new Set<string>(orgList.map((o) => o.id))
-      const metersList: Meter[] = metersListRaw.filter((m) => allowedOrgIds.has(m.organizationId))
-
-      const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
+      const { orgList, metersList, eligibleMeters } = resolveModalOrgAndMeterLists(
+        orgListRaw,
+        metersListRaw
+      )
 
       // Modal дээр сонгосон (year, month)-оос 12 сар хүртэл + дараагийн оны 1 сар хүртэлх бүх period-ийг харуулна.
       const periods: Array<{ year: number; month: number }> = []
@@ -1447,16 +1524,23 @@ export default function ReadingsContent() {
     setLoading(true)
     setMessage(null)
     try {
-      const orgList = organizations.length ? organizations : await fetchWithAuth('/api/organizations?customersOnly=1').then(r => r.ok ? r.json() : []).catch(() => [])
-      let metersList: Meter[] = allMeters
-      if (!metersList.length) {
+      const orgListRaw = organizations.length
+        ? organizations
+        : await fetchWithAuth('/api/organizations?customersOnly=1')
+            .then((r) => (r.ok ? r.json() : []))
+            .catch(() => [])
+      let metersListRaw: Meter[] = allMeters
+      if (!metersListRaw.length) {
         const mr = await fetchWithAuth('/api/meters')
         const raw = mr.ok ? await mr.json() : []
-        metersList = Array.isArray(raw) ? raw : []
+        metersListRaw = Array.isArray(raw) ? raw : []
       }
-      const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
-      if (!Array.isArray(orgList)) setNewReadings([])
+      if (!Array.isArray(orgListRaw)) setNewReadings([])
       else {
+        const { orgList, metersList, eligibleMeters } = resolveModalOrgAndMeterLists(
+          orgListRaw,
+          metersListRaw
+        )
         const prevMonthForFirst = m === 1 ? 12 : m - 1
         const prevYearForFirst = m === 1 ? y - 1 : y
 
@@ -1747,13 +1831,10 @@ export default function ReadingsContent() {
       headerName: 'Т/дугаар',
       width: 150,
       field: 'meterId',
-      // Модал дотор `meterId` сонголт хийх шаардлагагүй (мөрүүд нь meter-ээр pre-render хийгдсэн).
-      // Тиймээс editor автоматаар нээгдэж dropdown гаргахгүй.
       editable: false,
       cellEditor: MeterCellEditor,
       cellEditorParams: {
         suppressKeyboardEvent: (params: any) => {
-          // Prevent unwanted keyboard events
           return false
         },
       },
@@ -2227,14 +2308,7 @@ export default function ReadingsContent() {
                 <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="flex flex-wrap items-center gap-3 justify-between">
                     <div className="flex flex-wrap items-center gap-2">
-                      {(
-                        [
-                          { key: 'ALL' as const, label: 'Бүгд' },
-                          { key: 'HOUSEHOLD' as const, label: 'Хувь хүн' },
-                          { key: 'ORGANIZATION' as const, label: 'Төсөвт байгууллага' },
-                          { key: 'BUSINESS' as const, label: 'Аж ахуйн нэгж' },
-                        ] as const
-                      ).map(({ key, label }) => {
+                      {MODAL_CATEGORY_FILTER_BUTTONS.map(({ key, label }) => {
                         const active = addModalOrgCategory === key
                         return (
                           <button

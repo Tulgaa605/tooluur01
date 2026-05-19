@@ -27,6 +27,16 @@ export function effectiveWaterChargeSplit(
   return 'BOTH'
 }
 
+/** Тоолуурын төрөл заасан бол түүнийг, үгүй бол байгууллагын category-г тарифын түлхүүр болгоно. */
+export function effectiveBillingCategory(
+  meterBillingCategory: string | null | undefined,
+  orgCategory: string | null | undefined
+): string {
+  const m = meterBillingCategory != null ? String(meterBillingCategory).trim() : ''
+  if (m) return m
+  return String(orgCategory ?? 'HOUSEHOLD')
+}
+
 /** Тарифын хуулбар дээр цэвэр эсвэл бохирыг 0 болгож заалт тооцно. */
 export function applyWaterChargeSplitToWaterRates(
   water: WaterTariffRates,

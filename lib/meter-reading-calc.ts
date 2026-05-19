@@ -6,6 +6,7 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoneySplit,
   computeReadingMoney,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   normalizeBillingMode,
   type ReadingMoneySnapshot,
@@ -20,6 +21,7 @@ export {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   normalizeBillingMode,
 }
@@ -29,13 +31,15 @@ export async function getWaterTariffRatesForPeriod(
   organizationId: string,
   year: number,
   month: number,
-  opts?: { pipeDiameterMm?: number | null }
+  opts?: { pipeDiameterMm?: number | null; billingCategory?: string | null }
 ): Promise<WaterTariffRates> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { category: true, connectionNumber: true, baseCleanFee: true, baseDirtyFee: true },
   })
   if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
+
+  const categoryForTariffs = effectiveBillingCategory(opts?.billingCategory, org.category)
 
   let baseClean = 0
   let baseDirty = 0
@@ -78,7 +82,7 @@ export async function getWaterTariffRatesForPeriod(
   }
 
   const catRow = await prisma.categoryTariff.findUnique({
-    where: { category: org.category },
+    where: { category: categoryForTariffs },
     select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
   })
   if (catRow) {
@@ -102,13 +106,16 @@ export async function getWaterTariffRatesForPeriod(
 export async function getHeatTariffRatesForPeriod(
   organizationId: string,
   year: number,
-  month: number
+  month: number,
+  opts?: { billingCategory?: string | null }
 ): Promise<HeatTariffRates> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { category: true },
   })
   if (!org) return { heatBase: 0, heatPerM3: 0, heatPerM2: 0 }
+
+  const categoryForTariffs = effectiveBillingCategory(opts?.billingCategory, org.category)
 
   const orgTariff = await prisma.organizationTariff.findUnique({
     where: { organizationId_year_month: { organizationId, year, month } },
@@ -123,7 +130,7 @@ export async function getHeatTariffRatesForPeriod(
   }
 
   const catRow = await prisma.categoryTariff.findUnique({
-    where: { category: org.category },
+    where: { category: categoryForTariffs },
     select: { heatBaseFee: true, heatPerM3: true, heatPerM2: true },
   })
   if (catRow) {
@@ -135,6 +142,6 @@ export async function getHeatTariffRatesForPeriod(
   }
 
   // Fallback: төрлийн тариф DB-д байхгүй (эсвэл seed хийгдээгүй) үед албан default үнэ ашиглана.
-  const d = heatDefaultsForCategory(String(org.category ?? ''))
+  const d = heatDefaultsForCategory(String(categoryForTariffs ?? ''))
   return { heatBase: 0, heatPerM3: d.heatPerM3 ?? 0, heatPerM2: d.heatPerM2 ?? 0 }
 }

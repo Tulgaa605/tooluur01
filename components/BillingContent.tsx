@@ -1,27 +1,32 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  ArrowDownTrayIcon,
-  DocumentArrowUpIcon,
-  PaperAirplaneIcon,
-} from '@heroicons/react/24/outline'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { DocumentArrowUpIcon } from '@heroicons/react/24/outline'
 import { fetchWithAuth } from '@/lib/api'
+import MonthlyReadingsGrid, {
+  normalizeApiReadings,
+  type BillingGridActions,
+  type MonthlyReadingRow,
+} from '@/components/MonthlyReadingsGrid'
+import BankImportModal from '@/components/BankImportModal'
+import { bankGridRowsToImportPayload, type BankGridRow } from '@/lib/bank-grid-paste'
+import {
+  aggregateBillingReadingsByOrganization,
+  readingIdsForBillingRow,
+} from '@/lib/billing-aggregate'
 
-interface Reading {
+type BillingReading = MonthlyReadingRow & {
   id: string
-  month: number
-  year: number
-  usage: number
-  total: number
   paidAmount?: number | null
-  paymentReference?: string | null
   approved: boolean
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
   ebarimtLastError?: string | null
   meter: {
     meterNumber: string
+    billingMode?: string | null
+    waterChargeSplit?: string | null
+    billingCategory?: string | null
   }
   organization: {
     id: string
@@ -29,23 +34,24 @@ interface Reading {
     code: string | null
     phone?: string | null
     users?: { phone: string | null }[]
+    category?: string
   }
 }
 
 interface BillingRow {
   id: string
+  /** Нэг тоолуур = 1 id; нэгтгэсэн мөр = олон заалтын id */
+  readingIds: string[]
   month: number
   year: number
   usage: number
   total: number
-  /** DB `paidAmount` — зөвхөн энэ заалт/тоолуурын бүртгэсэн төлбөр */
   paidStored: number
   approved: boolean
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
   ebarimtLastError?: string | null
   meterNumber: string
-  paymentReference: string | null
   customerPhones: string
   organization: {
     id: string
@@ -56,7 +62,7 @@ interface BillingRow {
   }
 }
 
-function collectCustomerPhones(org: Reading['organization']): string {
+function collectCustomerPhones(org: BillingReading['organization']): string {
   const set = new Set<string>()
   const p = org?.phone?.trim()
   if (p) set.add(p)
@@ -79,7 +85,6 @@ function roundMoneyLocal(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-/** Зөвхөн `paidAmount` (нэг заалт = нэг тоолуурын мөр). `approved` дангаараа бусад тоолуурыг төлсөн гэж тооцохгүй. */
 function effectivePaid(row: Pick<BillingRow, 'paidStored'>): number {
   return roundMoneyLocal(Number(row.paidStored ?? 0) || 0)
 }
@@ -93,19 +98,12 @@ function isPaidInFull(row: Pick<BillingRow, 'paidStored' | 'total'>): boolean {
   return remainingBalance(row) <= PAY_EPS
 }
 
-function paymentStatusLabel(
-  row: Pick<BillingRow, 'paidStored' | 'total'>
-): string {
-  if (isPaidInFull(row)) return 'Бүрэн төлөгдсөн'
-  if (effectivePaid(row) > PAY_EPS) return 'Хэсэгчлэн төлөгдсөн'
-  return 'Хүлээгдэж буй'
-}
-
 type BillingPaymentTab = 'unpaid' | 'paid'
 
 type BankImportApplied = {
   readingId: string
-  code: string
+  code?: string
+  meterNumber?: string
   added: number
   newPaid: number
   total: number
@@ -114,7 +112,7 @@ type BankImportApplied = {
 type BankImportSkipped = { rowIndex: number; reason: string; description: string }
 
 export default function BillingContent() {
-  const [readings, setReadings] = useState<Reading[]>([])
+  const [readings, setReadings] = useState<BillingReading[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState<string | null>(null)
   const [sendingAll, setSendingAll] = useState(false)
@@ -124,26 +122,30 @@ export default function BillingContent() {
   const [filterMonth, setFilterMonth] = useState(String(new Date().getMonth() + 1))
   const [senderPhone, setSenderPhone] = useState('')
   const [senderOptions, setSenderOptions] = useState<string[]>([])
-  const [senderPickCustom, setSenderPickCustom] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [paymentTab, setPaymentTab] = useState<BillingPaymentTab>('unpaid')
+  const [bankImportInline, setBankImportInline] = useState(false)
   const [bankImporting, setBankImporting] = useState(false)
   const [bankImportReport, setBankImportReport] = useState<{
     applied: BankImportApplied[]
     skipped: BankImportSkipped[]
   } | null>(null)
-  const bankFileRef = useRef<HTMLInputElement>(null)
   const yearOptions = useMemo(() => {
     const y = new Date().getFullYear()
     return [y + 1, y, y - 1, y - 2]
   }, [])
 
+  const displayReadings = useMemo(
+    () => aggregateBillingReadingsByOrganization(readings) as BillingReading[],
+    [readings]
+  )
+
   const billingRows = useMemo<BillingRow[]>(() => {
-    // Билл нь заалт/тоолуур тус бүрээр (meter тус бүрээр) гарах ёстой.
-    // Тиймээс бөөгнөрүүлэлгүй, `readings`-ийг шууд map хийж мөр тус бүрийн төлбөр гаргана.
-    return [...readings]
+    return displayReadings
+      .filter((r) => r.id)
       .map((r) => ({
-        id: r.id,
+        id: String(r.id),
+        readingIds: readingIdsForBillingRow(r),
         month: Number(r.month) || 0,
         year: Number(r.year) || 0,
         usage: Number(r.usage ?? 0) || 0,
@@ -154,8 +156,7 @@ export default function BillingContent() {
         ebarimtBillId: r.ebarimtBillId ?? null,
         ebarimtLastError: r.ebarimtLastError ?? null,
         meterNumber: r.meter?.meterNumber || '-',
-        paymentReference: r.paymentReference?.trim() || null,
-        customerPhones: collectCustomerPhones(r.organization),
+        customerPhones: collectCustomerPhones(r.organization as BillingReading['organization']),
         organization: {
           id: (r.organization?.id && String(r.organization.id).trim()) || '',
           name: r.organization?.name || '-',
@@ -164,15 +165,7 @@ export default function BillingContent() {
           users: r.organization?.users,
         },
       }))
-      .sort((a, b) => {
-        if (a.year !== b.year) return b.year - a.year
-        if (a.month !== b.month) return b.month - a.month
-        // Байгууллага + тоолуурын дугаараар тогтвортой эрэмбэлнэ
-        const orgCmp = a.organization.name.localeCompare(b.organization.name)
-        if (orgCmp !== 0) return orgCmp
-        return String(a.meterNumber).localeCompare(String(b.meterNumber))
-      })
-  }, [readings])
+  }, [displayReadings])
 
   const tabCounts = useMemo(
     () => ({
@@ -187,18 +180,15 @@ export default function BillingContent() {
     return billingRows.filter((r) => !isPaidInFull(r))
   }, [billingRows, paymentTab])
 
-  const footerTotals = useMemo(() => {
-    return filteredBillingRows.reduce(
-      (acc, row) => {
-        acc.usage += Number(row.usage ?? 0) || 0
-        acc.total += Number(row.total ?? 0) || 0
-        acc.paid += effectivePaid(row)
-        acc.remaining += remainingBalance(row)
-        return acc
-      },
-      { usage: 0, total: 0, paid: 0, remaining: 0 }
-    )
-  }, [filteredBillingRows])
+  const gridRowData = useMemo(() => {
+    const ids = new Set(filteredBillingRows.map((r) => r.id))
+    return displayReadings.filter((r) => r.id && ids.has(r.id)) as MonthlyReadingRow[]
+  }, [displayReadings, filteredBillingRows])
+
+  const gridEmptyMessage = useMemo(() => {
+    if (readings.length === 0) return 'Төлбөрийн мэдээлэл олдсонгүй'
+    return paymentTab === 'unpaid' ? 'Төлөөгүй төлбөр байхгүй' : 'Төлсөн төлбөр байхгүй'
+  }, [readings.length, paymentTab])
 
   const reloadReadings = useCallback(async () => {
     setLoading(true)
@@ -215,7 +205,7 @@ export default function BillingContent() {
       }
       const data = await res.json()
       if (data && data.error) setReadings([])
-      else if (data && Array.isArray(data)) setReadings(data)
+      else if (data && Array.isArray(data)) setReadings(normalizeApiReadings(data) as BillingReading[])
       else setReadings([])
     } catch {
       setReadings([])
@@ -252,70 +242,136 @@ export default function BillingContent() {
       .catch(() => {})
   }, [])
 
-  const handleDownload = (row: BillingRow) => {
-    const invoice = `
+  const handleDownload = useCallback(
+    (row: MonthlyReadingRow) => {
+      const ids = readingIdsForBillingRow(row)
+      const lines =
+        ids.length > 1
+          ? readings
+              .filter((r) => r.id && ids.includes(r.id))
+              .map(
+                (r) =>
+                  `  • Тоолуур ${r.meter?.meterNumber ?? '-'}: хэрэглээ ${(Number(r.usage ?? 0) || 0).toFixed(2)} м³, төлбөр ${formatMoney(r.total ?? 0)} ₮, төлсөн ${formatMoney(r.paidAmount ?? 0)} ₮`
+              )
+              .join('\n')
+          : ''
+
+      const total = Number(row.total ?? 0) || 0
+      const paid = effectivePaid({ paidStored: Number(row.paidAmount ?? 0) || 0 })
+      const remaining = Math.max(0, roundMoneyLocal(total - paid))
+      const invoice = `
 Төлбөрийн нэхэмжлэх
 Байгууллага: ${row.organization?.name || '-'}${row.organization?.code ? ` (${row.organization.code})` : ''}
-Тоолуурын дугаар: ${row.meterNumber || '-'}
+Тоолуур: ${row.meter?.meterNumber || '-'}
 Сар: ${row.year}-${String(row.month).padStart(2, '0')}
-Хэрэглээ: ${(row.usage ?? 0).toFixed(2)} м³
-Нийт төлбөр: ${formatMoney(row.total ?? 0)} ₮
-Төлөгдсөн: ${formatMoney(effectivePaid(row))} ₮
-Үлдэгдэл: ${formatMoney(remainingBalance(row))} ₮
+${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
+Нийт хэрэглээ: ${(row.usage ?? 0).toFixed(2)} м³
+Нийт төлбөр: ${formatMoney(total)} ₮
+Төлөгдсөн: ${formatMoney(paid)} ₮
+Үлдэгдэл: ${formatMoney(remaining)} ₮
     `
-    const blob = new Blob([invoice], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `invoice-${row.year}-${row.month}.txt`
-    a.click()
-  }
+      const blob = new Blob([invoice], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `invoice-${row.year}-${row.month}.txt`
+      a.click()
+      URL.revokeObjectURL(url)
+    },
+    [readings]
+  )
 
-  const handleSendNotification = async (row: BillingRow) => {
-    setSending(row.id)
+  const handleSendNotification = useCallback(
+    async (row: MonthlyReadingRow) => {
+      const ids = readingIdsForBillingRow(row)
+      if (ids.length === 0) return
+      setSending(row.id ?? ids[0])
+      try {
+        const res = await fetchWithAuth('/api/notifications/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            readingIds: ids,
+            fromPhone: senderPhone.trim(),
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
+
+        const org = row.organization as BillingReading['organization']
+        const toPhones =
+          Array.isArray(data.recipients) && data.recipients.length > 0
+            ? data.recipients.map((r: { phone?: string }) => r.phone).filter(Boolean).join(', ')
+            : collectCustomerPhones(org)
+        const breakdownLine = data.breakdownUrl
+          ? `\nЗадаргаа: ${data.breakdownUrl}`
+          : ''
+        alert(
+          `Төлбөрийн мэдээлэл илгээлээ.\n` +
+            `Илгээгч: ${data.fromPhone || senderPhone.trim()}\n` +
+            `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}` +
+            breakdownLine
+        )
+      } catch (err: unknown) {
+        alert(err instanceof Error ? err.message : 'Алдаа гарлаа')
+      } finally {
+        setSending(null)
+      }
+    },
+    [senderPhone]
+  )
+
+  const handleIssueEbarimt = useCallback(async (row: MonthlyReadingRow) => {
+    const ids = readingIdsForBillingRow(row)
+    if (ids.length === 0) return
+    setIssuingEbarimt(row.id ?? ids[0])
     try {
-      const res = await fetchWithAuth('/api/notifications/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ readingId: row.id, fromPhone: senderPhone.trim() }),
+      let ok = 0
+      for (const readingId of ids) {
+        const res = await fetchWithAuth('/api/ebarimt/issue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ readingId }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'e-barimt илгээхэд алдаа гарлаа')
+        ok += 1
+        setReadings((prev) =>
+          prev.map((r) =>
+            r.id === readingId
+              ? {
+                  ...r,
+                  ebarimtStatus: data?.ebarimt?.status ?? 'SENT',
+                  ebarimtBillId: data?.ebarimt?.billId ?? null,
+                  ebarimtLastError: null,
+                }
+              : r
+          )
+        )
+      }
+      setMessage({
+        type: 'success',
+        text: ids.length > 1 ? `e-barimt: ${ok} заалтад илгээлээ.` : 'e-barimt амжилттай илгээгдлээ.',
       })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Алдаа гарлаа')
-      }
-
-      const toPhones =
-        Array.isArray(data.recipients) && data.recipients.length > 0
-          ? data.recipients.map((r: { phone?: string }) => r.phone).filter(Boolean).join(', ')
-          : collectCustomerPhones(row.organization)
-      const sms = data.sms as
-        | { provider?: string; sentOk?: number; sentFailed?: number; results?: { to: string; ok: boolean; error?: string }[] }
-        | undefined
-      let smsLine = ''
-      if (sms?.provider === 'none' || !sms?.provider) {
-        smsLine = '\nSMS: тохиргоо хийгээгүй (.env дээр SMS_HTTP_URL).'
-      } else if ((sms.sentOk ?? 0) === 0 && (sms.sentFailed ?? 0) === 0) {
-        smsLine = '\nSMS: хүлээн авагчийн утас олдсонгүй.'
-      } else {
-        smsLine = `\nSMS (${sms.provider}): амжилт ${sms.sentOk ?? 0}, алдаа ${sms.sentFailed ?? 0}.`
-        const failed = sms.results?.filter((r) => !r.ok).map((r) => `${r.to}: ${r.error || 'алдаа'}`)
-        if (failed?.length) smsLine += `\n${failed.slice(0, 3).join('\n')}`
-      }
-      alert(
-        `Төлбөрийн мэдээлэл боловсрууллаа.\n` +
-          `Илгээгч: ${data.fromPhone || senderPhone.trim()}\n` +
-          `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}\n` +
-          `Төлбөрийн код: ${data.paymentCode}` +
-          smsLine
-      )
-    } catch (err: any) {
-      alert(err.message || 'Алдаа гарлаа')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'e-barimt илгээхэд алдаа гарлаа'
+      setMessage({ type: 'error', text: msg })
     } finally {
-      setSending(null)
+      setIssuingEbarimt(null)
+      setTimeout(() => setMessage(null), 3500)
     }
-  }
+  }, [])
+
+  const billingGridActions = useMemo<BillingGridActions>(
+    () => ({
+      onDownload: handleDownload,
+      onSendSms: handleSendNotification,
+      onIssueEbarimt: handleIssueEbarimt,
+      sendingId: sending,
+      issuingEbarimtId: issuingEbarimt,
+    }),
+    [handleDownload, handleSendNotification, handleIssueEbarimt, sending, issuingEbarimt]
+  )
 
   const handleSendAllNotifications = async () => {
     if (filteredBillingRows.length === 0) {
@@ -331,67 +387,35 @@ export default function BillingContent() {
         const res = await fetchWithAuth('/api/notifications/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ readingId: row.id, fromPhone: senderPhone.trim() }),
+          body: JSON.stringify({
+            readingIds: row.readingIds,
+            fromPhone: senderPhone.trim(),
+          }),
         })
         if (res.ok) okCount += 1
       }
-      setMessage({ type: 'success', text: `Амжилттай илгээлээ: ${okCount}/${filteredBillingRows.length}` })
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Бүгдэд илгээх үед алдаа гарлаа' })
+      setMessage({
+        type: 'success',
+        text: `Амжилттай илгээлээ: ${okCount}/${filteredBillingRows.length} харилцагч`,
+      })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Бүгдэд илгээх үед алдаа гарлаа'
+      setMessage({ type: 'error', text: msg })
     } finally {
       setSendingAll(false)
       setTimeout(() => setMessage(null), 3500)
     }
   }
 
-  const handleIssueEbarimt = async (row: BillingRow) => {
-    setIssuingEbarimt(row.id)
-    try {
-      const res = await fetchWithAuth('/api/ebarimt/issue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ readingId: row.id }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'e-barimt ilgeeh uyd aldaa garlaa')
-      setReadings((prev) =>
-        prev.map((r) =>
-          r.id === row.id
-            ? {
-                ...r,
-                ebarimtStatus: data?.ebarimt?.status ?? 'SENT',
-                ebarimtBillId: data?.ebarimt?.billId ?? null,
-                ebarimtLastError: null,
-              }
-            : r
-        )
-      )
-      setMessage({ type: 'success', text: 'e-barimt amjilttai ilgeegdlee.' })
-    } catch (err: any) {
-      setReadings((prev) =>
-        prev.map((r) =>
-          r.id === row.id
-            ? {
-                ...r,
-                ebarimtStatus: 'FAILED',
-                ebarimtLastError: err?.message || 'Issue failed',
-              }
-            : r
-        )
-      )
-      setMessage({ type: 'error', text: err?.message || 'e-barimt ilgeeh uyd aldaa garlaa.' })
-    } finally {
-      setIssuingEbarimt(null)
-      setTimeout(() => setMessage(null), 3500)
-    }
-  }
-
-  const handleBankExcelSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
+  const handleBankImportSave = async (gridRows: BankGridRow[]) => {
     if (!filterYear || !filterMonth) {
-      setMessage({ type: 'error', text: 'Банкны Excel-д зориулж эхлээд он, сарыг сонгоно уу.' })
+      setMessage({ type: 'error', text: 'Банкны импортод зориулж эхлээд он, сарыг сонгоно уу.' })
+      setTimeout(() => setMessage(null), 4000)
+      return
+    }
+    const rows = bankGridRowsToImportPayload(gridRows)
+    if (rows.length === 0) {
+      setMessage({ type: 'error', text: 'Хадгалах мөр алга (дүн, утга эсвэл тоолуур).' })
       setTimeout(() => setMessage(null), 4000)
       return
     }
@@ -399,13 +423,14 @@ export default function BillingContent() {
     setBankImportReport(null)
     setMessage(null)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('year', filterYear)
-      fd.append('month', filterMonth)
       const res = await fetchWithAuth('/api/readings/payment/bank-import', {
         method: 'POST',
-        body: fd,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          year: filterYear,
+          month: filterMonth,
+          rows,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Импорт амжилтгүй')
@@ -417,8 +442,9 @@ export default function BillingContent() {
       const s = data.skipped?.length ?? 0
       setMessage({
         type: a > 0 ? 'success' : 'error',
-        text: `Банкны Excel: ${a} мөр төлбөрт нэмэгдлээ, ${s} мөр алгасагдлаа.`,
+        text: `Банкны импорт: ${a} мөр төлбөрт нэмэгдлээ, ${s} мөр алгасагдлаа.`,
       })
+      setBankImportInline(false)
       await reloadReadings()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Алдаа гарлаа'
@@ -440,30 +466,31 @@ export default function BillingContent() {
     let ok = 0
     let failed = 0
     try {
+      let totalIssue = 0
       for (const row of filteredBillingRows) {
-        const res = await fetchWithAuth('/api/ebarimt/issue', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ readingId: row.id }),
-        })
-        if (res.ok) ok += 1
-        else failed += 1
+        for (const readingId of row.readingIds) {
+          totalIssue += 1
+          const res = await fetchWithAuth('/api/ebarimt/issue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ readingId }),
+          })
+          if (res.ok) ok += 1
+          else failed += 1
+        }
       }
       setMessage({
         type: failed > 0 ? 'error' : 'success',
-        text: `e-barimt: амжилттай ${ok}, алдаа ${failed} (сонгосон табын ${filteredBillingRows.length} мөр)`,
+        text: `e-barimt: амжилттай ${ok}, алдаа ${failed} (${filteredBillingRows.length} мөр, ${totalIssue} заалт)`,
       })
       await reloadReadings()
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'e-barimt илгээхэд алдаа гарлаа' })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'e-barimt илгээхэд алдаа гарлаа'
+      setMessage({ type: 'error', text: msg })
     } finally {
       setIssuingEbarimtAll(false)
       setTimeout(() => setMessage(null), 4000)
     }
-  }
-
-  if (loading) {
-    return <div className="text-gray-600">Ачааллаж байна...</div>
   }
 
   return (
@@ -532,25 +559,33 @@ export default function BillingContent() {
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end sm:ml-auto sm:shrink-0">
-            <input
-              ref={bankFileRef}
-              type="file"
-              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-              className="hidden"
-              onChange={handleBankExcelSelected}
-            />
             <div className="flex flex-wrap gap-2 justify-end">
               <button
                 type="button"
-                onClick={() => bankFileRef.current?.click()}
+                onClick={() => {
+                  if (bankImportInline) {
+                    if (!bankImporting) setBankImportInline(false)
+                  } else {
+                    setBankImportInline(true)
+                  }
+                }}
                 disabled={
-                  bankImporting || !filterYear || !filterMonth || loading
+                  bankImporting ||
+                  (!bankImportInline && (!filterYear || !filterMonth || loading))
                 }
                 className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-800 rounded-md hover:bg-gray-50 disabled:opacity-50 whitespace-nowrap"
-                title="Гүйлгээний утга дээр 6 оронтой төлбөрийн код байх (SMS-ээр илгээсэн)"
+                title={
+                  bankImportInline
+                    ? 'Төлбөрийн үндсэн хүснэгт рүү буцах'
+                    : 'Доорх хүснэгт банкны мөр paste хийж төлбөр оруулах'
+                }
               >
                 <DocumentArrowUpIcon className="h-5 w-5 shrink-0" />
-                {bankImporting ? 'Уншиж байна...' : 'Банкны Excel'}
+                {bankImporting
+                  ? 'Уншиж байна...'
+                  : bankImportInline
+                    ? 'Төлбөр рүү буцах'
+                    : 'Банкны Excel'}
               </button>
               <button
                 type="button"
@@ -588,8 +623,9 @@ export default function BillingContent() {
             <ul className="mb-2 text-green-800 space-y-0.5 list-disc list-inside">
               {bankImportReport.applied.map((a, i) => (
                 <li key={`${a.readingId}-${i}`}>
-                  Мөр {a.rowIndex}: код {a.code} — +{formatMoney(a.added)} ₮ (нийт төлөгдсөн{' '}
-                  {formatMoney(a.newPaid)} / {formatMoney(a.total)} ₮)
+                  Мөр {a.rowIndex}
+                  {a.code ? `: код ${a.code}` : a.meterNumber ? `: тоолуур ${a.meterNumber}` : ''} — +
+                  {formatMoney(a.added)} ₮ (нийт төлөгдсөн {formatMoney(a.newPaid)} / {formatMoney(a.total)} ₮)
                 </li>
               ))}
             </ul>
@@ -618,185 +654,26 @@ export default function BillingContent() {
         </div>
       )}
 
-      <div className="bg-white shadow-sm rounded-lg border border-gray-200">
-        <div className="max-h-[min(75vh,calc(100vh-11rem))] w-full overflow-y-auto overflow-x-auto overscroll-contain">
-          <table className="min-w-[72rem] w-full divide-y divide-gray-200">
-          <thead className="sticky top-0 z-10 bg-gray-50 shadow-[0_1px_0_0_rgb(229_231_235)]">
-            <tr>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Он
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Сар
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Байгууллага
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Тоолуур
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide leading-tight">
-                Гүйлгээний код
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide leading-tight">
-                Харилцагчийн утас
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Хэрэглээ (м³)
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Төлбөр (₮)
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Төлөгдсөн (₮)
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Үлдэгдэл (₮)
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Төлөв
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                E-barimt
-              </th>
-              <th className="px-2 sm:px-3 py-2 sm:py-3 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Үйлдэл
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {filteredBillingRows.map((row) => (
-              <tr key={row.id}>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {row.year}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {String(row.month).padStart(2, '0')}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {row.organization?.name || '-'}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {row.meterNumber}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center font-mono text-gray-800">
-                  {row.paymentReference || '—'}
-                </td>
-                <td className="px-4 py-4 text-sm text-center text-gray-700 max-w-[14rem] break-words">
-                  {row.customerPhones}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {(row.usage ?? 0).toFixed(2)}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {formatMoney(row.total ?? 0)}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {formatMoney(effectivePaid(row))}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center text-gray-900">
-                  {formatMoney(remainingBalance(row))}
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-center">
-                  <span
-                    className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full border ${
-                      isPaidInFull(row)
-                        ? 'border-gray-200 bg-gray-50 text-gray-800'
-                        : effectivePaid(row) > PAY_EPS
-                        ? 'border-gray-200 bg-gray-50 text-gray-700'
-                        : 'border-gray-200 bg-white text-gray-600'
-                    }`}
-                  >
-                    {paymentStatusLabel(row)}
-                  </span>
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm text-center">
-                  <span
-                    className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      row.ebarimtStatus === 'SENT'
-                        ? 'bg-blue-100 text-blue-800'
-                        : row.ebarimtStatus === 'FAILED'
-                        ? 'bg-red-100 text-red-800'
-                        : 'bg-gray-100 text-gray-700'
-                    }`}
-                    title={row.ebarimtLastError || undefined}
-                  >
-                    {row.ebarimtStatus === 'SENT'
-                      ? row.ebarimtBillId
-                        ? `SENT (${row.ebarimtBillId})`
-                        : 'SENT'
-                      : row.ebarimtStatus === 'FAILED'
-                      ? 'FAILED'
-                      : 'PENDING'}
-                  </span>
-                </td>
-                <td className="px-4 py-4 whitespace-nowrap text-sm">
-                  <div className="flex items-center justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleDownload(row)}
-                      className="text-primary-600 hover:text-primary-900 p-1 rounded hover:bg-primary-50 transition-colors"
-                      title="Татах"
-                    >
-                      <ArrowDownTrayIcon className="h-5 w-5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleIssueEbarimt(row)}
-                      disabled={issuingEbarimt === row.id}
-                      className="text-indigo-600 hover:text-indigo-900 p-1 rounded hover:bg-indigo-50 transition-colors disabled:opacity-50"
-                      title={issuingEbarimt === row.id ? 'E-barimt ilgej baina...' : 'E-barimt ilgeeh'}
-                    >
-                      <span className="text-xs font-semibold">EB</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSendNotification(row)}
-                      disabled={sending === row.id}
-                      className="text-green-600 hover:text-green-900 p-1 rounded hover:bg-green-50 transition-colors disabled:opacity-50"
-                      title={sending === row.id ? 'Илгээж байна...' : 'Илгээх'}
-                    >
-                      <PaperAirplaneIcon className="h-5 w-5" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          {filteredBillingRows.length > 0 && (
-            <tfoot className="bg-gray-50 border-t border-gray-200">
-              <tr>
-                <td colSpan={6} className="px-6 py-3 text-sm font-semibold text-gray-900">
-                  Нийт дүн
-                </td>
-                <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
-                  {footerTotals.usage.toFixed(2)}
-                </td>
-                <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
-                  {formatMoney(footerTotals.total)}
-                </td>
-                <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
-                  {formatMoney(footerTotals.paid)}
-                </td>
-                <td className="px-6 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">
-                  {formatMoney(footerTotals.remaining)}
-                </td>
-                <td colSpan={3} className="px-6 py-3" />
-              </tr>
-            </tfoot>
-          )}
-        </table>
-        </div>
-        {filteredBillingRows.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            {billingRows.length === 0
-              ? 'Төлбөрийн мэдээлэл олдсонгүй'
-              : paymentTab === 'unpaid'
-                ? 'Төлөөгүй төлбөр байхгүй'
-                : 'Төлсөн төлбөр байхгүй'}
-          </div>
-        )}
-      </div>
+      {bankImportInline ? (
+        <BankImportModal
+          year={filterYear}
+          month={filterMonth}
+          saving={bankImporting}
+          onClose={() => {
+            if (!bankImporting) setBankImportInline(false)
+          }}
+          onSave={handleBankImportSave}
+        />
+      ) : (
+        <MonthlyReadingsGrid
+          variant="billing"
+          rowData={gridRowData}
+          loading={loading}
+          showCalculated
+          emptyMessage={gridEmptyMessage}
+          billingActions={billingGridActions}
+        />
+      )}
     </div>
   )
 }

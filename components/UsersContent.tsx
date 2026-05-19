@@ -24,21 +24,13 @@ interface Organization {
   name: string
   ovog?: string | null
   code: string | null
+  register?: string | null
   address: string | null
   phone: string | null
   email: string | null
   connectionNumber: string | null
   year: number
   category?: OrganizationCategory
-}
-
-const CATEGORY_LABELS: Record<OrganizationCategory, string> = {
-  HOUSEHOLD: 'Иргэн, хувь хүн',
-  ORGANIZATION: 'Төсөвт байгууллага',
-  BUSINESS: 'Аж ахуйн нэгж',
-  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
-  TRANSPORT_RECEPTION: 'Зөөврүүд хүлээн авах',
-  WATER_POINT: 'Ус түгээх байр',
 }
 
 /** DB `name` нь ихэвчлэн «овог нэр» нэгтгэсэн; `ovog`-оос давхардах нэрийг хасна */
@@ -79,6 +71,7 @@ export default function UsersContent() {
     role: 'USER',
     organizationId: '',
     code: '',
+    register: '',
     address: '',
   })
 
@@ -94,6 +87,7 @@ export default function UsersContent() {
   const [orgForm, setOrgForm] = useState({
     name: '',
     code: '',
+    register: '',
     address: '',
     phone: '',
     email: '',
@@ -112,7 +106,8 @@ export default function UsersContent() {
     const rows = households.map((h) => ({
       'Овог': h.ovog ?? '',
       'Нэр': householdGivenName(h.name, h.ovog) ?? '',
-      'Хүний регистр': h.code ?? '',
+      'Код': h.code ?? '',
+      'Регистр': h.register ?? '',
       'Хаяг': h.address ?? '',
       'Утас': h.phone ?? '',
       'Имэйл': h.email ?? '',
@@ -126,12 +121,12 @@ export default function UsersContent() {
   const exportOrganizationsToExcel = () => {
     const rows = orgs.map((o) => ({
       'Нэр': o.name ?? '',
-      'Байгууллагийн регистр': o.code ?? '',
+      'Код': o.code ?? '',
+      'Регистр': o.register ?? '',
       'Хаяг': o.address ?? '',
       'Утас': o.phone ?? '',
       'Имэйл': o.email ?? '',
       'Он': o.year ?? '',
-      'Хэрэглэгчийн төрөл': o.category ? (CATEGORY_LABELS[o.category] || o.category) : '',
     }))
     const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
     const wb = XLSX.utils.book_new()
@@ -211,6 +206,7 @@ export default function UsersContent() {
       role: 'USER',
       organizationId: '',
       code: household.code || '',
+      register: household.register || '',
       address: household.address || '',
     })
     setShowUserForm(true)
@@ -255,6 +251,7 @@ export default function UsersContent() {
                 name: fullName,
                 ovog: r.ovog?.trim() || null,
                 code: r.code?.trim() || null,
+                register: r.register?.trim() || null,
                 address: r.address?.trim() || null,
                 phone: r.phone?.trim() || null,
                 email: r.email?.trim() || null,
@@ -333,6 +330,7 @@ export default function UsersContent() {
               body: JSON.stringify({
                 name,
                 code: String(r.code ?? '').trim() || null,
+                register: String(r.register ?? '').trim() || null,
                 address: String(r.address ?? '').trim() || null,
                 phone: String(r.phone ?? '').trim() || null,
                 email: String(r.email ?? '').trim() || null,
@@ -381,6 +379,7 @@ export default function UsersContent() {
             name: fullName,
             ovog: userForm.ovog?.trim() || null,
             code: userForm.code?.trim() || null,
+            register: userForm.register?.trim() || null,
             address: userForm.address?.trim() || null,
             phone: userForm.phone?.trim() || null,
             email: userForm.email?.trim() || null,
@@ -399,6 +398,7 @@ export default function UsersContent() {
             name: fullName,
             ovog: userForm.ovog?.trim() || null,
             code: userForm.code?.trim() || null,
+            register: userForm.register?.trim() || null,
             address: userForm.address?.trim() || null,
             phone: userForm.phone?.trim() || null,
             email: userForm.email?.trim() || null,
@@ -411,7 +411,7 @@ export default function UsersContent() {
       }
       setShowUserForm(false)
       setEditingHouseholdId(null)
-      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '' })
+      setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', register: '', address: '' })
       loadOrganizations()
       loadHouseholds()
     } catch (err: any) {
@@ -424,6 +424,7 @@ export default function UsersContent() {
     setOrgForm({
       name: org.name,
       code: org.code || '',
+      register: org.register || '',
       address: org.address || '',
       phone: org.phone || '',
       email: org.email || '',
@@ -480,6 +481,7 @@ export default function UsersContent() {
       setOrgForm({
         name: '',
         code: '',
+        register: '',
         address: '',
         phone: '',
         email: '',
@@ -589,7 +591,7 @@ export default function UsersContent() {
                 onClick={() => {
                   if (!showUserForm) {
                     setEditingHouseholdId(null)
-                    setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', address: '' })
+                    setUserForm({ ovog: '', name: '', email: '', phone: '', role: 'USER', organizationId: '', code: '', register: '', address: '' })
                   }
                   setShowUserForm(!showUserForm)
                 }}
@@ -609,7 +611,8 @@ export default function UsersContent() {
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Овог</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Нэр</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хүний регистр</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Код</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Регистр</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Хаяг</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Утас</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Имэйл</th>
@@ -624,6 +627,7 @@ export default function UsersContent() {
                         {householdGivenName(h.name, h.ovog) || '-'}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.code || '-'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{h.register || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.address || '-'}</td>
                       <td className="px-4 py-3 text-sm text-gray-900">{h.phone || '-'}</td>
                       <td className="px-3 py-2 text-sm text-gray-900 whitespace-nowrap">{h.email || '-'}</td>
@@ -703,15 +707,27 @@ export default function UsersContent() {
                               />
                             </div>
                           </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Хүний регистр</label>
-                            <input
-                              type="text"
-                              value={userForm.code}
-                              onChange={(e) => setUserForm(prev => ({ ...prev, code: e.target.value }))}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                              placeholder="Регистрийн дугаар"
-                            />
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Код</label>
+                              <input
+                                type="text"
+                                value={userForm.code}
+                                onChange={(e) => setUserForm(prev => ({ ...prev, code: e.target.value }))}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                placeholder="Хэрэглэгчийн код"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Регистр</label>
+                              <input
+                                type="text"
+                                value={userForm.register}
+                                onChange={(e) => setUserForm(prev => ({ ...prev, register: e.target.value }))}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                                placeholder="Регистрийн дугаар"
+                              />
+                            </div>
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Хаяг</label>
@@ -807,6 +823,7 @@ export default function UsersContent() {
                   setOrgForm({
                     name: '',
                     code: '',
+                    register: '',
                     address: '',
                     phone: '',
                     email: '',
@@ -848,29 +865,37 @@ export default function UsersContent() {
                     </div>
 
                     <form onSubmit={handleSubmitOrg} className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Нэр
+                        </label>
+                        <input
+                          type="text"
+                          value={orgForm.name}
+                          onChange={(e) => setOrgForm(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                          required
+                        />
+                      </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Нэр
-                          </label>
-                          <input
-                            type="text"
-                            value={orgForm.name}
-                            onChange={(e) => setOrgForm(prev => ({ ...prev, name: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">
-                            Байгууллагийн регистр
-                          </label>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Код</label>
                           <input
                             type="text"
                             value={orgForm.code}
                             onChange={(e) => setOrgForm(prev => ({ ...prev, code: e.target.value }))}
                             className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                            placeholder="Байгууллагийн регистрийн дугаар"
+                            placeholder="Хэрэглэгчийн код"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Регистр</label>
+                          <input
+                            type="text"
+                            value={orgForm.register}
+                            onChange={(e) => setOrgForm(prev => ({ ...prev, register: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            placeholder="Байгууллагийн регистр"
                           />
                         </div>
                       </div>
@@ -910,22 +935,6 @@ export default function UsersContent() {
                             className="w-full px-3 py-2 border border-gray-300 rounded-md"
                           />
                         </div>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Хэрэглэгчийн төрөл
-                        </label>
-                        <select
-                          value={orgForm.category}
-                          onChange={(e) => setOrgForm(prev => ({ ...prev, category: e.target.value as OrganizationCategory }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                        >
-                          <option value="ORGANIZATION">Төсөвт байгууллага</option>
-                          <option value="BUSINESS">Аж ахуйн нэгж</option>
-                          <option value="TRANSPORT_DISPOSAL">Зөөврөөр татан зайлуулах</option>
-                          <option value="TRANSPORT_RECEPTION">Зөөврүүд хүлээн авах</option>
-                          <option value="WATER_POINT">Ус түгээх байр</option>
-                        </select>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -973,7 +982,10 @@ export default function UsersContent() {
                       Нэр
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Байгууллагийн регистр
+                      Код
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                      Регистр
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Хаяг
@@ -986,9 +998,6 @@ export default function UsersContent() {
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Он
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Хэрэглэгчийн төрөл
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                       Үйлдэл
@@ -1004,6 +1013,9 @@ export default function UsersContent() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {org.code || '-'}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {org.register || '-'}
+                      </td>
                       <td className="px-6 py-4 text-sm text-gray-900">{org.address || '-'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {org.phone || '-'}
@@ -1013,9 +1025,6 @@ export default function UsersContent() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {org.year || '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {org.category ? (CATEGORY_LABELS[org.category] || org.category) : '-'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         <div className="flex gap-2">

@@ -105,10 +105,14 @@ export async function POST(request: NextRequest) {
 
     const metersNeeding = meterIds.filter((id) => !hasPrevForMeter.has(id))
     if (metersNeeding.length > 0 && scopedOrgIds.length > 0) {
+      const meterScopeOr: Prisma.MeterWhereInput[] = [{ organizationId: { in: scopedOrgIds } }]
+      if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+        meterScopeOr.push({ createdByUserId: user.userId })
+      }
       const allowedMeters = await prisma.meter.findMany({
         where: {
           id: { in: metersNeeding },
-          organizationId: { in: scopedOrgIds },
+          OR: meterScopeOr,
         },
         select: { id: true },
       })

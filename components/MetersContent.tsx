@@ -5,10 +5,50 @@ import { MagnifyingGlassIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
 import * as XLSX from 'xlsx'
+import { effectiveBillingCategory } from '@/lib/meter-reading-calc-core'
 
 interface Organization {
   id: string
   name: string
+  code?: string | null
+  category?: string | null
+  year?: number
+}
+
+type OrgCustomerCategory =
+  | 'ORGANIZATION'
+  | 'BUSINESS'
+  | 'TRANSPORT_DISPOSAL'
+  | 'TRANSPORT_RECEPTION'
+  | 'WATER_POINT'
+
+const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
+  ORGANIZATION: 'Төсөвт байгууллага',
+  BUSINESS: 'Аж ахуйн нэгж',
+  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
+  TRANSPORT_RECEPTION: 'Зөөврөөр хүлээн авах',
+  WATER_POINT: 'Ус түгээх байр',
+}
+
+function isOrgCustomerCategory(s: string | null | undefined): s is OrgCustomerCategory {
+  return (
+    s === 'ORGANIZATION' ||
+    s === 'BUSINESS' ||
+    s === 'TRANSPORT_DISPOSAL' ||
+    s === 'TRANSPORT_RECEPTION' ||
+    s === 'WATER_POINT'
+  )
+}
+
+function customerTypeLabel(category: string | null | undefined): string {
+  if (!category || category === 'HOUSEHOLD') return 'Иргэн, хувь хүн'
+  if (isOrgCustomerCategory(category)) return ORG_CUSTOMER_CATEGORY_LABELS[category]
+  return category
+}
+
+function defaultOrgCustomerCategory(org: Organization | undefined): OrgCustomerCategory {
+  const raw = org?.category ?? 'ORGANIZATION'
+  return isOrgCustomerCategory(raw) ? raw : 'ORGANIZATION'
 }
 
 type MeterServiceStatus = 'NORMAL' | 'DAMAGED' | 'REPLACED'
@@ -26,12 +66,43 @@ interface Meter {
   defaultHeatUsage?: number | null
   /** Шугамын хоолой (мм) — тоолуур тус бүр */
   pipeDiameterMm?: number | null
+  /** Тоолуур тус бүрийн тарифын ангилал (байгууллагын category-аас давхаргана) */
+  billingCategory?: string | null
   organization: {
     name: string
     connectionNumber?: string | null
+    category?: string | null
   }
 }
-type OwnerType = 'organization' | 'household'
+type OwnerType = '' | 'organization' | 'household'
+
+type MeterFormState = {
+  ownerType: OwnerType
+  orgCustomerCategory: '' | OrgCustomerCategory
+  meterNumber: string
+  defaultHeatM3M2: string
+  organizationId: string
+  year: number
+  serviceStatus: MeterServiceStatus
+  billingMode: MeterBillingMode
+  waterChargeSplit: WaterChargeSplit
+  pipeDiameterMm: string
+}
+
+function createEmptyMeterForm(year: number): MeterFormState {
+  return {
+    ownerType: '',
+    orgCustomerCategory: '',
+    meterNumber: '',
+    defaultHeatM3M2: '',
+    organizationId: '',
+    year,
+    serviceStatus: 'NORMAL',
+    billingMode: 'WATER',
+    waterChargeSplit: 'BOTH',
+    pipeDiameterMm: '',
+  }
+}
 
 const nameCollator = new Intl.Collator(['mn', 'ru', 'en'], {
   sensitivity: 'base',
@@ -52,22 +123,9 @@ export default function MetersContent() {
   const [searchQuery, setSearchQuery] = useState('')
   const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
-  const [form, setForm] = useState({
-    ownerType: '' as OwnerType | '',
-    meterNumber: '',
-    /** HEAT / WATER_HEAT үед заавал (м³/м²) */
-    defaultHeatM3M2: '',
-    organizationId: '',
-    year: currentYear,
-    serviceStatus: 'NORMAL' as MeterServiceStatus,
-    billingMode: 'WATER' as MeterBillingMode,
-    waterChargeSplit: 'BOTH' as WaterChargeSplit,
-    pipeDiameterMm: '',
-  })
+  const [form, setForm] = useState<MeterFormState>(() => createEmptyMeterForm(currentYear))
 
-  useEffect(() => {
-    loadMeters()
-    // Тоолуур нэмэх модал дээр «албан өөрийн байгууллага» биш зөвхөн харилцагчуудыг харуулах
+  function reloadCustomerLists() {
     fetchWithAuth('/api/organizations?customersOnly=1', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : []))
       .then(data => {
@@ -88,6 +146,11 @@ export default function MetersContent() {
         }
       })
       .catch(() => setHouseholds([]))
+  }
+
+  useEffect(() => {
+    loadMeters()
+    reloadCustomerLists()
   }, [])
 
   useEffect(() => {
@@ -114,13 +177,28 @@ export default function MetersContent() {
     return arr
   }, [households])
 
+  const meterCountForSelectedOrg = useMemo(() => {
+    if (!form.organizationId || form.ownerType === 'household') return 0
+    return meters.filter((m) => m.organizationId === form.organizationId).length
+  }, [form.organizationId, form.ownerType, meters])
+
+  /** Байгууллага/иргэн сонгосны дараа тооцоолол, ус, тоолуур гэх мэт талбарууд идэвхжинэ */
+  const meterDetailsUnlocked = useMemo(() => {
+    if (!form.ownerType || !form.organizationId) return false
+    if (form.ownerType === 'household') return true
+    return Boolean(form.orgCustomerCategory)
+  }, [form.ownerType, form.organizationId, form.orgCustomerCategory])
+
   const metersFiltered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     if (!q) return meters
     return meters.filter((m) => {
       const name = String(m.organization?.name ?? '').toLowerCase()
       const num = String(m.meterNumber ?? '').toLowerCase()
-      return name.includes(q) || num.includes(q)
+      const cat = customerTypeLabel(
+        effectiveBillingCategory(m.billingCategory, m.organization?.category)
+      ).toLowerCase()
+      return name.includes(q) || num.includes(q) || cat.includes(q)
     })
   }, [meters, searchQuery])
 
@@ -128,6 +206,9 @@ export default function MetersContent() {
     const rows = meters.map((m) => ({
       'Тоолуурын дугаар': m.meterNumber ?? '',
       'Хэрэглэгч': m.organization?.name ?? '',
+      'Хэрэглэгчийн төрөл': customerTypeLabel(
+        effectiveBillingCategory(m.billingCategory, m.organization?.category)
+      ),
       'Он': m.year ?? '',
       'Төлөв':
         String(m.serviceStatus ?? 'NORMAL').toUpperCase() === 'DAMAGED'
@@ -185,10 +266,11 @@ export default function MetersContent() {
         } else {
           setMeters([])
         }
-        setLoading(false)
       })
       .catch(() => {
         setMeters([])
+      })
+      .finally(() => {
         setLoading(false)
       })
   }
@@ -196,12 +278,22 @@ export default function MetersContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setMessage(null)
-    if (!editingId && !form.ownerType) {
-      setMessage({ type: 'error', text: 'Байгууллага эсвэл Хувь хүн сонгоно уу.' })
+    if (!form.ownerType) {
+      setMessage({ type: 'error', text: 'Байгууллага эсвэл иргэн, хувь хүн сонгоно уу.' })
       return
     }
-    if (!editingId && !form.organizationId) {
-      setMessage({ type: 'error', text: 'Байгууллага эсвэл Хувь хүнийг сонгоно уу.' })
+    if (!form.organizationId) {
+      setMessage({
+        type: 'error',
+        text:
+          form.ownerType === 'household'
+            ? 'Иргэн, хувь хүн сонгоно уу.'
+            : 'Байгууллага сонгоно уу.',
+      })
+      return
+    }
+    if (form.ownerType === 'organization' && !form.orgCustomerCategory) {
+      setMessage({ type: 'error', text: 'Хэрэглэгчийн төрөл сонгоно уу.' })
       return
     }
     const meterNo = String(form.meterNumber ?? '').trim()
@@ -240,6 +332,9 @@ export default function MetersContent() {
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
             pipeDiameterMm: pipeDiameter,
+            ...(form.ownerType === 'organization' && form.orgCustomerCategory
+              ? { billingCategory: form.orgCustomerCategory }
+              : {}),
           }
         : {
             meterNumber: meterNo,
@@ -250,6 +345,9 @@ export default function MetersContent() {
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
             pipeDiameterMm: pipeDiameter,
+            ...(form.ownerType === 'organization' && form.orgCustomerCategory
+              ? { billingCategory: form.orgCustomerCategory }
+              : {}),
           }
 
       const res = await fetchWithAuth('/api/meters', {
@@ -261,21 +359,15 @@ export default function MetersContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
 
-      setMessage({ type: 'success', text: editingId ? 'Амжилттай шинэчиллээ' : 'Амжилттай хадгаллаа' })
+      setMessage({
+        type: 'success',
+        text: editingId ? 'Амжилттай шинэчиллээ' : 'Амжилттай хадгаллаа',
+      })
       setShowForm(false)
       setEditingId(null)
-      setForm({
-        ownerType: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+      setForm(createEmptyMeterForm(currentYear))
       loadMeters()
+      reloadCustomerLists()
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Алдаа гарлаа' })
     }
@@ -294,8 +386,18 @@ export default function MetersContent() {
     const wcs = String(meter.waterChargeSplit ?? 'BOTH').toUpperCase()
     const waterChargeSplit: WaterChargeSplit =
       wcs === 'CLEAN_ONLY' || wcs === 'DIRTY_ONLY' ? (wcs as WaterChargeSplit) : 'BOTH'
+    const co = organizations.find((o) => o.id === meter.organizationId)
+    const eff = effectiveBillingCategory(
+      meter.billingCategory,
+      co?.category ?? meter.organization?.category
+    )
     setForm({
       ownerType: inHousehold ? 'household' : 'organization',
+      orgCustomerCategory: inHousehold
+        ? ''
+        : isOrgCustomerCategory(eff)
+          ? eff
+          : defaultOrgCustomerCategory(co),
       meterNumber: meter.meterNumber,
       defaultHeatM3M2:
         meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
@@ -353,17 +455,7 @@ export default function MetersContent() {
             setShowForm(!showForm)
             setEditingId(null)
             setMessage(null)
-            setForm({
-        ownerType: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+            setForm(createEmptyMeterForm(currentYear))
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -380,21 +472,11 @@ export default function MetersContent() {
                 setShowForm(false)
                 setEditingId(null)
                 setMessage(null)
-                setForm({
-        ownerType: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+                setForm(createEmptyMeterForm(currentYear))
               }}
               aria-hidden="true"
             />
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-xl sm:w-full">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-xl font-semibold text-gray-900">
@@ -406,17 +488,7 @@ export default function MetersContent() {
                       setShowForm(false)
                       setEditingId(null)
                       setMessage(null)
-                      setForm({
-        ownerType: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+                      setForm(createEmptyMeterForm(currentYear))
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
                   >
@@ -445,7 +517,14 @@ export default function MetersContent() {
                           type="radio"
                           name="ownerType"
                           checked={form.ownerType === 'organization'}
-                          onChange={() => setForm(prev => ({ ...prev, ownerType: 'organization', organizationId: '' }))}
+                          onChange={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              ownerType: 'organization',
+                              organizationId: '',
+                              orgCustomerCategory: '',
+                            }))
+                          }
                           className="text-primary-600 border-gray-300"
                         />
                         <span>Байгууллага</span>
@@ -455,31 +534,113 @@ export default function MetersContent() {
                           type="radio"
                           name="ownerType"
                           checked={form.ownerType === 'household'}
-                          onChange={() => setForm(prev => ({ ...prev, ownerType: 'household', organizationId: '' }))}
+                          onChange={() =>
+                            setForm((prev) => ({
+                              ...prev,
+                              ownerType: 'household',
+                              organizationId: '',
+                              orgCustomerCategory: '',
+                            }))
+                          }
                           className="text-primary-600 border-gray-300"
                         />
                         <span>Иргэн, хувь хүн</span>
                       </label>
                     </div>
                     {(form.ownerType === 'organization' || form.ownerType === 'household') && (
-                      <select
-                        value={form.organizationId}
-                        onChange={(e) => setForm(prev => ({ ...prev, organizationId: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                        required
-                      >
-                        <option value="">Сонгох</option>
-                        {form.ownerType === 'organization' &&
-                          organizationsSorted.map(org => (
-                            <option key={org.id} value={org.id}>{org.name}</option>
-                          ))}
-                        {form.ownerType === 'household' &&
-                          householdsSorted.map(h => (
-                            <option key={h.id} value={h.id}>{h.name}</option>
-                          ))}
-                      </select>
+                      <>
+                        {form.ownerType === 'organization' && (
+                          <>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Байгууллага (харилцагч)
+                            </label>
+                            <select
+                              value={form.organizationId}
+                              onChange={(e) => {
+                                const id = e.target.value
+                                const org = organizations.find((o) => o.id === id)
+                                setForm((prev) => ({
+                                  ...prev,
+                                  organizationId: id,
+                                  orgCustomerCategory: id ? defaultOrgCustomerCategory(org) : ('' as const),
+                                }))
+                              }}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md mb-2"
+                              required
+                            >
+                              <option value="">Сонгох</option>
+                              {organizationsSorted.map((org) => (
+                                <option key={org.id} value={org.id}>
+                                  {org.name}
+                                  {org.code ? ` — ${org.code}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Хэрэглэгчийн төрөл
+                            </label>
+                            <select
+                              value={form.orgCustomerCategory}
+                              disabled={!form.organizationId}
+                              onChange={(e) =>
+                                setForm((prev) => ({
+                                  ...prev,
+                                  orgCustomerCategory: e.target.value as OrgCustomerCategory,
+                                }))
+                              }
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              required={Boolean(form.organizationId)}
+                            >
+                              {!form.organizationId ? (
+                                <option value="">Эхлээд байгууллага сонгоно уу</option>
+                              ) : (
+                                (Object.keys(ORG_CUSTOMER_CATEGORY_LABELS) as OrgCustomerCategory[]).map((k) => (
+                                  <option key={k} value={k}>
+                                    {ORG_CUSTOMER_CATEGORY_LABELS[k]}
+                                  </option>
+                                ))
+                              )}
+                            </select>
+                            {meterCountForSelectedOrg > 1 && (
+                              <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
+                                Энэ харилцагчид {meterCountForSelectedOrg} тоолуур бүртгэлтэй. Төрөл нь зөвхөн энэ
+                                тоолуурын тарифад хамаарна; сарын заалт тоолуур бүрээр тусад нь оруулна.
+                              </p>
+                            )}
+                          </>
+                        )}
+                        {form.ownerType === 'household' && (
+                          <>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Иргэн, хувь хүн
+                            </label>
+                            <select
+                              value={form.organizationId}
+                              onChange={(e) => setForm((prev) => ({ ...prev, organizationId: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              required
+                            >
+                              <option value="">Сонгох</option>
+                              {householdsSorted.map((h) => (
+                                <option key={h.id} value={h.id}>
+                                  {h.name}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                      </>
                     )}
                   </div>
+                  {!meterDetailsUnlocked && form.ownerType && (
+                    <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                      {form.ownerType === 'household'
+                        ? 'Доорх тооцоолол, усны төрөл зэргийг сонгохын тулд эхлээд иргэн, хувь хүнийг сонгоно уу.'
+                        : 'Доорх талбаруудыг сонгохын тулд байгууллага болон хэрэглэгчийн төрлийг сонгоно уу.'}
+                    </p>
+                  )}
+                  {meterDetailsUnlocked ? (
+                    <>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Тооцооллын төрөл
@@ -627,6 +788,8 @@ export default function MetersContent() {
                       <option value="REPLACED">Солигдсон</option>
                     </select>
                   </div>
+                    </>
+                  ) : null}
                   <div className="flex justify-end gap-3 mt-4 pt-2">
                     <button
                       type="button"
@@ -634,17 +797,7 @@ export default function MetersContent() {
                         setShowForm(false)
                         setEditingId(null)
                         setMessage(null)
-                        setForm({
-        ownerType: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+                        setForm(createEmptyMeterForm(currentYear))
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                     >
@@ -652,7 +805,8 @@ export default function MetersContent() {
                     </button>
                     <button
                       type="submit"
-                      className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                      disabled={!meterDetailsUnlocked}
+                      className="px-6 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
                     >
                       {editingId ? 'Шинэчлэх' : 'Хадгалах'}
                     </button>
@@ -675,14 +829,14 @@ export default function MetersContent() {
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Хэрэглэгчийн нэр, тоолуурын дугаараар хайх…"
+              placeholder="Хэрэглэгчийн нэр, төрөл, тоолуурын дугаараар хайх…"
               className="w-full rounded-md border border-gray-300 py-2 pl-10 pr-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
               aria-label="Хайлт"
             />
           </div>
         </div>
         <div className="overflow-x-auto px-3 sm:px-4">
-          <table className="w-full min-w-[1000px] table-auto divide-y divide-gray-200">
+          <table className="w-full min-w-[1120px] table-auto divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
@@ -690,6 +844,9 @@ export default function MetersContent() {
                 </th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-[15rem] min-w-[15rem] max-w-[15rem]">
                   Хэрэглэгч
+                </th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
+                  Төрөл
                 </th>
                 <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
                   Он
@@ -726,6 +883,11 @@ export default function MetersContent() {
                     title={meter.organization?.name || undefined}
                   >
                     {meter.organization?.name || '-'}
+                  </td>
+                  <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">
+                    {customerTypeLabel(
+                      effectiveBillingCategory(meter.billingCategory, meter.organization?.category)
+                    )}
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap text-center text-sm text-gray-900">
                     {meter.year || '-'}

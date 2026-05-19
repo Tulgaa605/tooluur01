@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
@@ -19,17 +20,22 @@ export async function GET(request: NextRequest) {
     // Энгийн хэрэглэгч (USER): зөвхөн өөрийн нэг байгууллага.
     const isStaff =
       user.role === Role.ACCOUNTANT || user.role === Role.MANAGER
-    const where: {
-      id?: { in: string[] }
-      category?: string
-      managedByOrganizationId?: string
-    } = {}
+    const where: Prisma.OrganizationWhereInput = {}
     if (!isStaff) {
       if (!user.organizationId) return NextResponse.json([])
       where.id = { in: [user.organizationId] }
-    } else if (customersOnly && user.organizationId) {
-      // Заалт оруулах модал зэрэг: зөвхөн бүртгэсэн харилцагч (албан өөрийг оруулахгүй)
-      where.managedByOrganizationId = user.organizationId
+    } else if (
+      customersOnly &&
+      user.organizationId &&
+      /^[a-f\d]{24}$/i.test(user.organizationId)
+    ) {
+      // Тоолуур/заалтын форм: өөрийн албыг жагсаалтаас хасаж, удирдуулсан эсвэл энэ дансаар үүсгэсэн харилцагч.
+      // (Mongo/Prisma дээр nested `id: { not }` зарим тохиолдолд алдаатай байж болох тул NOT + OR ашиглана.)
+      where.NOT = { id: user.organizationId }
+      where.OR = [
+        { managedByOrganizationId: user.organizationId },
+        { createdByUserId: user.userId },
+      ]
     } else {
       const scoped = await getScopedOrganizationIds(user)
       if (scoped.length === 0) return NextResponse.json([])
@@ -38,11 +44,10 @@ export async function GET(request: NextRequest) {
     if (categoryFilter === 'HOUSEHOLD') {
       where.category = 'HOUSEHOLD'
       // Нягтлан/захирал: зөвхөн энэ албаас бүртгэсэн харилцагч (хувь хүн). Өөрийн албан нэр HOUSEHOLD байсан ч энд бүү ор.
-      if (isStaff && user.organizationId) {
+      // customersOnly үед дээрх AND/OR аль хэдийн харилцагчийн хэмжээнд шүүлттэй.
+      if (isStaff && user.organizationId && !customersOnly) {
         where.managedByOrganizationId = user.organizationId
-        // `where.id` дээр getScopedOrganizationIds (raw scope) ашиглаж байж болзошгүй буруу id орохыг арилгахын тулд
-        // зөвхөн `managedByOrganizationId`-ээр шүүж үзүүлнэ.
-        delete (where as any).id
+        delete (where as { id?: unknown }).id
       }
     }
     const organizations = await prisma.organization.findMany({
@@ -121,10 +126,18 @@ export async function POST(request: NextRequest) {
       select: { id: true, managedByOrganizationId: true, category: true },
     })
 
+    const registerFromBody =
+      Object.prototype.hasOwnProperty.call(data, 'register') && data.register != null && String(data.register).trim() !== ''
+        ? String(data.register).trim()
+        : Object.prototype.hasOwnProperty.call(data, 'register')
+          ? null
+          : undefined
+
     const orgData = {
       name,
       ...(data.ovog !== undefined && { ovog: data.ovog?.trim() || null }),
       code: data.code?.trim() || null,
+      ...(registerFromBody !== undefined ? { register: registerFromBody } : {}),
       address: data.address?.trim() || null,
       phone: data.phone?.trim() || null,
       email: data.email?.trim() || null,
@@ -252,7 +265,7 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
 
@@ -333,12 +346,20 @@ export async function PUT(request: NextRequest) {
       )
     }
 
+    const registerPut =
+      Object.prototype.hasOwnProperty.call(data, 'register')
+        ? data.register == null || String(data.register).trim() === ''
+          ? null
+          : String(data.register).trim()
+        : undefined
+
     const organization = await prisma.organization.update({
       where: { id: data.id },
       data: {
         name: data.name.trim(),
         ...(data.ovog !== undefined ? { ovog: data.ovog?.trim() || null } : {}),
         code: data.code?.trim() || null,
+        ...(registerPut !== undefined ? { register: registerPut } : {}),
         address: data.address?.trim() || null,
         phone: data.phone?.trim() || null,
         email: data.email?.trim() || null,

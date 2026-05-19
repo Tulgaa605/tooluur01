@@ -5,7 +5,7 @@ import { Role } from '@/lib/role'
 import { organizationIdInScope } from '@/lib/org-scope'
 import { sendTextSms } from '@/lib/sms'
 import { resolveEffectiveSmsSender } from '@/lib/sms-senders'
-import { persistPaymentReference } from '@/lib/persist-payment-reference'
+import { computeReadingBreakdownLine } from '@/lib/public-billing-breakdown'
 
 export const runtime = 'nodejs'
 
@@ -23,6 +23,16 @@ function resolvePublicOrigin(request: NextRequest): string {
   return new URL(request.url).origin.replace(/\/+$/, '')
 }
 
+function formatMeterListForSms(meterNumbers: string[]): string {
+  const uniq = [...new Set(meterNumbers.map((m) => m.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'mn')
+  )
+  if (uniq.length === 0) return '-'
+  if (uniq.length === 1) return uniq[0]
+  if (uniq.length === 2) return uniq.join(', ')
+  return `${uniq.length} тоолуур`
+}
+
 function buildSmsMessage(input: {
   organizationName: string
   organizationCode?: string | null
@@ -31,12 +41,8 @@ function buildSmsMessage(input: {
   month: number
   usage: number
   total: number
-  heatAmount?: number | null
-  paymentCode: string
   breakdownUrl?: string | null
 }): string {
-  // Most SMS gateways will truncate around 160 chars for a single message (GSM-7).
-  // We prioritize keeping the URL intact; the prefix is shortened if needed.
   const org = `${input.organizationName}${input.organizationCode ? ` (${input.organizationCode})` : ''}`
   const prefix = `Нэр: ${org}. Тоолуур: ${input.meterNumber}. Хэрэглээ: ${input.usage.toFixed(2)}м³. Дүн: ${input.total.toFixed(2)}₮.`
 
@@ -47,7 +53,6 @@ function buildSmsMessage(input: {
   if (full.length <= MAX) return full
   if (!urlPart) return prefix.slice(0, MAX)
 
-  // Keep URL intact, trim prefix to fit.
   const keep = urlPart
   const availablePrefix = Math.max(0, MAX - keep.length)
   const trimmedPrefix =
@@ -55,108 +60,141 @@ function buildSmsMessage(input: {
   return `${trimmedPrefix}${keep}`.slice(0, MAX)
 }
 
+function buildBreakdownUrl(
+  publicOrigin: string,
+  exportToken: string,
+  input: { organizationId: string; year: number; month: number; singleReadingId?: string; multi: boolean }
+): string | null {
+  if (!exportToken) return null
+  const enc = encodeURIComponent(exportToken)
+  if (input.multi) {
+    const q = new URLSearchParams({
+      year: String(input.year),
+      month: String(input.month),
+    })
+    return `${publicOrigin}/${enc}/piv/org/${encodeURIComponent(input.organizationId)}?${q.toString()}`
+  }
+  if (input.singleReadingId) {
+    return `${publicOrigin}/${enc}/piv/${encodeURIComponent(input.singleReadingId)}`
+  }
+  return null
+}
+
 export async function POST(request: NextRequest) {
   try {
     const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const data = await request.json()
-    const { readingId, fromPhone: fromPhoneRaw } = data
+    const { readingId, readingIds: readingIdsRaw, fromPhone: fromPhoneRaw } = data
     const fromPhone = resolveEffectiveSmsSender(
       typeof fromPhoneRaw === 'string' ? fromPhoneRaw : undefined
     )
 
-    if (!readingId) {
-      return NextResponse.json(
-        { error: 'Заалтын ID шаардлагатай' },
-        { status: 400 }
-      )
+    const readingIds: string[] = Array.isArray(readingIdsRaw)
+      ? readingIdsRaw.map((id: unknown) => String(id ?? '').trim()).filter((id) => /^[a-f\d]{24}$/i.test(id))
+      : typeof readingId === 'string' && /^[a-f\d]{24}$/i.test(readingId.trim())
+        ? [readingId.trim()]
+        : []
+
+    if (readingIds.length === 0) {
+      return NextResponse.json({ error: 'Заалтын ID шаардлагатай' }, { status: 400 })
     }
 
-    // Get reading with organization and users
-    const reading = await prisma.meterReading.findUnique({
-      where: { id: readingId },
+    const readings = await prisma.meterReading.findMany({
+      where: { id: { in: readingIds } },
       include: {
         organization: {
           select: {
+            id: true,
             name: true,
             code: true,
             phone: true,
             email: true,
+            category: true,
           },
         },
         meter: {
           select: {
             meterNumber: true,
+            billingMode: true,
+            waterChargeSplit: true,
+            pipeDiameterMm: true,
+            billingCategory: true,
           },
         },
       },
     })
 
-    if (!reading) {
-      return NextResponse.json(
-        { error: 'Заалт олдсонгүй' },
-        { status: 404 }
-      )
+    if (readings.length === 0) {
+      return NextResponse.json({ error: 'Заалт олдсонгүй' }, { status: 404 })
     }
 
-    if (!(await organizationIdInScope(user, reading.organizationId))) {
-      return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
+    const orgId = readings[0].organizationId
+    const year = readings[0].year
+    const month = readings[0].month
+
+    for (const r of readings) {
+      if (r.organizationId !== orgId || r.year !== year || r.month !== month) {
+        return NextResponse.json(
+          { error: 'Нэгтгэсэн илгээлтэд зөвхөн нэг харилцагч, нэг сарын заалтууд байх ёстой' },
+          { status: 400 }
+        )
+      }
+      if (!(await organizationIdInScope(user, r.organizationId))) {
+        return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
+      }
     }
 
-    // Get users from the organization
     const users = await prisma.user.findMany({
-      where: {
-        organizationId: reading.organizationId,
-      },
-      select: {
-        name: true,
-        email: true,
-        phone: true,
-      },
+      where: { organizationId: orgId },
+      select: { name: true, email: true, phone: true },
     })
 
-    // Filter recipients that have phone numbers
+    const org = readings[0].organization
     const recipients: Array<{ type: string; name: string; phone: string | null; email: string | null }> = []
-    if (reading.organization.phone) {
+    if (org.phone) {
       recipients.push({
         type: 'organization',
-        name: reading.organization.name,
-        phone: reading.organization.phone,
-        email: reading.organization.email,
+        name: org.name,
+        phone: org.phone,
+        email: org.email,
       })
     }
-    users.forEach(user => {
-      if (user.phone) {
+    users.forEach((u) => {
+      if (u.phone) {
         recipients.push({
           type: 'user',
-          name: user.name,
-          phone: user.phone,
-          email: user.email,
+          name: u.name,
+          phone: u.phone,
+          email: u.email,
         })
       }
     })
 
-    const paymentCode = Math.floor(100000 + Math.random() * 900000).toString()
-
-    await persistPaymentReference(readingId, paymentCode)
+    const lines = await Promise.all(readings.map((r) => computeReadingBreakdownLine(r)))
+    const usageSum = lines.reduce((a, l) => a + l.usage, 0)
+    const totalSum = lines.reduce((a, l) => a + l.total, 0)
+    const meterNumbers = readings.map((r) => r.meter.meterNumber)
 
     const exportToken = (process.env.PAYMENT_LIST_EXPORT_TOKEN ?? '').trim()
     const publicOrigin = resolvePublicOrigin(request)
-    const breakdownUrl =
-      exportToken && exportToken.length > 0
-        ? `${publicOrigin}/${encodeURIComponent(exportToken)}/piv/${encodeURIComponent(reading.id)}`
-        : null
+    const multi = readings.length > 1
+    const breakdownUrl = buildBreakdownUrl(publicOrigin, exportToken, {
+      organizationId: orgId,
+      year,
+      month,
+      singleReadingId: multi ? undefined : readings[0].id,
+      multi,
+    })
 
     const message = buildSmsMessage({
-      organizationName: reading.organization.name,
-      organizationCode: reading.organization.code,
-      meterNumber: reading.meter.meterNumber,
-      year: reading.year,
-      month: reading.month,
-      usage: reading.usage,
-      total: reading.total,
-      heatAmount: reading.heatAmount,
-      paymentCode,
+      organizationName: org.name,
+      organizationCode: org.code,
+      meterNumber: formatMeterListForSms(meterNumbers),
+      year,
+      month,
+      usage: usageSum,
+      total: totalSum,
       breakdownUrl,
     })
 
@@ -171,37 +209,34 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Төлбөрийн мэдээлэл илгээгдлээ',
-      paymentCode,
       fromPhone,
       messageText: message,
+      breakdownUrl,
       sms: {
         provider: smsOutcome.mode,
         results: smsOutcome.results,
         sentOk: smsOkCount,
         sentFailed: smsFailCount,
       },
-      recipients: recipients,
+      recipients,
       sentTo: {
         organization: {
-          phone: reading.organization.phone,
-          email: reading.organization.email,
+          phone: org.phone,
+          email: org.email,
         },
-        users: users.map(u => ({
+        users: users.map((u) => ({
           name: u.name,
           phone: u.phone,
           email: u.email,
         })),
       },
     })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Notification send error:', error)
-    if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
-      return NextResponse.json({ error: error.message }, { status: 403 })
+    const msg = error instanceof Error ? error.message : 'Алдаа гарлаа'
+    if (msg === 'Unauthorized' || msg === 'Forbidden') {
+      return NextResponse.json({ error: msg }, { status: 403 })
     }
-    return NextResponse.json(
-      { error: error.message || 'Алдаа гарлаа' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 }
-

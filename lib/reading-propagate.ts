@@ -4,6 +4,7 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   getHeatTariffRatesForPeriod,
   getWaterTariffRatesForPeriod,
@@ -28,7 +29,7 @@ function waterTariffAdjustedForMeter(
 /**
  * Тухайн сарын эцсийн заалт өөрчлөгдсөний дараа ижил тоолуурын бүх ДАРААГИЙХ заалтуудыг
  * (сар алгассан ч) дараалан дагуулж шинэчилнө.
- * Тариф / байгууллагын category-г кэшлэж олон сарын дагуулалтыг хурдан болгоно.
+ * Тариф / тоолуурын billingCategory + байгууллагын category-г кэшлэж олон сарын дагуулалтыг хурдан болгоно.
  */
 export async function propagateLaterReadingsAfterEndChange(opts: {
   meterId: string
@@ -62,50 +63,50 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
   const later = all.filter((r) => periodSortKey(r.year, r.month) > anchor)
   if (later.length === 0) return
 
-  const meterPipeRow = await prisma.meter.findUnique({
+  const meterRow = await prisma.meter.findUnique({
     where: { id: meterId },
-    select: { pipeDiameterMm: true },
+    select: { pipeDiameterMm: true, billingCategory: true, organizationId: true },
   })
+  const orgRow = meterRow?.organizationId
+    ? await prisma.organization.findUnique({
+        where: { id: meterRow.organizationId },
+        select: { category: true },
+      })
+    : null
+  const billingCategoryEffective = effectiveBillingCategory(meterRow?.billingCategory, orgRow?.category)
+
   const meterPipeMm =
-    meterPipeRow?.pipeDiameterMm != null &&
-    Number.isFinite(Number(meterPipeRow.pipeDiameterMm)) &&
-    Number(meterPipeRow.pipeDiameterMm) > 0
-      ? Math.trunc(Number(meterPipeRow.pipeDiameterMm))
+    meterRow?.pipeDiameterMm != null &&
+    Number.isFinite(Number(meterRow.pipeDiameterMm)) &&
+    Number(meterRow.pipeDiameterMm) > 0
+      ? Math.trunc(Number(meterRow.pipeDiameterMm))
       : null
 
   const waterTariffCache = new Map<string, Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>>()
   const heatTariffCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
-  const orgCategoryCache = new Map<string, string>()
 
   const waterCached = async (organizationId: string, year: number, month: number) => {
-    const k = `${organizationId}|${year}|${month}|${meterPipeMm ?? 'org'}`
+    const k = `${organizationId}|${year}|${month}|${meterPipeMm ?? 'org'}|${billingCategoryEffective}`
     let v = waterTariffCache.get(k)
     if (!v) {
       v = await getWaterTariffRatesForPeriod(organizationId, year, month, {
         pipeDiameterMm: meterPipeMm,
+        billingCategory: meterRow?.billingCategory,
       })
       waterTariffCache.set(k, v)
     }
     return v
   }
   const heatCached = async (organizationId: string, year: number, month: number) => {
-    const k = `${organizationId}|${year}|${month}`
+    const k = `${organizationId}|${year}|${month}|${billingCategoryEffective}`
     let v = heatTariffCache.get(k)
     if (!v) {
-      v = await getHeatTariffRatesForPeriod(organizationId, year, month)
+      v = await getHeatTariffRatesForPeriod(organizationId, year, month, {
+        billingCategory: meterRow?.billingCategory,
+      })
       heatTariffCache.set(k, v)
     }
     return v
-  }
-  const orgCatCached = async (organizationId: string) => {
-    if (orgCategoryCache.has(organizationId)) return orgCategoryCache.get(organizationId)!
-    const o = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: { category: true },
-    })
-    const c = o?.category ?? 'HOUSEHOLD'
-    orgCategoryCache.set(organizationId, c)
-    return c
   }
 
   for (const nextReading of later) {
@@ -132,7 +133,7 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
       heatCached(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
     ])
     const nextWater = waterTariffAdjustedForMeter(nextWaterRaw, billingMode, split)
-    const orgCategory = await orgCatCached(nextReading.organizationId)
+    const orgCategory = billingCategoryEffective
 
     const usageForMoney =
       billingMode === 'HEAT'

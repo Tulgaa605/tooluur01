@@ -8,6 +8,7 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   getHeatTariffRatesForPeriod,
   getWaterTariffRatesForPeriod,
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
         defaultHeatUsage: true,
         waterChargeSplit: true,
         pipeDiameterMm: true,
+        billingCategory: true,
       },
     })
 
@@ -137,7 +139,7 @@ export async function POST(request: NextRequest) {
       where: { id: meter.organizationId },
       select: { category: true },
     })
-    const orgCategory = orgForCategory?.category ?? 'HOUSEHOLD'
+    const orgCategory = effectiveBillingCategory(meter.billingCategory, orgForCategory?.category)
 
     const pipeMm =
       meter.pipeDiameterMm != null &&
@@ -148,8 +150,11 @@ export async function POST(request: NextRequest) {
     const [waterTariffRaw, heatTariff] = await Promise.all([
       getWaterTariffRatesForPeriod(meter.organizationId, data.year, data.month, {
         pipeDiameterMm: pipeMm,
+        billingCategory: meter.billingCategory,
       }),
-      getHeatTariffRatesForPeriod(meter.organizationId, data.year, data.month),
+      getHeatTariffRatesForPeriod(meter.organizationId, data.year, data.month, {
+        billingCategory: meter.billingCategory,
+      }),
     ])
     const waterTariff = waterTariffAdjustedForMeter(waterTariffRaw, billingMode, meter.waterChargeSplit)
     const finalMoney =
@@ -349,27 +354,30 @@ export async function GET(request: NextRequest) {
     const heatOnlyCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
     const result = await Promise.all(
       readings.map(async (r) => {
-        const m = (r as { meter?: { pipeDiameterMm?: number | null } }).meter
+        const m = (r as { meter?: { pipeDiameterMm?: number | null; billingCategory?: string | null } }).meter
         const pipeMm =
           m?.pipeDiameterMm != null &&
           Number.isFinite(Number(m.pipeDiameterMm)) &&
           Number(m.pipeDiameterMm) > 0
             ? Math.trunc(Number(m.pipeDiameterMm))
             : null
-        const cacheKey = `${r.organizationId}-${r.year}-${r.month}-${pipeMm ?? 'org'}`
+        const orgCategory = effectiveBillingCategory(m?.billingCategory, (r as any).organization?.category)
+        const cacheKey = `${r.organizationId}-${r.year}-${r.month}-${pipeMm ?? 'org'}|${orgCategory}`
         let rawWater = rawWaterCache.get(cacheKey)
         if (!rawWater) {
           rawWater = await getWaterTariffRatesForPeriod(r.organizationId, r.year, r.month, {
             pipeDiameterMm: pipeMm,
+            billingCategory: m?.billingCategory,
           })
           rawWaterCache.set(cacheKey, rawWater)
         }
         let heat = heatOnlyCache.get(cacheKey)
         if (!heat) {
-          heat = await getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month)
+          heat = await getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month, {
+            billingCategory: m?.billingCategory,
+          })
           heatOnlyCache.set(cacheKey, heat)
         }
-        const orgCategory = (r as any).organization?.category ?? 'HOUSEHOLD'
         const billingMode = normalizeBillingMode((r as any).meter?.billingMode)
         const water = waterTariffAdjustedForMeter(
           rawWater,
@@ -450,7 +458,13 @@ export async function PUT(request: NextRequest) {
 
     const meterForBilling = await prisma.meter.findUnique({
       where: { id: existingReading.meterId },
-      select: { billingMode: true, defaultHeatUsage: true, waterChargeSplit: true, pipeDiameterMm: true },
+      select: {
+        billingMode: true,
+        defaultHeatUsage: true,
+        waterChargeSplit: true,
+        pipeDiameterMm: true,
+        billingCategory: true,
+      },
     })
 
     if (
@@ -494,7 +508,7 @@ export async function PUT(request: NextRequest) {
       where: { id: existingReading.organizationId },
       select: { category: true },
     })
-    const orgCategory = orgForCategory?.category ?? 'HOUSEHOLD'
+    const orgCategory = effectiveBillingCategory(meterForBilling?.billingCategory, orgForCategory?.category)
 
     const pipeMmPut =
       meterForBilling?.pipeDiameterMm != null &&
@@ -505,8 +519,11 @@ export async function PUT(request: NextRequest) {
     const [waterTariffRaw, heatTariff] = await Promise.all([
       getWaterTariffRatesForPeriod(existingReading.organizationId, data.year, data.month, {
         pipeDiameterMm: pipeMmPut,
+        billingCategory: meterForBilling?.billingCategory,
       }),
-      getHeatTariffRatesForPeriod(existingReading.organizationId, data.year, data.month),
+      getHeatTariffRatesForPeriod(existingReading.organizationId, data.year, data.month, {
+        billingCategory: meterForBilling?.billingCategory,
+      }),
     ])
     const waterTariff = waterTariffAdjustedForMeter(
       waterTariffRaw,

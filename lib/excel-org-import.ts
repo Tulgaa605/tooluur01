@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx'
 export type OrgExcelRow = {
   name: string
   code: string
+  register: string
   address: string
   phone: string
   email: string
@@ -39,6 +40,7 @@ function rowLooksEmpty(r: OrgExcelRow): boolean {
   return (
     !r.name &&
     !r.code &&
+    !r.register &&
     !r.address &&
     !r.phone &&
     !r.email &&
@@ -56,18 +58,17 @@ export function parseOrgRowsFromExcel(buf: ArrayBuffer): OrgExcelRow[] {
   const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
   const out: OrgExcelRow[] = []
   for (const raw of json) {
+    const code = cell(raw, ['Код', 'code', 'Хэрэглэгчийн код', 'хэрэглэгчийнкод'])
+    const register = cell(raw, [
+      'Регистр',
+      'регистр',
+      'Байгууллагийн регистр',
+      'байгууллагийнрегистр',
+    ])
     const r: OrgExcelRow = {
       name: cell(raw, ['Нэр', 'name']),
-      code: cell(raw, [
-        'Код',
-        'code',
-        'Хэрэглэгчийн код',
-        'хэрэглэгчийнкод',
-        'Байгууллагийн регистр',
-        'байгууллагийнрегистр',
-        'Регистр',
-        'регистр',
-      ]),
+      code,
+      register,
       address: cell(raw, ['Хаяг', 'address']),
       phone: cell(raw, ['Утас', 'phone', 'утасны дугаар', 'утасныдугаар', 'mobile']),
       email: cell(raw, ['Имэйл', 'email', 'e-mail', 'mail']),
@@ -83,11 +84,10 @@ export function parseOrgRowsFromExcel(buf: ArrayBuffer): OrgExcelRow[] {
 
 export function downloadOrgExcelTemplate(filename = 'baiguullaga-jishee.xlsx') {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Нэр', 'Байгууллагийн регистр', 'Хаяг', 'Утас', 'Имэйл', 'Шугамын хоолой', 'Хэрэглэгчийн төрөл', 'Он'],
-    ['Жишээ байгууллага', 'B-001', 'Жишээ хаяг', '99112233', 'org@example.com', '15', 'BUSINESS', String(new Date().getFullYear())],
+    ['Нэр', 'Код', 'Регистр', 'Хаяг', 'Утас', 'Имэйл', 'Шугамын хоолой', 'Төрөл', 'Он'],
+    ['Жишээ байгууллага', 'ORG-001', '1234567', 'Жишээ хаяг', '99112233', 'org@example.com', '15', 'BUSINESS', String(new Date().getFullYear())],
   ])
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Байгууллага')
   XLSX.writeFile(wb, filename)
 }
-

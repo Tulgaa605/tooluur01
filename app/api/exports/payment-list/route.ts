@@ -7,6 +7,7 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   getHeatTariffRatesForPeriod,
   getWaterTariffRatesForPeriod,
@@ -330,27 +331,30 @@ export async function GET(request: NextRequest) {
 
     const items = await Promise.all(
       readings.map(async (r) => {
-        const m = (r as { meter?: { pipeDiameterMm?: number | null } }).meter
+        const m = (r as { meter?: { pipeDiameterMm?: number | null; billingCategory?: string | null } }).meter
         const pipeMm =
           m?.pipeDiameterMm != null &&
           Number.isFinite(Number(m.pipeDiameterMm)) &&
           Number(m.pipeDiameterMm) > 0
             ? Math.trunc(Number(m.pipeDiameterMm))
             : null
-        const cacheKey = `${r.organizationId}-${r.year}-${r.month}-${pipeMm ?? 'org'}`
+        const orgCategory = effectiveBillingCategory(m?.billingCategory, (r as any).organization?.category)
+        const cacheKey = `${r.organizationId}-${r.year}-${r.month}-${pipeMm ?? 'org'}|${orgCategory}`
         let rawWater = rawWaterCache.get(cacheKey)
         if (!rawWater) {
           rawWater = await getWaterTariffRatesForPeriod(r.organizationId, r.year, r.month, {
             pipeDiameterMm: pipeMm,
+            billingCategory: m?.billingCategory,
           })
           rawWaterCache.set(cacheKey, rawWater)
         }
         let heat = heatOnlyCache.get(cacheKey)
         if (!heat) {
-          heat = await getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month)
+          heat = await getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month, {
+            billingCategory: m?.billingCategory,
+          })
           heatOnlyCache.set(cacheKey, heat)
         }
-        const orgCategory = (r as any).organization?.category ?? 'HOUSEHOLD'
         const billingMode = normalizeBillingMode((r as any).meter?.billingMode)
         const water = waterTariffAdjustedForMeter(
           rawWater,

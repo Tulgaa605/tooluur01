@@ -4,6 +4,7 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   getHeatTariffRatesForPeriod,
   getWaterTariffRatesForPeriod,
@@ -95,6 +96,7 @@ export default async function PublicBillingBreakdownPage(props: {
           billingMode: true,
           waterChargeSplit: true,
           pipeDiameterMm: true,
+          billingCategory: true,
         },
       },
     },
@@ -109,12 +111,18 @@ export default async function PublicBillingBreakdownPage(props: {
       ? Math.trunc(Number(reading.meter.pipeDiameterMm))
       : null
 
-  const orgCategory = reading.organization?.category ?? 'HOUSEHOLD'
+  const orgCategory = effectiveBillingCategory(
+    reading.meter?.billingCategory,
+    reading.organization?.category
+  )
   const billingMode = normalizeBillingMode(reading.meter?.billingMode)
   const rawWater = await getWaterTariffRatesForPeriod(reading.organizationId, reading.year, reading.month, {
     pipeDiameterMm: pipeMm,
+    billingCategory: reading.meter?.billingCategory,
   })
-  const heat = await getHeatTariffRatesForPeriod(reading.organizationId, reading.year, reading.month)
+  const heat = await getHeatTariffRatesForPeriod(reading.organizationId, reading.year, reading.month, {
+    billingCategory: reading.meter?.billingCategory,
+  })
   const water = waterTariffAdjustedForMeter(rawWater, billingMode, reading.meter?.waterChargeSplit)
 
   const waterUsage = waterUsageFromReading(reading)

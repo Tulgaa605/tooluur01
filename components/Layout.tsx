@@ -76,7 +76,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (!user) return null
+  if (!user) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4">
+        <p className="text-gray-700 text-center max-w-md">
+          Нэвтрэлт олдсонгүй эсвэл хугацаа дууссан байж болно. Дахин нэвтэрнэ үү.
+        </p>
+        <a
+          href="/login"
+          className="mt-4 inline-flex items-center rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+        >
+          Нэвтрэх
+        </a>
+      </div>
+    )
+  }
 
   const filteredMenu = menuItems.filter(item => 
     item.roles.includes(user.role)

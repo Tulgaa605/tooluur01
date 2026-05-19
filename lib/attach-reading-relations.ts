@@ -16,6 +16,8 @@ export type MeterForReading = {
   waterChargeSplit?: string | null
   organizationId?: string
   pipeDiameterMm?: number | null
+  /** Тоолуур тус бүрийн тарифын ангилал (байгууллагын category-аас давхаргана) */
+  billingCategory?: string | null
 }
 
 /**
@@ -58,6 +60,7 @@ export async function attachOrgsAndMetersToReadings<
             waterChargeSplit: true,
             organizationId: true,
             pipeDiameterMm: true,
+            billingCategory: true,
           },
         }),
   ])
@@ -88,6 +91,7 @@ export async function attachOrgsAndMetersToReadings<
           billingMode: null,
           organizationId: r.organizationId,
           pipeDiameterMm: null,
+          billingCategory: null,
         } satisfies MeterForReading),
     }
   })

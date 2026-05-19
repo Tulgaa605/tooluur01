@@ -7,13 +7,38 @@ import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
   computeReadingMoneySplit,
+  effectiveBillingCategory,
   effectiveWaterChargeSplit,
   getHeatTariffRatesForPeriod,
   getWaterTariffRatesForPeriod,
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc'
 
-type OrgMini = { id: string; name: string; code: string | null; connectionNumber: string | null }
+type OrgMini = {
+  id: string
+  name: string
+  code: string | null
+  connectionNumber: string | null
+  category: string | null
+}
+
+const METER_BILLING_CATEGORIES = [
+  'ORGANIZATION',
+  'BUSINESS',
+  'TRANSPORT_DISPOSAL',
+  'TRANSPORT_RECEPTION',
+  'WATER_POINT',
+] as const
+
+function parseMeterBillingCategory(
+  raw: unknown,
+  orgCategory: string | null | undefined
+): string | null {
+  if (String(orgCategory ?? '').toUpperCase() === 'HOUSEHOLD') return null
+  const s = typeof raw === 'string' ? raw.trim().toUpperCase() : ''
+  if (!s) return null
+  return (METER_BILLING_CATEGORIES as readonly string[]).includes(s) ? s : null
+}
 
 function parseWaterChargeSplit(raw: unknown, billingMode: string): string | null {
   const bm = String(billingMode || 'WATER').toUpperCase()
@@ -62,7 +87,7 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
 
   const meterPipeRow = await prisma.meter.findUnique({
     where: { id: params.meterId },
-    select: { pipeDiameterMm: true },
+    select: { pipeDiameterMm: true, billingCategory: true },
   })
   const meterPipeMm =
     meterPipeRow?.pipeDiameterMm != null &&
@@ -85,7 +110,7 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
     where: { id: params.organizationId },
     select: { category: true },
   })
-  const orgCategory = org?.category ?? 'HOUSEHOLD'
+  const orgCategory = effectiveBillingCategory(meterPipeRow?.billingCategory, org?.category)
 
   const waterCache = new Map<string, Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>>()
   const heatCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
@@ -96,12 +121,15 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
     if (!waterRaw) {
       waterRaw = await getWaterTariffRatesForPeriod(params.organizationId, row.year, row.month, {
         pipeDiameterMm: meterPipeMm,
+        billingCategory: meterPipeRow?.billingCategory,
       })
       waterCache.set(periodKey, waterRaw)
     }
     let heatTariff = heatCache.get(periodKey)
     if (!heatTariff) {
-      heatTariff = await getHeatTariffRatesForPeriod(params.organizationId, row.year, row.month)
+      heatTariff = await getHeatTariffRatesForPeriod(params.organizationId, row.year, row.month, {
+        billingCategory: meterPipeRow?.billingCategory,
+      })
       heatCache.set(periodKey, heatTariff)
     }
 
@@ -178,10 +206,16 @@ async function attachOrganizationsToMeters<T extends { organizationId: string }>
       ? []
       : await prisma.organization.findMany({
           where: { id: { in: ids } },
-          select: { id: true, name: true, code: true, connectionNumber: true },
+          select: { id: true, name: true, code: true, connectionNumber: true, category: true },
         })
   const byId = new Map<string, OrgMini>(orgs.map((o) => [o.id, o]))
-  const missing: OrgMini = { id: '', name: '(Байгууллага олдсонгүй)', code: null, connectionNumber: null }
+  const missing: OrgMini = {
+    id: '',
+    name: '(Байгууллага олдсонгүй)',
+    code: null,
+    connectionNumber: null,
+    category: null,
+  }
   return rows.map((m) => ({
     ...m,
     organization: byId.get(m.organizationId) ?? { ...missing, id: m.organizationId },
@@ -218,6 +252,7 @@ export async function GET(request: NextRequest) {
         defaultHeatUsage: true,
         waterChargeSplit: true,
         pipeDiameterMm: true,
+        billingCategory: true,
         createdByUserId: true,
       },
       orderBy: { meterNumber: 'asc' },
@@ -257,7 +292,7 @@ export async function POST(request: NextRequest) {
     // Хэрэв байгууллага эзэнгүй (managedByOrganizationId=null) бол тухайн алба анх тоолуур нэмэхэд "өөрийн" болгож бүртгэнэ.
     const org = await prisma.organization.findUnique({
       where: { id: orgId },
-      select: { id: true, managedByOrganizationId: true, connectionNumber: true },
+      select: { id: true, managedByOrganizationId: true, connectionNumber: true, category: true },
     })
     const pipeDiameterRaw =
       (data as any).pipeDiameterMm != null && String((data as any).pipeDiameterMm).trim() !== ''
@@ -323,6 +358,8 @@ export async function POST(request: NextRequest) {
     const waterChargeSplit =
       billingMode === 'HEAT' ? null : parseWaterChargeSplit((data as any).waterChargeSplit, billingMode)
 
+    const billingCategory = parseMeterBillingCategory((data as any).billingCategory, org.category)
+
     const meter = await prisma.meter.create({
       data: {
         meterNumber,
@@ -334,6 +371,7 @@ export async function POST(request: NextRequest) {
           billingMode === 'HEAT' || billingMode === 'WATER_HEAT' ? defaultHeatUsage : null,
         waterChargeSplit,
         pipeDiameterMm: pipeDiameter,
+        billingCategory,
         createdByUserId: user.userId,
         updatedByUserId: user.userId,
       },
@@ -385,6 +423,7 @@ export async function PUT(request: NextRequest) {
         billingMode: true,
         defaultHeatUsage: true,
         waterChargeSplit: true,
+        billingCategory: true,
         createdByUserId: true,
       },
     })
@@ -507,6 +546,15 @@ export async function PUT(request: NextRequest) {
       nextWaterChargeSplit = 'BOTH'
     }
 
+    const orgForBillingCategory = await prisma.organization.findUnique({
+      where: { id: nextOrgId },
+      select: { category: true },
+    })
+    const billingCategoryParsed =
+      (data as any).billingCategory !== undefined
+        ? parseMeterBillingCategory((data as any).billingCategory, orgForBillingCategory?.category)
+        : undefined
+
     const previousDefaultHeatUsage = Number(existing.defaultHeatUsage ?? 0) || 0
     const meter = await prisma.meter.update({
       where: { id: data.id },
@@ -519,6 +567,7 @@ export async function PUT(request: NextRequest) {
         defaultHeatUsage: defaultHeatUsageOut,
         ...(nextWaterChargeSplit !== undefined ? { waterChargeSplit: nextWaterChargeSplit } : {}),
         pipeDiameterMm: pipeDiameter,
+        ...(billingCategoryParsed !== undefined ? { billingCategory: billingCategoryParsed } : {}),
         updatedByUserId: user.userId,
       },
     })

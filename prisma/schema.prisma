@@ -44,6 +44,7 @@ model Organization {
   name            String   @unique
   ovog            String?
   code            String?
+  register        String?
   address         String?
   phone           String?
   email           String?
@@ -105,6 +106,8 @@ model Meter {
   defaultHeatUsage Float?
   waterChargeSplit String?
   pipeDiameterMm   Int?
+  // Тоолуур тус бүрийн тарифын ангилал; хоосон бол organization.category.
+  billingCategory  String?
   readings       MeterReading[]
   createdByUserId String?      @db.ObjectId
   updatedByUserId String?      @db.ObjectId
