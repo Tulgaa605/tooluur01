@@ -539,7 +539,6 @@ export default function ReadingsContent() {
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [modalExcelExportMenu])
-
   // Modal-ийн дотор зөвхөн сонгосон (Он,Сар)-ын мөрүүдийг л харуулна.
   // Гэхдээ data/тооцоололд бүх period-үүд ашиглагдана (save үед serialize).
   const visibleModalRows = useMemo(() => {
