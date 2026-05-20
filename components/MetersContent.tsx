@@ -74,17 +74,35 @@ interface Meter {
     category?: string | null
   }
 }
-/** Хоосон = сонгоогүй (заавал биш) */
-type CustomerCategory = '' | 'HOUSEHOLD' | OrgCustomerCategory
+type OwnerType = '' | 'organization' | 'household'
 
-const ALL_CUSTOMER_CATEGORY_OPTIONS: { value: CustomerCategory; label: string }[] = [
-  { value: 'HOUSEHOLD', label: 'Иргэн, хувь хүн' },
-  { value: 'ORGANIZATION', label: 'Төсөвт байгууллага' },
-  { value: 'BUSINESS', label: 'Аж ахуйн нэгж' },
-  { value: 'TRANSPORT_DISPOSAL', label: 'Зөөврөөр татан зайлуулах' },
-  { value: 'TRANSPORT_RECEPTION', label: 'Зөөврөөр хүлээн авах' },
-  { value: 'WATER_POINT', label: 'Ус түгээх байр' },
-]
+type MeterFormState = {
+  ownerType: OwnerType
+  orgCustomerCategory: '' | OrgCustomerCategory
+  meterNumber: string
+  defaultHeatM3M2: string
+  organizationId: string
+  year: number
+  serviceStatus: MeterServiceStatus
+  billingMode: MeterBillingMode
+  waterChargeSplit: WaterChargeSplit
+  pipeDiameterMm: string
+}
+
+function createEmptyMeterForm(year: number): MeterFormState {
+  return {
+    ownerType: '',
+    orgCustomerCategory: '',
+    meterNumber: '',
+    defaultHeatM3M2: '',
+    organizationId: '',
+    year,
+    serviceStatus: 'NORMAL',
+    billingMode: 'WATER',
+    waterChargeSplit: 'BOTH',
+    pipeDiameterMm: '',
+  }
+}
 
 const nameCollator = new Intl.Collator(['mn', 'ru', 'en'], {
   sensitivity: 'base',
@@ -105,18 +123,7 @@ export default function MetersContent() {
   const [searchQuery, setSearchQuery] = useState('')
   const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
-  const [form, setForm] = useState({
-    customerCategory: '' as CustomerCategory,
-    meterNumber: '',
-    /** HEAT / WATER_HEAT үед заавал (м³/м²) */
-    defaultHeatM3M2: '',
-    organizationId: '',
-    year: currentYear,
-    serviceStatus: 'NORMAL' as MeterServiceStatus,
-    billingMode: 'WATER' as MeterBillingMode,
-    waterChargeSplit: 'BOTH' as WaterChargeSplit,
-    pipeDiameterMm: '',
-  })
+  const [form, setForm] = useState<MeterFormState>(() => createEmptyMeterForm(currentYear))
 
   function reloadCustomerLists() {
     fetchWithAuth('/api/organizations?customersOnly=1', { credentials: 'include' })
@@ -170,17 +177,16 @@ export default function MetersContent() {
     return arr
   }, [households])
 
-  const organizationsForCategory = useMemo(() => {
-    if (!form.customerCategory || form.customerCategory === 'HOUSEHOLD') return organizationsSorted
-    return organizationsSorted.filter(
-      (o) => (o.category ?? 'ORGANIZATION') === form.customerCategory
-    )
-  }, [organizationsSorted, form.customerCategory])
-
   const meterCountForSelectedOrg = useMemo(() => {
-    if (!form.organizationId || form.customerCategory === 'HOUSEHOLD') return 0
+    if (!form.organizationId || form.ownerType === 'household') return 0
     return meters.filter((m) => m.organizationId === form.organizationId).length
-  }, [form.organizationId, form.customerCategory, meters])
+  }, [form.organizationId, form.ownerType, meters])
+
+  const meterDetailsUnlocked = useMemo(() => {
+    if (!form.ownerType || !form.organizationId) return false
+    if (form.ownerType === 'household') return true
+    return Boolean(form.orgCustomerCategory)
+  }, [form.ownerType, form.organizationId, form.orgCustomerCategory])
 
   const metersFiltered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -271,8 +277,22 @@ export default function MetersContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setMessage(null)
+    if (!form.ownerType) {
+      setMessage({ type: 'error', text: 'Байгууллага эсвэл иргэн, хувь хүн сонгоно уу.' })
+      return
+    }
     if (!form.organizationId) {
-      setMessage({ type: 'error', text: 'Харилцагч (байгууллага эсвэл хувь хүн) сонгоно уу.' })
+      setMessage({
+        type: 'error',
+        text:
+          form.ownerType === 'household'
+            ? 'Иргэн, хувь хүн сонгоно уу.'
+            : 'Байгууллага сонгоно уу.',
+      })
+      return
+    }
+    if (form.ownerType === 'organization' && !form.orgCustomerCategory) {
+      setMessage({ type: 'error', text: 'Хэрэглэгчийн төрөл сонгоно уу.' })
       return
     }
     const meterNo = String(form.meterNumber ?? '').trim()
@@ -311,8 +331,8 @@ export default function MetersContent() {
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
             pipeDiameterMm: pipeDiameter,
-            ...(form.customerCategory && form.customerCategory !== 'HOUSEHOLD'
-              ? { billingCategory: form.customerCategory }
+            ...(form.ownerType === 'organization' && form.orgCustomerCategory
+              ? { billingCategory: form.orgCustomerCategory }
               : {}),
           }
         : {
@@ -324,8 +344,8 @@ export default function MetersContent() {
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
             pipeDiameterMm: pipeDiameter,
-            ...(form.customerCategory && form.customerCategory !== 'HOUSEHOLD'
-              ? { billingCategory: form.customerCategory }
+            ...(form.ownerType === 'organization' && form.orgCustomerCategory
+              ? { billingCategory: form.orgCustomerCategory }
               : {}),
           }
 
@@ -344,17 +364,7 @@ export default function MetersContent() {
       })
       setShowForm(false)
       setEditingId(null)
-      setForm({
-        customerCategory: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+      setForm(createEmptyMeterForm(currentYear))
       loadMeters()
       reloadCustomerLists()
     } catch (err: any) {
@@ -375,14 +385,18 @@ export default function MetersContent() {
     const wcs = String(meter.waterChargeSplit ?? 'BOTH').toUpperCase()
     const waterChargeSplit: WaterChargeSplit =
       wcs === 'CLEAN_ONLY' || wcs === 'DIRTY_ONLY' ? (wcs as WaterChargeSplit) : 'BOTH'
+    const co = organizations.find((o) => o.id === meter.organizationId)
+    const eff = effectiveBillingCategory(
+      meter.billingCategory,
+      co?.category ?? meter.organization?.category
+    )
     setForm({
-      customerCategory: (() => {
-        if (inHousehold) return 'HOUSEHOLD' as const
-        const co = organizations.find((o) => o.id === meter.organizationId)
-        const eff = effectiveBillingCategory(meter.billingCategory, co?.category ?? meter.organization?.category)
-        if (eff === 'HOUSEHOLD') return '' as const
-        return isOrgCustomerCategory(eff) ? eff : defaultOrgCustomerCategory(co)
-      })(),
+      ownerType: inHousehold ? 'household' : 'organization',
+      orgCustomerCategory: inHousehold
+        ? ''
+        : isOrgCustomerCategory(eff)
+          ? eff
+          : defaultOrgCustomerCategory(co),
       meterNumber: meter.meterNumber,
       defaultHeatM3M2:
         meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
@@ -440,17 +454,7 @@ export default function MetersContent() {
             setShowForm(!showForm)
             setEditingId(null)
             setMessage(null)
-            setForm({
-        customerCategory: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+            setForm(createEmptyMeterForm(currentYear))
           }}
           className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -467,17 +471,7 @@ export default function MetersContent() {
                 setShowForm(false)
                 setEditingId(null)
                 setMessage(null)
-                setForm({
-        customerCategory: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+                setForm(createEmptyMeterForm(currentYear))
               }}
               aria-hidden="true"
             />
@@ -493,17 +487,7 @@ export default function MetersContent() {
                       setShowForm(false)
                       setEditingId(null)
                       setMessage(null)
-                      setForm({
-        customerCategory: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+                      setForm(createEmptyMeterForm(currentYear))
                     }}
                     className="text-gray-400 hover:text-gray-500 focus:outline-none"
                   >
@@ -801,17 +785,7 @@ export default function MetersContent() {
                         setShowForm(false)
                         setEditingId(null)
                         setMessage(null)
-                        setForm({
-        customerCategory: '',
-        meterNumber: '',
-        defaultHeatM3M2: '',
-        organizationId: '',
-        year: currentYear,
-        serviceStatus: 'NORMAL',
-        billingMode: 'WATER',
-        waterChargeSplit: 'BOTH',
-        pipeDiameterMm: '',
-      })
+                        setForm(createEmptyMeterForm(currentYear))
                       }}
                       className="px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                     >
