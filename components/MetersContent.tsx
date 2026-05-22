@@ -667,9 +667,6 @@ export default function MetersContent() {
                                     </option>
                                   ))}
                             </select>
-                            <p className="mt-1.5 text-xs text-gray-500">
-                              Зөөврөөр татан зайлуулах, хүлээн авах зэрэг төрөл сонговол тухайн тарифаар тооцно.
-                            </p>
                           </>
                         )}
                       </>
