@@ -615,12 +615,6 @@ export default function MetersContent() {
                                     </option>
                                   ))}
                             </select>
-                            {meterCountForSelectedOrg > 1 && (
-                              <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
-                                Энэ харилцагчид {meterCountForSelectedOrg} тоолуур бүртгэлтэй. Төрөл нь зөвхөн энэ
-                                тоолуурын тарифад хамаарна; сарын заалт тоолуур бүрээр тусад нь оруулна.
-                              </p>
-                            )}
                           </>
                         )}
                         {form.ownerType === 'household' && (
