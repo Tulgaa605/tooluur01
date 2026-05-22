@@ -939,11 +939,13 @@ export default function MonthlyReadingsGrid({
             onCellContextMenu={
               onGridContextMenu
                 ? (params) => {
-                    params.event?.preventDefault()
-                    params.event?.stopPropagation()
+                    const ev = params.event
+                    ev?.preventDefault()
+                    ev?.stopPropagation()
+                    const mouse = ev instanceof MouseEvent ? ev : null
                     onGridContextMenu({
-                      x: params.event?.clientX ?? 0,
-                      y: params.event?.clientY ?? 0,
+                      x: mouse?.clientX ?? 0,
+                      y: mouse?.clientY ?? 0,
                     })
                   }
                 : undefined

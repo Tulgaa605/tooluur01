@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
       const data = await request.json()
       const rawRows = Array.isArray(data.rows) ? data.rows : []
       rows = rawRows
-        .map((r: Record<string, unknown>, i: number) => {
+        .map((r: Record<string, unknown>, i: number): BillingExcelImportRow => {
           const year = parseInt(String(r.year ?? ''), 10)
           const month = parseInt(String(r.month ?? ''), 10)
           const paidAmount = Number(r.paidAmount ?? 0)
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
           }
         })
         .filter(
-          (r) =>
+          (r: BillingExcelImportRow) =>
             r.year >= 2000 &&
             r.year <= 2100 &&
             r.month >= 1 &&
