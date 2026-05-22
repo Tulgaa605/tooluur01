@@ -2,109 +2,147 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AgGridReact } from 'ag-grid-react'
-import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
+import {
+  ColDef,
+  ModuleRegistry,
+  AllCommunityModule,
+  type CellValueChangedEvent,
+} from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { DocumentArrowUpIcon, PlusIcon } from '@heroicons/react/24/outline'
 import {
-  bankGridRowsToImportPayload,
-  bankStatementParsedToGridRows,
-  createEmptyBankGridRows,
-  parseClipboardToBankGridRows,
-  type BankGridRow,
-} from '@/lib/bank-grid-paste'
+  BILLING_EXCEL_REQUIRED_HEADERS,
+  billingGridRowsToImportPayload,
+  billingImportRowsToGridRows,
+  createEmptyBillingGridRows,
+  parseBillingExportExcel,
+  parseBillingExportFromClipboard,
+  type BillingExcelGridRow,
+} from '@/lib/billing-export-excel'
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
-/** Төлбөрийн хуудсын доод хэсэгт (MonthlyReadingsGrid-тай ижил хүрээ) inline харуулна */
-const BANK_GRID_HEIGHT = 'min(75vh, calc(100vh - 11rem))'
+const GRID_HEIGHT = 'min(75vh, calc(100vh - 11rem))'
 
 type BankImportModalProps = {
   year: string
   month: string
   saving: boolean
   onClose: () => void
-  onSave: (rows: BankGridRow[]) => Promise<void>
+  onSave: (rows: BillingExcelGridRow[]) => Promise<void>
 }
 
 export default function BankImportModal({ year, month, saving, onClose, onSave }: BankImportModalProps) {
   const gridRef = useRef<AgGridReact>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const [rows, setRows] = useState<BankGridRow[]>(() => createEmptyBankGridRows(12))
+  const [rows, setRows] = useState<BillingExcelGridRow[]>(() => createEmptyBillingGridRows(8))
   const [pasteHint, setPasteHint] = useState<string | null>(null)
+  const [gridKey, setGridKey] = useState(0)
 
   useEffect(() => {
-    setRows(createEmptyBankGridRows(12))
+    setRows(createEmptyBillingGridRows(8))
     setPasteHint(null)
+    setGridKey((k) => k + 1)
   }, [])
 
-  const columnDefs = useMemo<ColDef<BankGridRow>[]>(
+  const syncRemaining = (row: BillingExcelGridRow): BillingExcelGridRow => {
+    const total = parseFloat(String(row.total ?? '').replace(/,/g, '')) || 0
+    const paid = parseFloat(String(row.paidAmount ?? '').replace(/,/g, '')) || 0
+    const rem = Math.max(0, Math.round((total - paid) * 100) / 100)
+    return { ...row, remaining: Number.isFinite(rem) ? String(rem) : '' }
+  }
+
+  const columnDefs = useMemo<ColDef<BillingExcelGridRow>[]>(
     () => [
+      { headerName: 'Он', field: 'year', width: 72 },
+      { headerName: 'Сар', field: 'month', width: 64 },
+      { headerName: 'Байгууллага', field: 'organizationName', flex: 1, minWidth: 120 },
+      { headerName: 'Тоолуур', field: 'meterNumber', width: 110 },
+      { headerName: 'Харилцагчийн утас', field: 'customerPhone', width: 130 },
       {
-        headerName: '№',
-        width: 56,
-        editable: false,
-        valueGetter: (p) => (p.node?.rowIndex ?? 0) + 1,
-      },
-      {
-        headerName: 'Дүн (₮)',
-        field: 'amount',
-        width: 120,
-        editable: true,
+        headerName: 'Хэрэглээ (м³)',
+        field: 'usage',
+        width: 110,
         cellClass: 'ag-right-aligned-cell',
       },
       {
-        headerName: 'Гүйлгээний утга',
-        field: 'description',
-        flex: 1,
-        minWidth: 200,
-        editable: true,
+        headerName: 'Төлбөр (₮)',
+        field: 'total',
+        width: 110,
+        cellClass: 'ag-right-aligned-cell',
       },
       {
-        headerName: 'Тоолуур',
-        field: 'meterNumber',
-        width: 120,
-        editable: true,
-        headerTooltip: 'Тоолуурын дугаараар тааруулах (сонголттой)',
+        headerName: 'Төлөгдсөн (₮)',
+        field: 'paidAmount',
+        width: 110,
+        cellClass: 'ag-right-aligned-cell',
+      },
+      {
+        headerName: 'Үлдэгдэл (₮)',
+        field: 'remaining',
+        width: 110,
+        editable: false,
+        cellClass: 'ag-right-aligned-cell ag-cell-readonly',
       },
     ],
     []
   )
 
-  const handleCellValueChanged = useCallback((e: { data?: BankGridRow }) => {
-    if (!e.data?.id) return
-    setRows((prev) => prev.map((r) => (r.id === e.data!.id ? { ...e.data! } : r)))
+  const handleCellValueChanged = useCallback((e: CellValueChangedEvent<BillingExcelGridRow>) => {
+    const field = e.colDef?.field as keyof BillingExcelGridRow | undefined
+    const id = e.data?.id
+    if (!id || !field || field === 'id' || field === 'remaining') return
+
+    const newVal = e.newValue != null ? String(e.newValue) : ''
+
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== id) return r
+        const next = syncRemaining({ ...r, [field]: newVal })
+        return next
+      })
+    )
   }, [])
 
-  const applyImportedRows = useCallback((parsed: Omit<BankGridRow, 'id'>[], source: 'paste' | 'file') => {
+  const applyImportedRows = useCallback((parsed: Omit<BillingExcelGridRow, 'id'>[], source: 'paste' | 'file') => {
     if (parsed.length === 0) {
       setPasteHint(
         source === 'file'
-          ? 'Excel-д тохирох мөр олдсонгүй. Банкны хуулгын «Дүн», «Гүйлгээний утга» баганатай эсэхийг шалгана уу.'
-          : 'Хуулсан өгөгдөл танигдсангүй. Excel-ээс бүтэн мөрөөр (tab) хуулна уу.'
+          ? `Зөвхөн төлбөрийн Excel (толгой: ${BILLING_EXCEL_REQUIRED_HEADERS.slice(0, 4).join(', ')} …) оруулна уу.`
+          : 'Толгой мөр буруу эсвэл өгөгдөл хоосон. Төлбөр хуудаснаас Excel хуулна уу.'
       )
       return
     }
     const stamp = Date.now()
     setRows(
-      parsed.map((r, i) => ({
-        ...r,
-        id: `${source}-${i}-${stamp}`,
-      }))
+      parsed.map((r, i) =>
+        syncRemaining({
+          ...r,
+          id: `${source}-${i}-${stamp}`,
+          year: String(r.year ?? ''),
+          month: String(r.month ?? ''),
+          organizationName: String(r.organizationName ?? ''),
+          meterNumber: String(r.meterNumber ?? ''),
+          customerPhone: String(r.customerPhone ?? ''),
+          usage: String(r.usage ?? ''),
+          total: String(r.total ?? ''),
+          paidAmount: String(r.paidAmount ?? ''),
+        })
+      )
     )
-    setPasteHint(`${parsed.length} мөр нэмэгдлээ. Засвар хийж «Хадгалах» дарна уу.`)
+    setGridKey((k) => k + 1)
+    setPasteHint(`${parsed.length} мөр нэмэгдлээ. Нүдний дарж засварлана. «Хадгалах» дарна уу.`)
   }, [])
 
   const applyPasteText = useCallback(
-    async (text: string) => {
-      const { parseBankStatementRowsFromClipboard } = await import('@/lib/bank-statement-excel')
-      const smart = bankStatementParsedToGridRows(parseBankStatementRowsFromClipboard(text))
-      if (smart.length > 0) {
-        applyImportedRows(smart, 'paste')
+    (text: string) => {
+      const result = parseBillingExportFromClipboard(text)
+      if (result.error) {
+        setPasteHint(result.error)
         return
       }
-      const simple = parseClipboardToBankGridRows(text)
-      applyImportedRows(simple, 'paste')
+      applyImportedRows(billingImportRowsToGridRows(result.rows), 'paste')
     },
     [applyImportedRows]
   )
@@ -115,7 +153,7 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
       if (!text?.trim()) return
       if (!text.includes('\t') && !text.includes('\n') && text.length < 80) return
       e.preventDefault()
-      void applyPasteText(text)
+      applyPasteText(text)
     },
     [applyPasteText]
   )
@@ -125,36 +163,33 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
       ...prev,
       {
         id: `new-${Date.now()}`,
-        amount: '',
-        description: '',
+        year: year || '',
+        month: month || '',
+        organizationName: '',
         meterNumber: '',
+        customerPhone: '',
+        usage: '',
+        total: '',
+        paidAmount: '',
+        remaining: '',
       },
     ])
   }
 
   const handleFile = async (file: File) => {
-    const { parseBankStatementRowsFromExcel } = await import('@/lib/bank-statement-excel')
     const buf = await file.arrayBuffer()
-    const smart = bankStatementParsedToGridRows(parseBankStatementRowsFromExcel(buf))
-    if (smart.length > 0) {
-      applyImportedRows(smart, 'file')
+    const result = parseBillingExportExcel(buf)
+    if (result.error) {
+      setPasteHint(result.error)
       return
     }
-    const XLSX = await import('xlsx')
-    const wb = XLSX.read(buf, { type: 'array' })
-    const sheet = wb.Sheets[wb.SheetNames[0]]
-    if (!sheet) {
-      setPasteHint('Excel хуудас хоосон байна.')
-      return
-    }
-    const tsv = XLSX.utils.sheet_to_csv(sheet, { FS: '\t' })
-    await applyPasteText(tsv)
+    applyImportedRows(billingImportRowsToGridRows(result.rows), 'file')
   }
 
   const handleSave = async () => {
-    const payload = bankGridRowsToImportPayload(rows)
+    const payload = billingGridRowsToImportPayload(rows)
     if (payload.length === 0) {
-      setPasteHint('Хадгалах мөр алга. Дүн болон утга (эсвэл тоолуур) бөглөнө үү.')
+      setPasteHint('Хадгалах мөр алга. Он, сар, байгууллага, тоолуур, төлөгдсөн дүн бөглөнө үү.')
       return
     }
     await onSave(rows)
@@ -165,18 +200,6 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
       className="bg-white rounded-lg border border-gray-200 w-full overflow-hidden flex flex-col"
       onPaste={handleWrapperPaste}
     >
-      <div className="px-4 pt-4 pb-2 border-b border-gray-200 shrink-0">
-        <h3 className="text-lg font-semibold text-gray-900">Банкны гүйлгээ оруулах</h3>
-        <p className="text-sm text-gray-600 mt-1">
-          {year}-{String(month).padStart(2, '0')} — Доорх хүснэг нь төлбөрийн үндсэн хүснэгтэй ижил хэлбэртэй; эхлээд
-          хоосон, Excel-ээс paste (Ctrl+V) хийж засварлана.
-        </p>
-        {pasteHint && (
-          <p className="mt-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            {pasteHint}
-          </p>
-        )}
-      </div>
 
       <div className="flex flex-wrap gap-2 px-4 py-3 border-b border-gray-100 bg-gray-50 shrink-0">
         <button
@@ -191,7 +214,7 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
         <input
           ref={fileRef}
           type="file"
-          accept=".xlsx,.xls,.csv"
+          accept=".xlsx,.xls"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0]
@@ -211,23 +234,25 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
       </div>
 
       <div className="p-4 pt-2 flex-1 min-h-0">
-        <div className="ag-theme-alpine" style={{ height: BANK_GRID_HEIGHT, width: '100%' }}>
+        <div className="ag-theme-alpine" style={{ height: GRID_HEIGHT, width: '100%' }}>
           <AgGridReact
+            key={gridKey}
             theme="legacy"
             ref={gridRef}
             rowData={rows}
             columnDefs={columnDefs}
-            getRowId={(p) => (p.data as BankGridRow).id}
+            getRowId={(p) => (p.data as BillingExcelGridRow).id}
             defaultColDef={{
               sortable: false,
               filter: false,
               resizable: true,
+              editable: !saving,
             }}
             onCellValueChanged={handleCellValueChanged}
             singleClickEdit
             stopEditingWhenCellsLoseFocus
-            suppressClickEdit={false}
-            suppressClipboardPaste
+            enterNavigatesVertically
+            enterNavigatesVerticallyAfterEdit
             domLayout="normal"
           />
         </div>

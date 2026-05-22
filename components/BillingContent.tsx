@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { DocumentArrowUpIcon } from '@heroicons/react/24/outline'
 import { fetchWithAuth } from '@/lib/api'
 import MonthlyReadingsGrid, {
@@ -9,7 +10,11 @@ import MonthlyReadingsGrid, {
   type MonthlyReadingRow,
 } from '@/components/MonthlyReadingsGrid'
 import BankImportModal from '@/components/BankImportModal'
-import { bankGridRowsToImportPayload, type BankGridRow } from '@/lib/bank-grid-paste'
+import {
+  billingGridRowsToImportPayload,
+  BILLING_EXCEL_HEADER_LABELS,
+  type BillingExcelGridRow,
+} from '@/lib/billing-export-excel'
 import {
   aggregateBillingReadingsByOrganization,
   readingIdsForBillingRow,
@@ -98,18 +103,31 @@ function isPaidInFull(row: Pick<BillingRow, 'paidStored' | 'total'>): boolean {
   return remainingBalance(row) <= PAY_EPS
 }
 
+function paymentStatusForExport(row: Pick<BillingRow, 'paidStored' | 'total'>): string {
+  if (isPaidInFull(row)) return 'Бүрэн төлөгдсөн'
+  if (effectivePaid(row) > PAY_EPS) return 'Хэсэгчлэн төлөгдсөн'
+  return 'Хүлээгдэж буй'
+}
+
+function ebarimtStatusLabel(st: string | null | undefined): string {
+  const s = String(st ?? 'PENDING').toUpperCase()
+  if (s === 'SENT') return 'Илгээгдсэн'
+  if (s === 'FAILED') return 'Алдаатай'
+  if (s === 'PARTIAL') return 'Хэсэгчлэн'
+  return 'Хүлээгдэж буй'
+}
+
 type BillingPaymentTab = 'unpaid' | 'paid'
 
-type BankImportApplied = {
+type BillingImportApplied = {
   readingId: string
-  code?: string
   meterNumber?: string
-  added: number
-  newPaid: number
+  organizationName?: string
+  paidAmount: number
   total: number
   rowIndex: number
 }
-type BankImportSkipped = { rowIndex: number; reason: string; description: string }
+type BillingImportSkipped = { rowIndex: number; reason: string; description: string }
 
 export default function BillingContent() {
   const [readings, setReadings] = useState<BillingReading[]>([])
@@ -127,9 +145,11 @@ export default function BillingContent() {
   const [bankImportInline, setBankImportInline] = useState(false)
   const [bankImporting, setBankImporting] = useState(false)
   const [bankImportReport, setBankImportReport] = useState<{
-    applied: BankImportApplied[]
-    skipped: BankImportSkipped[]
+    applied: BillingImportApplied[]
+    skipped: BillingImportSkipped[]
   } | null>(null)
+  const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
+  const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
   const yearOptions = useMemo(() => {
     const y = new Date().getFullYear()
     return [y + 1, y, y - 1, y - 2]
@@ -219,6 +239,18 @@ export default function BillingContent() {
   }, [reloadReadings])
 
   useEffect(() => {
+    if (!excelExportMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = excelExportMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setExcelExportMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [excelExportMenu])
+
+  useEffect(() => {
     fetchWithAuth('/api/sms/config')
       .then((res) => (res.ok ? res.json() : null))
       .then(
@@ -304,7 +336,7 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
             ? data.recipients.map((r: { phone?: string }) => r.phone).filter(Boolean).join(', ')
             : collectCustomerPhones(org)
         const breakdownLine = data.breakdownUrl
-          ? `\nЗадаргаа: ${data.breakdownUrl}`
+          ? `\nТөлбөрийн задаргаа: ${data.breakdownUrl}`
           : ''
         alert(
           `Төлбөрийн мэдээлэл илгээлээ.\n` +
@@ -407,15 +439,13 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
     }
   }
 
-  const handleBankImportSave = async (gridRows: BankGridRow[]) => {
-    if (!filterYear || !filterMonth) {
-      setMessage({ type: 'error', text: 'Банкны импортод зориулж эхлээд он, сарыг сонгоно уу.' })
-      setTimeout(() => setMessage(null), 4000)
-      return
-    }
-    const rows = bankGridRowsToImportPayload(gridRows)
+  const handleBankImportSave = async (gridRows: BillingExcelGridRow[]) => {
+    const rows = billingGridRowsToImportPayload(gridRows)
     if (rows.length === 0) {
-      setMessage({ type: 'error', text: 'Хадгалах мөр алга (дүн, утга эсвэл тоолуур).' })
+      setMessage({
+        type: 'error',
+        text: 'Хадгалах мөр алга. Он, сар, байгууллага/код, тоолуур, төлөгдсөн дүн бөглөнө үү.',
+      })
       setTimeout(() => setMessage(null), 4000)
       return
     }
@@ -423,14 +453,10 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
     setBankImportReport(null)
     setMessage(null)
     try {
-      const res = await fetchWithAuth('/api/readings/payment/bank-import', {
+      const res = await fetchWithAuth('/api/readings/payment/billing-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          year: filterYear,
-          month: filterMonth,
-          rows,
-        }),
+        body: JSON.stringify({ rows }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Импорт амжилтгүй')
@@ -442,7 +468,7 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
       const s = data.skipped?.length ?? 0
       setMessage({
         type: a > 0 ? 'success' : 'error',
-        text: `Банкны импорт: ${a} мөр төлбөрт нэмэгдлээ, ${s} мөр алгасагдлаа.`,
+        text: `Excel импорт: ${a} мөр шинэчлэгдлээ, ${s} мөр алгасагдлаа.`,
       })
       setBankImportInline(false)
       await reloadReadings()
@@ -454,6 +480,28 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
       setTimeout(() => setMessage(null), 5000)
     }
   }
+
+  const exportBillingXlsx = useCallback(() => {
+    const H = BILLING_EXCEL_HEADER_LABELS
+    const rows = filteredBillingRows.map((r) => ({
+      [H.year]: r.year,
+      [H.month]: String(r.month).padStart(2, '0'),
+      [H.organization]: r.organization.name,
+      [H.meter]: r.meterNumber,
+      [H.phone]: r.customerPhones,
+      [H.usage]: Number(Number(r.usage ?? 0).toFixed(2)),
+      [H.total]: Number(Number(r.total ?? 0).toFixed(2)),
+      [H.paid]: Number(effectivePaid(r).toFixed(2)),
+      [H.remaining]: Number(remainingBalance(r).toFixed(2)),
+    }))
+    const year = filterYear || 'all'
+    const month = filterMonth || 'all'
+    const tab = paymentTab === 'paid' ? 'tulsun' : 'tulugui'
+    const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: false })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Төлбөр')
+    XLSX.writeFile(wb, `billing-${year}-${month}-${tab}.xlsx`)
+  }, [filteredBillingRows, filterYear, filterMonth, paymentTab])
 
   const handleIssueAllEbarimt = async () => {
     if (filteredBillingRows.length === 0) {
@@ -494,7 +542,14 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
   }
 
   return (
-    <div className="px-4 sm:px-0">
+    <div
+      className="px-4 sm:px-0"
+      onContextMenu={(e) => {
+        if (bankImportInline) return
+        e.preventDefault()
+        setExcelExportMenu({ x: e.clientX, y: e.clientY })
+      }}
+    >
       <div className="mb-4">
         <h2 className="text-2xl font-semibold text-gray-900">Төлбөр</h2>
       </div>
@@ -569,15 +624,12 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
                     setBankImportInline(true)
                   }
                 }}
-                disabled={
-                  bankImporting ||
-                  (!bankImportInline && (!filterYear || !filterMonth || loading))
-                }
+                disabled={bankImporting}
                 className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-800 rounded-md hover:bg-gray-50 disabled:opacity-50 whitespace-nowrap"
                 title={
                   bankImportInline
                     ? 'Төлбөрийн үндсэн хүснэгт рүү буцах'
-                    : 'Доорх хүснэгт банкны мөр paste хийж төлбөр оруулах'
+                    : 'Төлбөрийн Excel (баруун товчоор татсан файл) оруулах'
                 }
               >
                 <DocumentArrowUpIcon className="h-5 w-5 shrink-0" />
@@ -585,7 +637,7 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
                   ? 'Уншиж байна...'
                   : bankImportInline
                     ? 'Төлбөр рүү буцах'
-                    : 'Банкны Excel'}
+                    : 'Excel импорт'}
               </button>
               <button
                 type="button"
@@ -610,7 +662,7 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
       {bankImportReport && (bankImportReport.skipped.length > 0 || bankImportReport.applied.length > 0) && (
         <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
           <div className="flex justify-between items-start gap-2 mb-2">
-            <span className="font-medium text-gray-800">Сүүлийн банкны импортын дэлгэрэнгүй</span>
+            <span className="font-medium text-gray-800">Сүүлийн Excel импортын дэлгэрэнгүй</span>
             <button
               type="button"
               className="text-gray-500 hover:text-gray-800 text-xs"
@@ -624,8 +676,9 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
               {bankImportReport.applied.map((a, i) => (
                 <li key={`${a.readingId}-${i}`}>
                   Мөр {a.rowIndex}
-                  {a.code ? `: код ${a.code}` : a.meterNumber ? `: тоолуур ${a.meterNumber}` : ''} — +
-                  {formatMoney(a.added)} ₮ (нийт төлөгдсөн {formatMoney(a.newPaid)} / {formatMoney(a.total)} ₮)
+                  {a.organizationName ? `: ${a.organizationName}` : ''}
+                  {a.meterNumber ? `, тоолуур ${a.meterNumber}` : ''} — төлөгдсөн {formatMoney(a.paidAmount)} ₮ (
+                  нийт {formatMoney(a.total)} ₮)
                 </li>
               ))}
             </ul>
@@ -672,7 +725,36 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
           showCalculated
           emptyMessage={gridEmptyMessage}
           billingActions={billingGridActions}
+          onGridContextMenu={({ x, y }) => setExcelExportMenu({ x, y })}
         />
+      )}
+      {excelExportMenu && !bankImportInline && (
+        <div
+          ref={excelExportMenuRef}
+          style={{
+            position: 'fixed',
+            top: excelExportMenu.y,
+            left: excelExportMenu.x,
+            zIndex: 99999,
+            background: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+            padding: 6,
+            minWidth: 220,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setExcelExportMenu(null)
+              exportBillingXlsx()
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
+          >
+            Excel файл болгох
+          </button>
+        </div>
       )}
     </div>
   )

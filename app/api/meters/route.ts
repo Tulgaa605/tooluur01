@@ -32,11 +32,10 @@ const METER_BILLING_CATEGORIES = [
 
 function parseMeterBillingCategory(
   raw: unknown,
-  orgCategory: string | null | undefined
+  _orgCategory?: string | null | undefined
 ): string | null {
-  if (String(orgCategory ?? '').toUpperCase() === 'HOUSEHOLD') return null
   const s = typeof raw === 'string' ? raw.trim().toUpperCase() : ''
-  if (!s) return null
+  if (!s || s === 'HOUSEHOLD') return null
   return (METER_BILLING_CATEGORIES as readonly string[]).includes(s) ? s : null
 }
 

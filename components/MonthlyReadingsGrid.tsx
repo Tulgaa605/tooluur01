@@ -248,6 +248,8 @@ export type MonthlyReadingsGridProps = {
   /** `billing` — төлбөрийн нэмэлт багана + үйлдэл */
   variant?: 'readings' | 'billing'
   billingActions?: BillingGridActions
+  /** Баруун товч — Excel цэс (төлбөрийн хуудас) */
+  onGridContextMenu?: (coords: { x: number; y: number }) => void
 }
 
 export default function MonthlyReadingsGrid({
@@ -258,6 +260,7 @@ export default function MonthlyReadingsGrid({
   emptyMessage = 'Заалтын мэдээлэл олдсонгүй',
   variant = 'readings',
   billingActions,
+  onGridContextMenu,
 }: MonthlyReadingsGridProps) {
   const gridRef = useRef<AgGridReact>(null)
   const [organizations, setOrganizations] = useState<Organization[]>([])
@@ -931,8 +934,20 @@ export default function MonthlyReadingsGrid({
             rowData={rowData}
             pinnedBottomRowData={rowData.length > 0 ? pinnedBottomRowData : undefined}
             columnDefs={columnDefs}
-            suppressContextMenu
-            preventDefaultOnContextMenu
+            suppressContextMenu={!onGridContextMenu}
+            preventDefaultOnContextMenu={Boolean(onGridContextMenu)}
+            onCellContextMenu={
+              onGridContextMenu
+                ? (params) => {
+                    params.event?.preventDefault()
+                    params.event?.stopPropagation()
+                    onGridContextMenu({
+                      x: params.event?.clientX ?? 0,
+                      y: params.event?.clientY ?? 0,
+                    })
+                  }
+                : undefined
+            }
             getRowId={(params) =>
               params.data?.id ??
               `m-${params.data?.meterId ?? 'x'}-${params.data?.year ?? 0}-${params.data?.month ?? 0}`

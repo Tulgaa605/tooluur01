@@ -89,6 +89,26 @@ type MeterFormState = {
   pipeDiameterMm: string
 }
 
+const ORG_CUSTOMER_CATEGORY_KEYS = Object.keys(
+  ORG_CUSTOMER_CATEGORY_LABELS
+) as OrgCustomerCategory[]
+
+function customerCategorySelectOptions(
+  placeholder: string,
+  includeHouseholdStandard = false
+) {
+  const opts: { value: string; label: string }[] = []
+  if (includeHouseholdStandard) {
+    opts.push({ value: '', label: 'Иргэн, хувь хүн (стандарт тариф)' })
+  } else {
+    opts.push({ value: '', label: placeholder })
+  }
+  for (const k of ORG_CUSTOMER_CATEGORY_KEYS) {
+    opts.push({ value: k, label: ORG_CUSTOMER_CATEGORY_LABELS[k] })
+  }
+  return opts
+}
+
 function createEmptyMeterForm(year: number): MeterFormState {
   return {
     ownerType: '',
@@ -181,12 +201,6 @@ export default function MetersContent() {
     if (!form.organizationId || form.ownerType === 'household') return 0
     return meters.filter((m) => m.organizationId === form.organizationId).length
   }, [form.organizationId, form.ownerType, meters])
-
-  const meterDetailsUnlocked = useMemo(() => {
-    if (!form.ownerType || !form.organizationId) return false
-    if (form.ownerType === 'household') return true
-    return Boolean(form.orgCustomerCategory)
-  }, [form.ownerType, form.organizationId, form.orgCustomerCategory])
 
   const metersFiltered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -295,6 +309,9 @@ export default function MetersContent() {
       setMessage({ type: 'error', text: 'Хэрэглэгчийн төрөл сонгоно уу.' })
       return
     }
+    const billingCategoryPayload = form.orgCustomerCategory
+      ? { billingCategory: form.orgCustomerCategory }
+      : {}
     const meterNo = String(form.meterNumber ?? '').trim()
     if (!meterNo) {
       setMessage({ type: 'error', text: 'Тоолуурын дугаар заавал оруулна уу.' })
@@ -331,9 +348,7 @@ export default function MetersContent() {
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
             pipeDiameterMm: pipeDiameter,
-            ...(form.ownerType === 'organization' && form.orgCustomerCategory
-              ? { billingCategory: form.orgCustomerCategory }
-              : {}),
+            ...billingCategoryPayload,
           }
         : {
             meterNumber: meterNo,
@@ -344,9 +359,7 @@ export default function MetersContent() {
             ...waterSplitBody,
             ...(needsHeat ? { defaultHeatUsage: heatVal } : {}),
             pipeDiameterMm: pipeDiameter,
-            ...(form.ownerType === 'organization' && form.orgCustomerCategory
-              ? { billingCategory: form.orgCustomerCategory }
-              : {}),
+            ...billingCategoryPayload,
           }
 
       const res = await fetchWithAuth('/api/meters', {
@@ -392,10 +405,10 @@ export default function MetersContent() {
     )
     setForm({
       ownerType: inHousehold ? 'household' : 'organization',
-      orgCustomerCategory: inHousehold
-        ? ''
-        : isOrgCustomerCategory(eff)
-          ? eff
+      orgCustomerCategory: isOrgCustomerCategory(eff)
+        ? eff
+        : inHousehold
+          ? ''
           : defaultOrgCustomerCategory(co),
       meterNumber: meter.meterNumber,
       defaultHeatM3M2:
@@ -584,21 +597,23 @@ export default function MetersContent() {
                               onChange={(e) =>
                                 setForm((prev) => ({
                                   ...prev,
-                                  orgCustomerCategory: e.target.value as OrgCustomerCategory,
+                                  orgCustomerCategory: e.target.value as OrgCustomerCategory | '',
                                 }))
                               }
                               className="w-full px-3 py-2 border border-gray-300 rounded-md"
                               required={Boolean(form.organizationId)}
                             >
-                              {!form.organizationId ? (
-                                <option value="">Эхлээд байгууллага сонгоно уу</option>
-                              ) : (
-                                (Object.keys(ORG_CUSTOMER_CATEGORY_LABELS) as OrgCustomerCategory[]).map((k) => (
-                                  <option key={k} value={k}>
-                                    {ORG_CUSTOMER_CATEGORY_LABELS[k]}
-                                  </option>
-                                ))
-                              )}
+                              {!form.organizationId
+                                ? customerCategorySelectOptions('Эхлээд байгууллага сонгоно уу').map((o) => (
+                                    <option key={o.value || 'placeholder'} value={o.value}>
+                                      {o.label}
+                                    </option>
+                                  ))
+                                : customerCategorySelectOptions('Сонгох...').map((o) => (
+                                    <option key={o.value || 'pick'} value={o.value}>
+                                      {o.label}
+                                    </option>
+                                  ))}
                             </select>
                             {meterCountForSelectedOrg > 1 && (
                               <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
@@ -615,8 +630,14 @@ export default function MetersContent() {
                             </label>
                             <select
                               value={form.organizationId}
-                              onChange={(e) => setForm((prev) => ({ ...prev, organizationId: e.target.value }))}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              onChange={(e) =>
+                                setForm((prev) => ({
+                                  ...prev,
+                                  organizationId: e.target.value,
+                                  orgCustomerCategory: '',
+                                }))
+                              }
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md mb-2"
                               required
                             >
                               <option value="">Сонгох</option>
@@ -626,6 +647,35 @@ export default function MetersContent() {
                                 </option>
                               ))}
                             </select>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Хэрэглэгчийн төрөл
+                            </label>
+                            <select
+                              value={form.orgCustomerCategory}
+                              disabled={!form.organizationId}
+                              onChange={(e) =>
+                                setForm((prev) => ({
+                                  ...prev,
+                                  orgCustomerCategory: e.target.value as OrgCustomerCategory | '',
+                                }))
+                              }
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                            >
+                              {!form.organizationId
+                                ? customerCategorySelectOptions('Эхлээд иргэн, хувь хүн сонгоно уу').map((o) => (
+                                    <option key={o.value || 'placeholder'} value={o.value}>
+                                      {o.label}
+                                    </option>
+                                  ))
+                                : customerCategorySelectOptions('', true).map((o) => (
+                                    <option key={o.value || 'household'} value={o.value}>
+                                      {o.label}
+                                    </option>
+                                  ))}
+                            </select>
+                            <p className="mt-1.5 text-xs text-gray-500">
+                              Зөөврөөр татан зайлуулах, хүлээн авах зэрэг төрөл сонговол тухайн тарифаар тооцно.
+                            </p>
                           </>
                         )}
                       </>

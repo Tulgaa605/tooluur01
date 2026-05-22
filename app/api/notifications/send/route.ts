@@ -5,7 +5,11 @@ import { Role } from '@/lib/role'
 import { organizationIdInScope } from '@/lib/org-scope'
 import { sendTextSms } from '@/lib/sms'
 import { resolveEffectiveSmsSender } from '@/lib/sms-senders'
-import { computeReadingBreakdownLine } from '@/lib/public-billing-breakdown'
+import {
+  computeReadingBreakdownLine,
+  waterUsageFromReading,
+} from '@/lib/public-billing-breakdown'
+import { normalizeBillingMode } from '@/lib/meter-reading-calc-core'
 
 export const runtime = 'nodejs'
 
@@ -23,41 +27,74 @@ function resolvePublicOrigin(request: NextRequest): string {
   return new URL(request.url).origin.replace(/\/+$/, '')
 }
 
-function formatMeterListForSms(meterNumbers: string[]): string {
-  const uniq = [...new Set(meterNumbers.map((m) => m.trim()).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b, 'mn')
-  )
-  if (uniq.length === 0) return '-'
-  if (uniq.length === 1) return uniq[0]
-  if (uniq.length === 2) return uniq.join(', ')
-  return `${uniq.length} тоолуур`
+const SMS_MAX_LEN = 159
+
+type MeterUsageSmsLine = { meterNumber: string; usage: number; usageLabel?: string }
+
+function formatUsageM3(usage: number): string {
+  const n = Number(usage)
+  if (!Number.isFinite(n) || n < 0) return '0.00'
+  return n.toFixed(2)
 }
 
-function buildSmsMessage(input: {
+/** Нэр, тоолуур бүрт усны хэрэглээ, доор төлбөрийн задаргааны холбоос */
+export function buildSmsMessage(input: {
   organizationName: string
   organizationCode?: string | null
-  meterNumber: string
-  year: number
-  month: number
-  usage: number
+  meterLines: MeterUsageSmsLine[]
   total: number
   breakdownUrl?: string | null
 }): string {
   const org = `${input.organizationName}${input.organizationCode ? ` (${input.organizationCode})` : ''}`
-  const prefix = `Нэр: ${org}. Тоолуур: ${input.meterNumber}. Хэрэглээ: ${input.usage.toFixed(2)}м³. Дүн: ${input.total.toFixed(2)}₮.`
+  const nameLine = `Нэр: ${org}`
 
-  const urlPart = input.breakdownUrl ? ` Задаргаа: ${input.breakdownUrl}` : ''
-  const full = `${prefix}${urlPart}`
+  const meterParts = [...input.meterLines]
+    .filter((m) => String(m.meterNumber ?? '').trim())
+    .sort((a, b) => String(a.meterNumber).localeCompare(String(b.meterNumber), 'mn'))
+    .map((m) => {
+      const num = String(m.meterNumber).trim()
+      if (m.usageLabel) return `${num}: ${m.usageLabel}`
+      return `${num}: ${formatUsageM3(m.usage)}м³`
+    })
 
-  const MAX = 159
-  if (full.length <= MAX) return full
-  if (!urlPart) return prefix.slice(0, MAX)
+  const totalLine =
+    Number.isFinite(input.total) && input.total > 0
+      ? `Нийт: ${Math.round(input.total).toLocaleString('en-US')}₮`
+      : ''
 
-  const keep = urlPart
-  const availablePrefix = Math.max(0, MAX - keep.length)
-  const trimmedPrefix =
-    availablePrefix <= 3 ? '' : `${prefix.slice(0, availablePrefix - 3)}...`
-  return `${trimmedPrefix}${keep}`.slice(0, MAX)
+  const footer = input.breakdownUrl ? `Төлбөрийн задаргаа: ${input.breakdownUrl}` : ''
+
+  const segments = [nameLine, ...meterParts]
+  if (totalLine) segments.push(totalLine)
+  if (footer) segments.push(footer)
+
+  let full = segments.join(' ')
+  if (full.length <= SMS_MAX_LEN) return full
+
+  if (footer) {
+    const footerWithSpace = ` ${footer}`
+    let room = SMS_MAX_LEN - footerWithSpace.length
+    if (room < 8) return footer.slice(0, SMS_MAX_LEN)
+
+    const head: string[] = [nameLine]
+    for (const part of meterParts) {
+      const candidate = [...head, part].join(' ')
+      if (candidate.length <= room) head.push(part)
+      else break
+    }
+
+    let body = head.join(' ')
+    if (meterParts.length > 0 && head.length <= 1) {
+      body = `${nameLine} ${meterParts.length} тоолуур`
+      if (body.length > room) body = `${nameLine.slice(0, Math.max(0, room - 3))}...`
+    } else if (totalLine && body.length + totalLine.length + 1 <= room) {
+      body = `${body} ${totalLine}`
+    }
+
+    return `${body}${footerWithSpace}`.slice(0, SMS_MAX_LEN)
+  }
+
+  return full.slice(0, SMS_MAX_LEN)
 }
 
 function buildBreakdownUrl(
@@ -172,9 +209,20 @@ export async function POST(request: NextRequest) {
     })
 
     const lines = await Promise.all(readings.map((r) => computeReadingBreakdownLine(r)))
-    const usageSum = lines.reduce((a, l) => a + l.usage, 0)
     const totalSum = lines.reduce((a, l) => a + l.total, 0)
-    const meterNumbers = readings.map((r) => r.meter.meterNumber)
+    const meterLines = readings.map((r, i) => {
+      const line = lines[i]
+      const bm = normalizeBillingMode(r.meter?.billingMode)
+      if (bm === 'HEAT') {
+        return {
+          meterNumber: line.meterNumber,
+          usage: line.usage,
+          usageLabel: `${formatUsageM3(line.usage)} дулаан`,
+        }
+      }
+      const water = waterUsageFromReading(r)
+      return { meterNumber: line.meterNumber, usage: water }
+    })
 
     const exportToken = (process.env.PAYMENT_LIST_EXPORT_TOKEN ?? '').trim()
     const publicOrigin = resolvePublicOrigin(request)
@@ -190,10 +238,7 @@ export async function POST(request: NextRequest) {
     const message = buildSmsMessage({
       organizationName: org.name,
       organizationCode: org.code,
-      meterNumber: formatMeterListForSms(meterNumbers),
-      year,
-      month,
-      usage: usageSum,
+      meterLines,
       total: totalSum,
       breakdownUrl,
     })
