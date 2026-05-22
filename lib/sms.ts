@@ -104,6 +104,7 @@ export async function sendTextSms(
   text: string,
   senderLabel: string
 ): Promise<{ enabled: boolean; mode: 'unitel' | 'http' | 'none'; results: SmsSendResult[] }> {
+  const body = String(text ?? '').trim()
   const mode = detectMode()
   const unique = new Map<string, string>()
   for (const raw of rawPhones) {
@@ -124,13 +125,21 @@ export async function sendTextSms(
     }
   }
 
+  if (!body) {
+    return {
+      enabled: true,
+      mode,
+      results: targets.map((to) => ({ to, ok: false, error: 'SMS текст хоосон' })),
+    }
+  }
+
   const results: SmsSendResult[] = []
   for (const to of targets) {
     try {
       if (mode === 'unitel') {
-        await sendUnitel(to, text)
+        await sendUnitel(to, body)
       } else {
-        await sendHttp(to, text, senderLabel)
+        await sendHttp(to, body, senderLabel)
       }
       results.push({ to, ok: true })
     } catch (e: unknown) {

@@ -172,7 +172,7 @@ export async function POST(request: NextRequest) {
       multi,
     })
 
-    const message = buildSmsMessage({
+    const messageText = buildSmsMessage({
       organizationName: org.name,
       organizationCode: org.code,
       meterLines,
@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
       .map((r) => r.phone)
       .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
 
-    const smsOutcome = await sendTextSms(rawPhones, message, fromPhone)
+    const smsOutcome = await sendTextSms(rawPhones, messageText, fromPhone)
     const smsOkCount = smsOutcome.results.filter((r) => r.ok).length
     const smsFailCount = smsOutcome.results.filter((r) => !r.ok).length
 
@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: 'Төлбөрийн мэдээлэл илгээгдлээ',
       fromPhone,
-      messageText: message,
+      messageText,
       breakdownUrl,
       sms: {
         provider: smsOutcome.mode,
