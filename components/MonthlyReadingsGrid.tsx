@@ -68,6 +68,8 @@ export interface MonthlyReadingRow {
   /** Төлбөрийн хуудас */
   paidAmount?: number | null
   paymentReference?: string | null
+  /** SMS амжилттай илгээгдсэн → заалт түгжигдэнэ */
+  smsSentAt?: string | Date | null
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
   ebarimtLastError?: string | null
@@ -728,6 +730,7 @@ export default function MonthlyReadingsGrid({
         width: 120,
         colId: 'paidAmount',
         ...numberColStyle,
+        // Тайлбар: SMS илгээгдсэн ч төлбөрийн дүнг хүссэн үедээ засах боломжтой.
         editable: (params) =>
           Boolean(billingActions?.onPaidAmountChange) &&
           params.data?.organization?.name !== 'Нийт дүн',

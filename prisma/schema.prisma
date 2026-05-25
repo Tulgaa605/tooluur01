@@ -147,6 +147,8 @@ model MeterReading {
   paidAmount     Float        @default(0)
   /// SMS/банкны гүйлгээний утгад оруулах төлбөрийн код (илгээх тутамд шинэчлэгдэнэ)
   paymentReference String?
+  /// SMS амжилттай илгээгдсэн цаг — энэ заалт түгжигдэнэ (заалт/төлбөр засагдахгүй)
+  smsSentAt      DateTime?
   approved       Boolean      @default(false)
   approvedBy     String?
   approvedAt     DateTime?

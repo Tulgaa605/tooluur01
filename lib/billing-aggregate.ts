@@ -20,6 +20,7 @@ export type BillingAggregatableReading = {
   heatAmount?: number
   paidAmount?: number | null
   approved?: boolean
+  smsSentAt?: string | Date | null
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
   ebarimtLastError?: string | null
@@ -97,6 +98,7 @@ function mergeOrgBillingGroup<T extends BillingAggregatableReading>(group: T[]):
     heatAmount: sumNum(group, (r) => Number(r.heatAmount ?? 0)),
     paidAmount: sumNum(group, (r) => Number(r.paidAmount ?? 0)),
     approved: group.every((r) => !!r.approved),
+    smsSentAt: group.find((r) => !!r.smsSentAt)?.smsSentAt ?? null,
     ...ebarimt,
     meter: {
       ...(first.meter ?? { meterNumber: '-' }),

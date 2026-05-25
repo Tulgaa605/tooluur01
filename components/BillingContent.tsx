@@ -24,6 +24,7 @@ type BillingReading = MonthlyReadingRow & {
   id: string
   paidAmount?: number | null
   approved: boolean
+  smsSentAt?: string | Date | null
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
   ebarimtLastError?: string | null
@@ -344,13 +345,15 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
             `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}` +
             breakdownLine
         )
+        // SMS илгээснээр уг заалт түгжигдсэн тул UI-г шинэчилнэ
+        await reloadReadings()
       } catch (err: unknown) {
         alert(err instanceof Error ? err.message : 'Алдаа гарлаа')
       } finally {
         setSending(null)
       }
     },
-    [senderPhone]
+    [senderPhone, reloadReadings]
   )
 
   const handleIssueEbarimt = useCallback(async (row: MonthlyReadingRow) => {
@@ -458,6 +461,8 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
         type: 'success',
         text: `Амжилттай илгээлээ: ${okCount}/${filteredBillingRows.length} харилцагч`,
       })
+      // Илгээсэн заалтууд түгжигдсэн тул UI-г шинэчилнэ
+      await reloadReadings()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Бүгдэд илгээх үед алдаа гарлаа'
       setMessage({ type: 'error', text: msg })

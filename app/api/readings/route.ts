@@ -456,6 +456,13 @@ export async function PUT(request: NextRequest) {
       )
     }
 
+    if ((existingReading as { smsSentAt?: Date | null }).smsSentAt) {
+      return NextResponse.json(
+        { error: 'SMS илгээгдсэн тул энэ заалтыг засах боломжгүй' },
+        { status: 409 }
+      )
+    }
+
     const meterForBilling = await prisma.meter.findUnique({
       where: { id: existingReading.meterId },
       select: {

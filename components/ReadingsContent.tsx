@@ -349,6 +349,8 @@ interface Reading {
   _isNew?: boolean
   /** Заалт оруулах modal: өмнөх сарын эцсийн заалтаас эхний заалт тодорхойлогдсон бол эхний нүдийг түгжинэ */
   _modalStartLocked?: boolean
+  /** SMS амжилттай илгээгдсэн → энэ заалт түгжигдэнэ */
+  smsSentAt?: string | Date | null
 }
 
 type ModalDataBundleResponse = {
@@ -1879,18 +1881,20 @@ export default function ReadingsContent() {
         !readingRowUsesWater(params.data) || !!(showAddModal && params.data?._modalStartLocked),
       cellClass: (params: any) => {
         const waterOff = !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : ''
-        const locked =
+        const modalLocked =
           showAddModal && readingRowUsesWater(params.data) && params.data?._modalStartLocked
             ? 'reading-billing-cell-disabled'
             : ''
+        const smsLocked = params.data?.smsSentAt ? 'reading-billing-cell-disabled' : ''
         const centered = showAddModal ? 'reading-modal-center' : ''
-        return [waterOff, locked, centered].filter(Boolean).join(' ')
+        return [waterOff, modalLocked, smsLocked, centered].filter(Boolean).join(' ')
       },
       headerClass: showAddModal ? 'reading-modal-center' : numberColStyle.headerClass,
       editable: (params: any) =>
         modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
         readingRowUsesWater(params.data) &&
-        !params.data?._modalStartLocked,
+        !params.data?._modalStartLocked &&
+        !params.data?.smsSentAt,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -1921,13 +1925,15 @@ export default function ReadingsContent() {
       suppressNavigable: (params: any) => !readingRowUsesWater(params.data),
       cellClass: (params: any) => {
         const disabled = !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : ''
+        const locked = params.data?.smsSentAt ? 'reading-billing-cell-disabled' : ''
         const centered = showAddModal ? 'reading-modal-center' : ''
-        return [disabled, centered].filter(Boolean).join(' ')
+        return [disabled, locked, centered].filter(Boolean).join(' ')
       },
       headerClass: showAddModal ? 'reading-modal-center' : numberColStyle.headerClass,
       editable: (params: any) =>
         modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
-        readingRowUsesWater(params.data),
+        readingRowUsesWater(params.data) &&
+        !params.data?.smsSentAt,
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue

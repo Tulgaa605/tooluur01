@@ -188,6 +188,14 @@ export async function POST(request: NextRequest) {
     const smsOkCount = smsOutcome.results.filter((r) => r.ok).length
     const smsFailCount = smsOutcome.results.filter((r) => !r.ok).length
 
+    // SMS илгээх үйлдлийг бүртгэснээр заалтуудыг түгжинэ (заалт/төлбөр засагдахаа болино).
+    // SMS провайдер тохируулагдаагүй байсан ч хэрэглэгчийн зориудаар дарсныг тэмдэглэнэ.
+    const sentAt = new Date()
+    await prisma.meterReading.updateMany({
+      where: { id: { in: readingIds } },
+      data: { smsSentAt: sentAt },
+    })
+
     return NextResponse.json({
       success: true,
       message: 'Төлбөрийн мэдээлэл илгээгдлээ',
