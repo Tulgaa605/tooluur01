@@ -126,6 +126,8 @@ export type BillingGridActions = {
   onDownload: (row: MonthlyReadingRow) => void
   onSendSms: (row: MonthlyReadingRow) => void
   onIssueEbarimt: (row: MonthlyReadingRow) => void
+  /** Inline төлбөр засах */
+  onPaidAmountChange?: (row: MonthlyReadingRow, newPaid: number) => Promise<void> | void
   sendingId?: string | null
   issuingEbarimtId?: string | null
 }
@@ -726,10 +728,27 @@ export default function MonthlyReadingsGrid({
         width: 120,
         colId: 'paidAmount',
         ...numberColStyle,
-        editable: false,
+        editable: (params) =>
+          Boolean(billingActions?.onPaidAmountChange) &&
+          params.data?.organization?.name !== 'Нийт дүн',
         valueGetter: (params) => {
           if (params.data?.organization?.name === 'Нийт дүн') return Number(params.data?.paidSum ?? 0)
           return effectivePaidAmount(params.data)
+        },
+        valueParser: (params) => {
+          const raw = params.newValue
+          if (raw == null || raw === '') return 0
+          const n =
+            typeof raw === 'number'
+              ? raw
+              : parseFloat(String(raw).replace(/,/g, '').replace(/₮/g, '').trim())
+          return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
+        },
+        valueSetter: (params) => {
+          if (!params.data) return false
+          const n = Number(params.newValue ?? 0)
+          params.data.paidAmount = Number.isFinite(n) ? n : 0
+          return true
         },
         valueFormatter: (params) => formatMoney(params.value ?? 0),
       },
@@ -1021,7 +1040,17 @@ export default function MonthlyReadingsGrid({
             pagination
             paginationPageSize={20}
             domLayout="normal"
+            singleClickEdit
+            stopEditingWhenCellsLoseFocus
             overlayNoRowsTemplate={overlayNoRows}
+            onCellValueChanged={(e) => {
+              if (e.colDef.colId === 'paidAmount' && billingActions?.onPaidAmountChange && e.data) {
+                const newPaid = Number(e.newValue ?? 0)
+                if (Number.isFinite(newPaid) && newPaid >= 0) {
+                  void billingActions.onPaidAmountChange(e.data, newPaid)
+                }
+              }
+            }}
             getRowStyle={(params) =>
               params.node.rowPinned ? { fontWeight: 700, backgroundColor: '#f9fafb' } : undefined
             }

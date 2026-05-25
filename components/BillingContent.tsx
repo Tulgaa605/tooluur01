@@ -394,15 +394,43 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
     }
   }, [])
 
+  const handleInlinePaidChange = useCallback(
+    async (row: MonthlyReadingRow, newPaid: number) => {
+      const ids = readingIdsForBillingRow(row)
+      if (ids.length === 0) return
+      try {
+        const res = await fetchWithAuth('/api/readings/payment/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            readingIds: ids,
+            paidAmount: newPaid,
+          }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Алдаа гарлаа')
+        }
+        await reloadReadings()
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Хадгалахад алдаа гарлаа'
+        setMessage({ type: 'error', text: msg })
+        setTimeout(() => setMessage(null), 4000)
+      }
+    },
+    [reloadReadings]
+  )
+
   const billingGridActions = useMemo<BillingGridActions>(
     () => ({
       onDownload: handleDownload,
       onSendSms: handleSendNotification,
       onIssueEbarimt: handleIssueEbarimt,
+      onPaidAmountChange: handleInlinePaidChange,
       sendingId: sending,
       issuingEbarimtId: issuingEbarimt,
     }),
-    [handleDownload, handleSendNotification, handleIssueEbarimt, sending, issuingEbarimt]
+    [handleDownload, handleSendNotification, handleIssueEbarimt, handleInlinePaidChange, sending, issuingEbarimt]
   )
 
   const handleSendAllNotifications = async () => {

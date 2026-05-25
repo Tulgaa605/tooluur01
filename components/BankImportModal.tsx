@@ -11,6 +11,7 @@ import {
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { DocumentArrowUpIcon, PlusIcon, ClipboardIcon } from '@heroicons/react/24/outline'
+import { fetchWithAuth } from '@/lib/api'
 import {
   BILLING_EXCEL_REQUIRED_HEADERS,
   billingGridRowsToImportPayload,
@@ -21,6 +22,13 @@ import {
   type BillingExcelGridRow,
 } from '@/lib/billing-export-excel'
 import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
+
+type MeterLookupRow = {
+  meterNumber: string
+  organizationName: string
+  organizationCode: string
+  customerPhone: string
+}
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -42,11 +50,46 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
   const [gridKey, setGridKey] = useState(0)
   const [pasteMenu, setPasteMenu] = useState<{ x: number; y: number } | null>(null)
   const pasteMenuRef = useRef<HTMLDivElement | null>(null)
+  const meterLookupRef = useRef<Map<string, MeterLookupRow>>(new Map())
+  const [lookupStatus, setLookupStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle'
+  )
 
   useEffect(() => {
     setRows(createEmptyBillingGridRows(8))
     setPasteHint(null)
     setGridKey((k) => k + 1)
+  }, [])
+
+  // Тоолуурын lookup нэг удаа татна
+  useEffect(() => {
+    let cancelled = false
+    setLookupStatus('loading')
+    fetchWithAuth('/api/meters/lookup')
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`lookup ${res.status}`)
+        return res.json()
+      })
+      .then((data: unknown) => {
+        if (cancelled) return
+        const map = new Map<string, MeterLookupRow>()
+        if (Array.isArray(data)) {
+          for (const r of data as MeterLookupRow[]) {
+            const key = String(r?.meterNumber ?? '').trim().toLowerCase()
+            if (key) map.set(key, r)
+          }
+        }
+        meterLookupRef.current = map
+        setLookupStatus(map.size > 0 ? 'ready' : 'error')
+      })
+      .catch(() => {
+        if (cancelled) return
+        meterLookupRef.current = new Map()
+        setLookupStatus('error')
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -86,17 +129,52 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
     []
   )
 
-  const handleCellValueChanged = useCallback((e: CellValueChangedEvent<BillingExcelGridRow>) => {
-    const field = e.colDef?.field as keyof BillingExcelGridRow | undefined
-    const id = e.data?.id
-    if (!id || !field || field === 'id') return
-
-    const newVal = e.newValue != null ? String(e.newValue) : ''
-
-    setRows((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, [field]: newVal } : r))
-    )
+  const findMeterLookup = useCallback((meterRaw: string): MeterLookupRow | null => {
+    const map = meterLookupRef.current
+    if (!map || map.size === 0) return null
+    const key = String(meterRaw ?? '').trim().toLowerCase()
+    if (!key) return null
+    if (map.has(key)) return map.get(key) ?? null
+    // Хэсэгчлэн тохирох
+    for (const [k, v] of map) {
+      if (k.includes(key) || key.includes(k)) return v
+    }
+    return null
   }, [])
+
+  const handleCellValueChanged = useCallback(
+    (e: CellValueChangedEvent<BillingExcelGridRow>) => {
+      const field = e.colDef?.field as keyof BillingExcelGridRow | undefined
+      const id = e.data?.id
+      if (!id || !field || field === 'id') return
+
+      const newVal = e.newValue != null ? String(e.newValue).trim() : ''
+
+      const updates: Partial<BillingExcelGridRow> = { [field]: newVal }
+      if (field === 'meterNumber' && newVal) {
+        const lookup = findMeterLookup(newVal)
+        if (lookup) {
+          updates.organizationName = lookup.organizationName
+          updates.customerPhone = lookup.customerPhone
+          if (!e.data?.year || !String(e.data.year).trim()) updates.year = year || ''
+          if (!e.data?.month || !String(e.data.month).trim()) updates.month = month || ''
+        } else if (lookupStatus === 'ready') {
+          setPasteHint(`«${newVal}» тоолуур олдсонгүй. Үндсэн жагсаалтад бүртгэлтэй байх ёстой.`)
+        } else if (lookupStatus === 'error') {
+          setPasteHint('Тоолуурын жагсаалт татагдаагүй. Хуудсыг шинэчилнэ үү.')
+        }
+      }
+
+      setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...updates } : r)))
+
+      // AG Grid дараах render-д шинэ утгуудыг харуулах эсэхийг баталгаажуулах
+      requestAnimationFrame(() => {
+        const api = gridRef.current?.api
+        if (api && e.node) api.refreshCells({ force: true, rowNodes: [e.node] })
+      })
+    },
+    [findMeterLookup, lookupStatus, year, month]
+  )
 
   const applyImportedRows = useCallback((parsed: Omit<BillingExcelGridRow, 'id'>[], source: 'paste' | 'file') => {
     if (parsed.length === 0) {
@@ -173,7 +251,6 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
 
   const addRow = () => {
     setRows((prev) => [
-      ...prev,
       {
         id: `new-${Date.now()}`,
         year: year || '',
@@ -186,6 +263,7 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
         paidAmount: '',
         remaining: '',
       },
+      ...prev,
     ])
   }
 
@@ -252,6 +330,21 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
           <DocumentArrowUpIcon className="h-4 w-4" />
           Excel файл
         </button>
+        <span
+          className={`ml-auto self-center text-xs ${
+            lookupStatus === 'ready'
+              ? 'text-green-700'
+              : lookupStatus === 'error'
+                ? 'text-red-700'
+                : 'text-gray-500'
+          }`}
+        >
+          {lookupStatus === 'loading' && 'Тоолуурын жагсаалт татаж байна...'}
+          {lookupStatus === 'ready' &&
+            `${meterLookupRef.current?.size ?? 0} тоолуур бэлэн (дугаар бичээд Tab/Enter дарвал автоматаар бөглөгдөнө)`}
+          {lookupStatus === 'error' &&
+            'Тоолуурын жагсаалт татагдаагүй. Хуудсыг refresh хийнэ үү.'}
+        </span>
       </div>
 
       <div className="p-4 pt-2 flex-1 min-h-0">
