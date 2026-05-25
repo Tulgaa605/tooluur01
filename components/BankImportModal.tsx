@@ -340,8 +340,6 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
           }`}
         >
           {lookupStatus === 'loading' && 'Тоолуурын жагсаалт татаж байна...'}
-          {lookupStatus === 'ready' &&
-            `${meterLookupRef.current?.size ?? 0} тоолуур бэлэн (дугаар бичээд Tab/Enter дарвал автоматаар бөглөгдөнө)`}
           {lookupStatus === 'error' &&
             'Тоолуурын жагсаалт татагдаагүй. Хуудсыг refresh хийнэ үү.'}
         </span>
