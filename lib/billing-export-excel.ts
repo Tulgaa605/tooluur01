@@ -9,6 +9,7 @@ export const BILLING_EXCEL_HEADER_LABELS = {
   phone: 'Харилцагчийн утас',
   usage: 'Хэрэглээ (м³)',
   total: 'Төлбөр (₮)',
+  previousRemaining: 'Өмнөх үлдэгдэл (₮)',
   paid: 'Төлөгдсөн (₮)',
   remaining: 'Үлдэгдэл (₮)',
 } as const

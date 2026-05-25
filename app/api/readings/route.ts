@@ -283,10 +283,11 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
-    if (!user) {
+    const authedUser = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
+    if (!authedUser) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    const user = authedUser
     const { searchParams } = new URL(request.url)
 
     // USER: өөрийн байгууллага. Нягтлан/захирал: өөрийн алба + бүртгэсэн харилцагч (аль алины заалт харагдана).
@@ -333,6 +334,7 @@ export async function GET(request: NextRequest) {
       : undefined
 
     const shouldRecalculate = searchParams.get('recalculate') === '1'
+    const withCarry = searchParams.get('withCarry') === '1'
 
     const rawReadings = await prisma.meterReading.findMany({
       where,
@@ -344,8 +346,213 @@ export async function GET(request: NextRequest) {
     })
     const readings = await attachOrgsAndMetersToReadings(rawReadings)
 
+    /**
+     * Өмнөх саруудын үлдэгдлийг тухайн (байгууллага, он, сар)-д carryIn болгож хавсаргана.
+     * carryIn(org, period) = period-аас өмнөх бүх заалтын (total − paidAmount) нийлбэр.
+     * Эрх (scope)-ын байгууллагуудын БҮХ заалтыг авч, тоолуурын заалт байхгүй ч өмнөх
+     * үлдэгдэлтэй харилцагч болгонд өнөөгийн (он, сар)-д "сүүдэр" мөр (phantom) үүсгэнэ.
+     */
+    type CarryRow = {
+      organizationId: string
+      year: number
+      month: number
+      total: number
+      paidAmount: number
+    }
+    type CarryData = {
+      byKey: Map<string, number> // `${orgId}|${y}|${m}` -> carry BEFORE that period
+      atFilter: Map<string, number> // orgId -> carry BEFORE (filterYear, filterMonth)
+      orgIds: string[]
+    }
+    async function computeCarry(
+      filterYear: number | null,
+      filterMonth: number | null
+    ): Promise<CarryData> {
+      // scope-ын бүх org-ыг тодорхойлно. Ингэснээр заалтгүй сар дээр ч phantom гарна.
+      let scopeOrgIds: string[] = []
+      if (roleStr === Role.USER && user.organizationId) {
+        scopeOrgIds = [user.organizationId]
+      } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+        const officeOrgId = await ensureOfficeOrganizationId(user)
+        scopeOrgIds = await getScopedOrganizationIds({
+          ...user,
+          organizationId: officeOrgId ?? user.organizationId,
+        })
+      }
+      const byKey = new Map<string, number>()
+      const atFilter = new Map<string, number>()
+      if (scopeOrgIds.length === 0) return { byKey, atFilter, orgIds: [] }
+
+      const allReadings = (await prisma.meterReading.findMany({
+        where: { organizationId: { in: scopeOrgIds } },
+        select: {
+          organizationId: true,
+          year: true,
+          month: true,
+          total: true,
+          paidAmount: true,
+        },
+      })) as CarryRow[]
+
+      const byOrg = new Map<string, CarryRow[]>()
+      for (const r of allReadings) {
+        const list = byOrg.get(r.organizationId) ?? []
+        list.push(r)
+        byOrg.set(r.organizationId, list)
+      }
+
+      for (const [orgId, list] of byOrg) {
+        list.sort((a, b) => (a.year !== b.year ? a.year - b.year : a.month - b.month))
+        let cumulative = 0
+        let prevKey: string | null = null
+        let carryBeforeFilter = 0
+        const filterSet = filterYear != null && filterMonth != null
+        for (const r of list) {
+          const k = `${r.year}|${r.month}`
+          if (k !== prevKey) {
+            byKey.set(`${orgId}|${k}`, Math.round(cumulative * 100) / 100)
+            prevKey = k
+          }
+          const isBeforeFilter =
+            filterSet &&
+            (r.year < (filterYear as number) ||
+              (r.year === filterYear && r.month < (filterMonth as number)))
+          if (isBeforeFilter) {
+            carryBeforeFilter += (Number(r.total) || 0) - (Number(r.paidAmount) || 0)
+          }
+          cumulative += (Number(r.total) || 0) - (Number(r.paidAmount) || 0)
+        }
+        if (filterSet) {
+          atFilter.set(orgId, Math.round(carryBeforeFilter * 100) / 100)
+        }
+      }
+      return { byKey, atFilter, orgIds: scopeOrgIds }
+    }
+
+    function attachCarry<T extends { organizationId: string; year: number; month: number }>(
+      rows: T[],
+      map: Map<string, number>
+    ): Array<T & { previousRemaining: number }> {
+      return rows.map((r) => ({
+        ...r,
+        previousRemaining: map.get(`${r.organizationId}|${r.year}|${r.month}`) ?? 0,
+      }))
+    }
+
+    /**
+     * Шүүсэн (он, сар) дээр заалтгүй ч өмнөх үлдэгдэлтэй харилцагчдад phantom мөр үүсгэнэ.
+     * Phantom мөрөнд: total=0, paidAmount=0, previousRemaining=carry, meter='-', usage=0.
+     */
+    async function buildPhantomRows(
+      data: CarryData,
+      filterYear: number,
+      filterMonth: number,
+      existingKeys: Set<string>
+    ): Promise<Array<Record<string, unknown>>> {
+      const phantomOrgIds: string[] = []
+      for (const [orgId, carry] of data.atFilter) {
+        if (Math.abs(carry) < 0.005) continue
+        const key = `${orgId}|${filterYear}|${filterMonth}`
+        if (existingKeys.has(key)) continue
+        phantomOrgIds.push(orgId)
+      }
+      if (phantomOrgIds.length === 0) return []
+      const orgs = await prisma.organization.findMany({
+        where: { id: { in: phantomOrgIds } },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          category: true,
+          phone: true,
+          users: { where: { phone: { not: null } }, select: { phone: true } },
+        },
+      })
+      const orgMap = new Map(orgs.map((o) => [o.id, o]))
+      const out: Array<Record<string, unknown>> = []
+      for (const orgId of phantomOrgIds) {
+        const o = orgMap.get(orgId)
+        if (!o) continue
+        const carry = data.atFilter.get(orgId) ?? 0
+        out.push({
+          id: `phantom-${orgId}-${filterYear}-${filterMonth}`,
+          organizationId: orgId,
+          organization: {
+            id: o.id,
+            name: o.name,
+            code: o.code,
+            category: o.category,
+            phone: o.phone,
+            users: o.users,
+          },
+          meterId: '',
+          meter: {
+            id: '',
+            meterNumber: '—',
+            billingMode: null,
+            organizationId: orgId,
+            pipeDiameterMm: null,
+            billingCategory: null,
+          },
+          year: filterYear,
+          month: filterMonth,
+          startValue: 0,
+          endValue: 0,
+          usage: 0,
+          heatUsage: 0,
+          baseClean: 0,
+          baseDirty: 0,
+          cleanPerM3: 0,
+          dirtyPerM3: 0,
+          cleanAmount: 0,
+          dirtyAmount: 0,
+          heatBase: 0,
+          heatPerM3: 0,
+          heatPerM2: 0,
+          heatAmount: 0,
+          subtotal: 0,
+          vat: 0,
+          total: 0,
+          paidAmount: 0,
+          previousRemaining: carry,
+          approved: carry <= 0.005,
+          smsSentAt: null,
+          ebarimtStatus: 'PENDING',
+          createdBy: '',
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+          isPhantom: true,
+        })
+      }
+      return out
+    }
+
+    const filterYearNum = year ? parseInt(year) : null
+    const filterMonthNum = month ? parseInt(month) : null
+    const canPhantom =
+      withCarry && filterYearNum != null && filterMonthNum != null
+
     // Хурдны үндсэн горим: хадгалсан дүнг шууд буцаана.
     if (!shouldRecalculate) {
+      if (withCarry) {
+        const carryData = await computeCarry(filterYearNum, filterMonthNum)
+        const attached = attachCarry(readings, carryData.byKey)
+        if (canPhantom) {
+          const existingKeys = new Set(
+            rawReadings
+              .filter((r) => r.year === filterYearNum && r.month === filterMonthNum)
+              .map((r) => `${r.organizationId}|${filterYearNum}|${filterMonthNum}`)
+          )
+          const phantoms = await buildPhantomRows(
+            carryData,
+            filterYearNum as number,
+            filterMonthNum as number,
+            existingKeys
+          )
+          return NextResponse.json([...attached, ...phantoms])
+        }
+        return NextResponse.json(attached)
+      }
       return NextResponse.json(readings)
     }
 
@@ -410,6 +617,25 @@ export async function GET(request: NextRequest) {
       })
     )
 
+    if (withCarry) {
+      const carryData = await computeCarry(filterYearNum, filterMonthNum)
+      const attached = attachCarry(result, carryData.byKey)
+      if (canPhantom) {
+        const existingKeys = new Set(
+          rawReadings
+            .filter((r) => r.year === filterYearNum && r.month === filterMonthNum)
+            .map((r) => `${r.organizationId}|${filterYearNum}|${filterMonthNum}`)
+        )
+        const phantoms = await buildPhantomRows(
+          carryData,
+          filterYearNum as number,
+          filterMonthNum as number,
+          existingKeys
+        )
+        return NextResponse.json([...attached, ...phantoms])
+      }
+      return NextResponse.json(attached)
+    }
     return NextResponse.json(result)
   } catch (error: any) {
     console.error('Readings GET error:', error)

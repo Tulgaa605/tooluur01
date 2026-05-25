@@ -40,6 +40,10 @@ export async function getWaterTariffRatesForPeriod(
   if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
 
   const categoryForTariffs = effectiveBillingCategory(opts?.billingCategory, org.category)
+  // Тоолуурт өөрийн billingCategory тогтоосон бол түүний тариф (CategoryTariff)-аар тооцно;
+  // байгууллагын сарын тариф (OrganizationTariff) уг тоолуурт хамаарахгүй.
+  const meterCategoryOverride =
+    opts?.billingCategory != null && String(opts.billingCategory).trim().length > 0
 
   let baseClean = 0
   let baseDirty = 0
@@ -67,18 +71,20 @@ export async function getWaterTariffRatesForPeriod(
     }
   }
 
-  const orgTariff = await prisma.organizationTariff.findUnique({
-    where: { organizationId_year_month: { organizationId, year, month } },
-    select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
-  })
-  if (orgTariff) {
-    if (Number.isNaN(pipeDiam)) {
-      baseClean = orgTariff.baseCleanFee ?? 0
-      baseDirty = orgTariff.baseDirtyFee ?? 0
+  if (!meterCategoryOverride) {
+    const orgTariff = await prisma.organizationTariff.findUnique({
+      where: { organizationId_year_month: { organizationId, year, month } },
+      select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
+    })
+    if (orgTariff) {
+      if (Number.isNaN(pipeDiam)) {
+        baseClean = orgTariff.baseCleanFee ?? 0
+        baseDirty = orgTariff.baseDirtyFee ?? 0
+      }
+      cleanPerM3 = orgTariff.cleanPerM3 ?? 0
+      dirtyPerM3 = orgTariff.dirtyPerM3 ?? 0
+      return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
     }
-    cleanPerM3 = orgTariff.cleanPerM3 ?? 0
-    dirtyPerM3 = orgTariff.dirtyPerM3 ?? 0
-    return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
   }
 
   const catRow = await prisma.categoryTariff.findUnique({
@@ -116,16 +122,21 @@ export async function getHeatTariffRatesForPeriod(
   if (!org) return { heatBase: 0, heatPerM3: 0, heatPerM2: 0 }
 
   const categoryForTariffs = effectiveBillingCategory(opts?.billingCategory, org.category)
+  // Тоолуурт өөрийн billingCategory тогтоосон бол сонгосон төрлийн тарифыг шууд ашиглана.
+  const meterCategoryOverride =
+    opts?.billingCategory != null && String(opts.billingCategory).trim().length > 0
 
-  const orgTariff = await prisma.organizationTariff.findUnique({
-    where: { organizationId_year_month: { organizationId, year, month } },
-    select: { heatBaseFee: true, heatPerM3: true, heatPerM2: true },
-  })
-  if (orgTariff) {
-    return {
-      heatBase: orgTariff.heatBaseFee ?? 0,
-      heatPerM3: orgTariff.heatPerM3 ?? 0,
-      heatPerM2: orgTariff.heatPerM2 ?? 0,
+  if (!meterCategoryOverride) {
+    const orgTariff = await prisma.organizationTariff.findUnique({
+      where: { organizationId_year_month: { organizationId, year, month } },
+      select: { heatBaseFee: true, heatPerM3: true, heatPerM2: true },
+    })
+    if (orgTariff) {
+      return {
+        heatBase: orgTariff.heatBaseFee ?? 0,
+        heatPerM3: orgTariff.heatPerM3 ?? 0,
+        heatPerM2: orgTariff.heatPerM2 ?? 0,
+      }
     }
   }
 

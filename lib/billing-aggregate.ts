@@ -20,6 +20,8 @@ export type BillingAggregatableReading = {
   heatAmount?: number
   paidAmount?: number | null
   approved?: boolean
+  /** Өмнөх саруудын үлдэгдэл (бүх тоолуурын ижил утгатай — нэгтгэгдсэн мөрөнд адил утга) */
+  previousRemaining?: number | null
   smsSentAt?: string | Date | null
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
@@ -98,6 +100,7 @@ function mergeOrgBillingGroup<T extends BillingAggregatableReading>(group: T[]):
     heatAmount: sumNum(group, (r) => Number(r.heatAmount ?? 0)),
     paidAmount: sumNum(group, (r) => Number(r.paidAmount ?? 0)),
     approved: group.every((r) => !!r.approved),
+    previousRemaining: Number(group[0]?.previousRemaining ?? 0) || 0,
     smsSentAt: group.find((r) => !!r.smsSentAt)?.smsSentAt ?? null,
     ...ebarimt,
     meter: {
@@ -152,6 +155,10 @@ export function readingIdsForBillingRow(row: {
   aggregatedReadingIds?: string[]
 }): string[] {
   if (row.aggregatedReadingIds?.length) return row.aggregatedReadingIds
-  if (row.id && !String(row.id).startsWith('agg-')) return [row.id]
+  if (row.id) {
+    const s = String(row.id)
+    // 'agg-...' нэгтгэсэн мөр, 'phantom-...' заалтгүй (carry only) мөр — DB-д заалтын ID биш.
+    if (!s.startsWith('agg-') && !s.startsWith('phantom-')) return [row.id]
+  }
   return []
 }

@@ -53,7 +53,26 @@ export default async function PublicOrgBillingBreakdownPage(props: {
     orderBy: { meter: { meterNumber: 'asc' } },
   })
 
-  if (readings.length === 0) notFound()
+  // Өмнөх үлдэгдэл: Σ(total − paidAmount) where (year, month) < (this year, month)
+  const priorReadings = await prisma.meterReading.findMany({
+    where: {
+      organizationId,
+      OR: [
+        { year: { lt: year } },
+        { year, month: { lt: month } },
+      ],
+    },
+    select: { total: true, paidAmount: true },
+  })
+  const previousRemainingRaw = priorReadings.reduce(
+    (acc, r) => acc + (Number(r.total) || 0) - (Number(r.paidAmount) || 0),
+    0
+  )
+  const previousRemaining = Math.round(previousRemainingRaw * 100) / 100
+
+  // Заалт байхгүй ч өмнөх үлдэгдэлтэй бол phantom хуудас үзүүлнэ;
+  // тэр ч үгүй бол хуудас байхгүй.
+  if (readings.length === 0 && Math.abs(previousRemaining) < 0.005) notFound()
 
   const lines: ReadingBreakdownLine[] = []
   for (const r of readings) {
@@ -63,7 +82,11 @@ export default async function PublicOrgBillingBreakdownPage(props: {
   const totalUsage = lines.reduce((a, l) => a + l.usage, 0)
   const totalBill = lines.reduce((a, l) => a + l.total, 0)
   const totalPaid = lines.reduce((a, l) => a + l.paid, 0)
-  const totalRemaining = lines.reduce((a, l) => a + l.remaining, 0)
+  // Энэ сарын төлбөр + өмнөх үлдэгдэл − энэ сард төлсөн = одоогийн нийт үлдэгдэл
+  const totalRemaining = Math.max(
+    0,
+    Math.round((previousRemaining + totalBill - totalPaid) * 100) / 100
+  )
   const totalSubtotal = lines.reduce((a, l) => a + l.subtotal, 0)
   const totalVat = lines.reduce((a, l) => a + l.vat, 0)
 
@@ -143,33 +166,49 @@ export default async function PublicOrgBillingBreakdownPage(props: {
         <div className="rounded-lg border border-gray-300 bg-gray-50 p-5 shadow-sm">
           <h2 className="text-base font-semibold text-gray-900 mb-3">Нийт дүн</h2>
           <div className="space-y-2 text-sm">
+            {lines.length > 0 ? (
+              <>
+                <div className="flex justify-between gap-3">
+                  <span className="text-gray-700">Нийт хэрэглээ</span>
+                  <span className="font-semibold">{formatUsage(totalUsage)} м³</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-gray-700">Нийт (НӨАТ-гүй)</span>
+                  <span>{formatMoney(totalSubtotal)} ₮</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-gray-700">НӨАТ</span>
+                  <span>{formatMoney(totalVat)} ₮</span>
+                </div>
+                <div className="flex justify-between gap-3 font-medium">
+                  <span>Тухайн сарын төлбөр</span>
+                  <span>{formatMoney(totalBill)} ₮</span>
+                </div>
+              </>
+            ) : null}
             <div className="flex justify-between gap-3">
-              <span className="text-gray-700">Нийт хэрэглээ</span>
-              <span className="font-semibold">{formatUsage(totalUsage)} м³</span>
+              <span className="text-gray-700">Өмнөх үлдэгдэл</span>
+              <span className={previousRemaining < 0 ? 'text-green-700' : 'text-gray-900'}>
+                {formatMoney(previousRemaining)} ₮
+              </span>
             </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-700">Нийт (НӨАТ-гүй)</span>
-              <span>{formatMoney(totalSubtotal)} ₮</span>
-            </div>
-            <div className="flex justify-between gap-3">
-              <span className="text-gray-700">НӨАТ</span>
-              <span>{formatMoney(totalVat)} ₮</span>
-            </div>
-            <div className="flex justify-between gap-3 text-base font-semibold">
+            <div className="flex justify-between gap-3 text-base font-semibold pt-1 border-t border-gray-200">
               <span>Нийт төлөх дүн</span>
-              <span>{formatMoney(totalBill)} ₮</span>
+              <span>{formatMoney(totalBill + previousRemaining)} ₮</span>
             </div>
             <div className="flex justify-between gap-3">
               <span className="text-gray-700">Төлөгдсөн</span>
               <span>{formatMoney(totalPaid)} ₮</span>
             </div>
-            <div className="flex justify-between gap-3">
+            <div className="flex justify-between gap-3 font-semibold">
               <span className="text-gray-700">Үлдэгдэл</span>
               <span>{formatMoney(totalRemaining)} ₮</span>
             </div>
             <div className="flex justify-between gap-3 pt-1">
               <span className="text-gray-700">Төлөв</span>
-              <span className="font-semibold">{paymentStatusLabel(totalBill, totalPaid)}</span>
+              <span className="font-semibold">
+                {paymentStatusLabel(totalBill + previousRemaining, totalPaid)}
+              </span>
             </div>
           </div>
         </div>

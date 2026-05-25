@@ -53,6 +53,8 @@ interface BillingRow {
   usage: number
   total: number
   paidStored: number
+  /** Өмнөх саруудаас шилжсэн үлдэгдэл (carry-forward) */
+  previousRemaining: number
   approved: boolean
   ebarimtStatus?: string | null
   ebarimtBillId?: string | null
@@ -95,16 +97,23 @@ function effectivePaid(row: Pick<BillingRow, 'paidStored'>): number {
   return roundMoneyLocal(Number(row.paidStored ?? 0) || 0)
 }
 
-function remainingBalance(row: Pick<BillingRow, 'paidStored' | 'total'>): number {
+function remainingBalance(
+  row: Pick<BillingRow, 'paidStored' | 'total' | 'previousRemaining'>
+): number {
   const t = Number(row.total ?? 0) || 0
-  return Math.max(0, roundMoneyLocal(t - effectivePaid(row)))
+  const prev = Number(row.previousRemaining ?? 0) || 0
+  return Math.max(0, roundMoneyLocal(prev + t - effectivePaid(row)))
 }
 
-function isPaidInFull(row: Pick<BillingRow, 'paidStored' | 'total'>): boolean {
+function isPaidInFull(
+  row: Pick<BillingRow, 'paidStored' | 'total' | 'previousRemaining'>
+): boolean {
   return remainingBalance(row) <= PAY_EPS
 }
 
-function paymentStatusForExport(row: Pick<BillingRow, 'paidStored' | 'total'>): string {
+function paymentStatusForExport(
+  row: Pick<BillingRow, 'paidStored' | 'total' | 'previousRemaining'>
+): string {
   if (isPaidInFull(row)) return 'Бүрэн төлөгдсөн'
   if (effectivePaid(row) > PAY_EPS) return 'Хэсэгчлэн төлөгдсөн'
   return 'Хүлээгдэж буй'
@@ -172,6 +181,7 @@ export default function BillingContent() {
         usage: Number(r.usage ?? 0) || 0,
         total: Number(r.total ?? 0) || 0,
         paidStored: Number(r.paidAmount ?? 0) || 0,
+        previousRemaining: Number((r as { previousRemaining?: number }).previousRemaining ?? 0) || 0,
         approved: !!r.approved,
         ebarimtStatus: r.ebarimtStatus ?? 'PENDING',
         ebarimtBillId: r.ebarimtBillId ?? null,
@@ -219,6 +229,7 @@ export default function BillingContent() {
       if (filterMonth) params.append('month', filterMonth)
       params.append('limit', '3000')
       params.append('recalculate', '1')
+      params.append('withCarry', '1')
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -317,16 +328,27 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
   const handleSendNotification = useCallback(
     async (row: MonthlyReadingRow) => {
       const ids = readingIdsForBillingRow(row)
-      if (ids.length === 0) return
-      setSending(row.id ?? ids[0])
+      const isPhantom = String(row.id ?? '').startsWith('phantom-')
+      if (ids.length === 0 && !isPhantom) return
+      setSending(row.id ?? ids[0] ?? `phantom-${row.organizationId}`)
       try {
+        const body: Record<string, unknown> = {
+          fromPhone: senderPhone.trim(),
+        }
+        if (ids.length > 0) {
+          body.readingIds = ids
+        } else if (isPhantom) {
+          // Заалтгүй харилцагч → зөвхөн өмнөх үлдэгдлийн SMS илгээнэ.
+          body.phantom = {
+            organizationId: String(row.organizationId ?? '').trim(),
+            year: Number(row.year),
+            month: Number(row.month),
+          }
+        }
         const res = await fetchWithAuth('/api/notifications/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            readingIds: ids,
-            fromPhone: senderPhone.trim(),
-          }),
+          body: JSON.stringify(body),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
@@ -447,13 +469,26 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
     try {
       let okCount = 0
       for (const row of filteredBillingRows) {
+        const isPhantom = String(row.id ?? '').startsWith('phantom-')
+        const body: Record<string, unknown> = {
+          fromPhone: senderPhone.trim(),
+        }
+        if (row.readingIds && row.readingIds.length > 0) {
+          body.readingIds = row.readingIds
+        } else if (isPhantom) {
+          // Phantom мөр (заалтгүй ч өмнөх үлдэгдэлтэй) — phantom payload илгээнэ.
+          body.phantom = {
+            organizationId: row.organization?.id ?? '',
+            year: row.year,
+            month: row.month,
+          }
+        } else {
+          continue
+        }
         const res = await fetchWithAuth('/api/notifications/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            readingIds: row.readingIds,
-            fromPhone: senderPhone.trim(),
-          }),
+          body: JSON.stringify(body),
         })
         if (res.ok) okCount += 1
       }
@@ -524,6 +559,7 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
       [H.phone]: r.customerPhones,
       [H.usage]: Number(Number(r.usage ?? 0).toFixed(2)),
       [H.total]: Number(Number(r.total ?? 0).toFixed(2)),
+      [H.previousRemaining]: Number(Number(r.previousRemaining ?? 0).toFixed(2)),
       [H.paid]: Number(effectivePaid(r).toFixed(2)),
       [H.remaining]: Number(remainingBalance(r).toFixed(2)),
     }))

@@ -2290,8 +2290,8 @@ export default function ReadingsContent() {
             />
 
             {/* Modal Panel - төвд байрлуулах */}
-            <div className="relative z-10 w-full max-w-6xl max-h-[90vh] flex flex-col bg-white rounded-lg shadow-xl overflow-hidden">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4 flex flex-col flex-1 overflow-hidden">
+            <div className="relative z-10 w-full max-w-6xl h-[90vh] flex flex-col bg-white rounded-lg shadow-xl overflow-hidden">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4 flex flex-col flex-1 overflow-hidden min-h-0">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-2xl font-semibold text-gray-900">Заалт оруулах</h3>
                   <div className="flex gap-2">
@@ -2402,7 +2402,7 @@ export default function ReadingsContent() {
                 )}
 
                 <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0 w-full">
-                  <div className="ag-theme-alpine w-full" style={{ height: '500px', width: '100%' }}>
+                  <div className="ag-theme-alpine w-full h-full" style={{ width: '100%' }}>
                     <AgGridReact
                       theme="legacy"
                       reactiveCustomComponents

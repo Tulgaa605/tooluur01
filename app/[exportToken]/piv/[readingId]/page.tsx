@@ -136,7 +136,30 @@ export default async function PublicBillingBreakdownPage(props: {
 
   const total = Number(money.total ?? 0) || 0
   const paid = effectivePaid(reading.paidAmount)
-  const remaining = remainingBalance(total, reading.paidAmount)
+
+  // Өмнөх үлдэгдэл: Σ(total − paidAmount) where (year, month) < (this year, month)
+  const priorReadings = await prisma.meterReading.findMany({
+    where: {
+      organizationId: reading.organizationId,
+      OR: [
+        { year: { lt: reading.year } },
+        { year: reading.year, month: { lt: reading.month } },
+      ],
+    },
+    select: { total: true, paidAmount: true },
+  })
+  const previousRemainingRaw = priorReadings.reduce(
+    (acc, r) => acc + (Number(r.total) || 0) - (Number(r.paidAmount) || 0),
+    0
+  )
+  const previousRemaining = Math.round(previousRemainingRaw * 100) / 100
+
+  // Carry-forward: өмнөх үлдэгдэл + тухайн сарын төлбөр − энэ сард төлсөн
+  const remaining = Math.max(
+    0,
+    roundMoneyLocal(previousRemaining + total - paid)
+  )
+  const grandTotal = roundMoneyLocal(previousRemaining + total)
 
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-4">
@@ -181,7 +204,7 @@ export default async function PublicBillingBreakdownPage(props: {
             <div className="rounded-md bg-gray-50 p-3 border border-gray-200">
               <div className="text-gray-600">Төлөв</div>
               <div className="mt-1 text-lg font-semibold text-gray-900">
-                {paymentStatusLabel(total, reading.paidAmount)}
+                {paymentStatusLabel(total + previousRemaining, reading.paidAmount)}
               </div>
             </div>
           </div>
@@ -214,9 +237,19 @@ export default async function PublicBillingBreakdownPage(props: {
               <span className="text-gray-700">НӨАТ дүн</span>
               <span className="text-gray-900">{formatMoney(money.vat)} ₮</span>
             </div>
-            <div className="flex justify-between gap-3 text-base font-semibold">
-              <span className="text-gray-900">Нийт төлөх дүн</span>
+            <div className="flex justify-between gap-3 font-medium">
+              <span className="text-gray-700">Тухайн сарын төлбөр</span>
               <span className="text-gray-900">{formatMoney(total)} ₮</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-gray-700">Өмнөх үлдэгдэл</span>
+              <span className={previousRemaining < 0 ? 'text-green-700' : 'text-gray-900'}>
+                {formatMoney(previousRemaining)} ₮
+              </span>
+            </div>
+            <div className="flex justify-between gap-3 text-base font-semibold pt-1 border-t border-gray-200">
+              <span className="text-gray-900">Нийт төлөх дүн</span>
+              <span className="text-gray-900">{formatMoney(grandTotal)} ₮</span>
             </div>
 
             <div className="my-2 border-t border-gray-200" />
@@ -225,7 +258,7 @@ export default async function PublicBillingBreakdownPage(props: {
               <span className="text-gray-700">Төлөгдсөн</span>
               <span className="text-gray-900">{formatMoney(paid)} ₮</span>
             </div>
-            <div className="flex justify-between gap-3">
+            <div className="flex justify-between gap-3 font-semibold">
               <span className="text-gray-700">Үлдэгдэл</span>
               <span className="text-gray-900">{formatMoney(remaining)} ₮</span>
             </div>

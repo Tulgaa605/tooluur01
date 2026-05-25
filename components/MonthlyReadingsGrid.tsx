@@ -68,6 +68,8 @@ export interface MonthlyReadingRow {
   /** Төлбөрийн хуудас */
   paidAmount?: number | null
   paymentReference?: string | null
+  /** Өмнөх саруудын үлдэгдэл (carry-forward) — сервер тооцоолж буцаана */
+  previousRemaining?: number | null
   /** SMS амжилттай илгээгдсэн → заалт түгжигдэнэ */
   smsSentAt?: string | Date | null
   ebarimtStatus?: string | null
@@ -96,9 +98,19 @@ function rowTotalAmount(row: MonthlyReadingRow | undefined, getTotal: (r: Monthl
   return getTotal(row)
 }
 
+function previousRemainingForRow(row: MonthlyReadingRow | undefined): number {
+  if (!row) return 0
+  if (row.organization?.name === 'Нийт дүн') {
+    return Number((row as { prevRemainingSum?: number }).prevRemainingSum ?? 0) || 0
+  }
+  return roundMoneyLocal(Number(row.previousRemaining ?? 0) || 0)
+}
+
 function remainingForRow(row: MonthlyReadingRow | undefined, getTotal: (r: MonthlyReadingRow | undefined) => number): number {
+  // Carry-forward: өмнөх саруудын үлдэгдэл + тухайн сарын төлбөр − төлөгдсөн дүн
   const t = rowTotalAmount(row, getTotal)
-  return Math.max(0, roundMoneyLocal(t - effectivePaidAmount(row)))
+  const prev = previousRemainingForRow(row)
+  return Math.max(0, roundMoneyLocal(prev + t - effectivePaidAmount(row)))
 }
 
 function isPaidInFullRow(row: MonthlyReadingRow | undefined, getTotal: (r: MonthlyReadingRow | undefined) => number): boolean {
@@ -726,14 +738,30 @@ export default function MonthlyReadingsGrid({
         valueFormatter: (params) => formatMoney(params.value ?? 0),
       },
       {
+        headerName: 'Өмнөх үлдэгдэл (₮)',
+        width: 140,
+        colId: 'previousRemaining',
+        ...numberColStyle,
+        editable: false,
+        valueGetter: (params) => {
+          if (params.data?.organization?.name === 'Нийт дүн') {
+            return rowData.reduce((acc, r) => acc + previousRemainingForRow(r), 0)
+          }
+          return previousRemainingForRow(params.data)
+        },
+        valueFormatter: (params) => formatMoney(params.value ?? 0),
+      },
+      {
         headerName: 'Төлөгдсөн (₮)',
         width: 120,
         colId: 'paidAmount',
         ...numberColStyle,
         // Тайлбар: SMS илгээгдсэн ч төлбөрийн дүнг хүссэн үедээ засах боломжтой.
+        // Phantom мөр (заалтгүй ч өмнөх үлдэгдэлтэй харилцагч) — засах боломжгүй.
         editable: (params) =>
           Boolean(billingActions?.onPaidAmountChange) &&
-          params.data?.organization?.name !== 'Нийт дүн',
+          params.data?.organization?.name !== 'Нийт дүн' &&
+          !String(params.data?.id ?? '').startsWith('phantom-'),
         valueGetter: (params) => {
           if (params.data?.organization?.name === 'Нийт дүн') return Number(params.data?.paidSum ?? 0)
           return effectivePaidAmount(params.data)
@@ -840,6 +868,7 @@ export default function MonthlyReadingsGrid({
           if (!params.data || params.data.organization?.name === 'Нийт дүн' || !billingActions) return null
           const row = params.data
           const id = row.id ?? ''
+          const isPhantom = String(id).startsWith('phantom-')
           return (
             <div className="flex items-center justify-center gap-1 h-full">
               <button
@@ -850,15 +879,17 @@ export default function MonthlyReadingsGrid({
               >
                 <ArrowDownTrayIcon className="h-5 w-5" />
               </button>
-              <button
-                type="button"
-                onClick={() => billingActions.onIssueEbarimt(row)}
-                disabled={billingActions.issuingEbarimtId === id}
-                className="text-indigo-600 hover:text-indigo-900 p-1 rounded hover:bg-indigo-50 disabled:opacity-50"
-                title="E-barimt илгээх"
-              >
-                <span className="text-xs font-semibold">EB</span>
-              </button>
+              {!isPhantom && (
+                <button
+                  type="button"
+                  onClick={() => billingActions.onIssueEbarimt(row)}
+                  disabled={billingActions.issuingEbarimtId === id}
+                  className="text-indigo-600 hover:text-indigo-900 p-1 rounded hover:bg-indigo-50 disabled:opacity-50"
+                  title="E-barimt илгээх"
+                >
+                  <span className="text-xs font-semibold">EB</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => billingActions.onSendSms(row)}
@@ -885,6 +916,7 @@ export default function MonthlyReadingsGrid({
       const usageSum = rowData.reduce((acc, r) => acc + (Number(r.usage ?? 0) || 0), 0)
       const totalSum = rowData.reduce((acc, r) => acc + getRowTotal(r), 0)
       const paidSum = rowData.reduce((acc, r) => acc + effectivePaidAmount(r), 0)
+      const prevRemainingSum = rowData.reduce((acc, r) => acc + previousRemainingForRow(r), 0)
       const remainingSum = rowData.reduce((acc, r) => acc + remainingForRow(r, getRowTotal), 0)
       return [
         {
@@ -892,10 +924,11 @@ export default function MonthlyReadingsGrid({
           usage: usageSum,
           total: totalSum,
           paidSum,
+          prevRemainingSum,
           remainingSum,
           month: 0,
           year: 0,
-        } as MonthlyReadingRow,
+        } as MonthlyReadingRow & { prevRemainingSum: number },
       ]
     }
 

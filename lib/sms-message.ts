@@ -27,6 +27,8 @@ export function buildSmsMessage(input: {
   organizationCode?: string | null
   meterLines: MeterUsageSmsLine[]
   total: number
+  /** Өмнөх саруудаас шилжсэн үлдэгдэл — байвал тусад нь мөр болж харагдана */
+  previousRemaining?: number | null
   breakdownUrl?: string | null
 }): string {
   const orgName = String(input.organizationName ?? '').trim()
@@ -38,15 +40,25 @@ export function buildSmsMessage(input: {
   const url = (input.breakdownUrl ?? '').trim()
   const footer = url ? `Төлбөрийн задаргаа: ${url}` : ''
 
+  const prevRem = Number(input.previousRemaining ?? 0)
+  const prevLine =
+    Number.isFinite(prevRem) && Math.abs(prevRem) >= 1
+      ? `Өмнөх үлдэгдэл: ${Math.round(prevRem).toLocaleString('en-US')}₮`
+      : ''
+
+  const grandTotal =
+    (Number.isFinite(input.total) ? input.total : 0) +
+    (Number.isFinite(prevRem) ? prevRem : 0)
   const totalLine =
-    Number.isFinite(input.total) && input.total > 0
-      ? `Төлбөр: ${Math.round(input.total).toLocaleString('en-US')}₮`
+    Number.isFinite(grandTotal) && grandTotal > 0
+      ? `Төлбөр: ${Math.round(grandTotal).toLocaleString('en-US')}₮`
       : ''
 
   const buildBody = (name: string, code: string, meterText: string) => {
     const parts = [`Нэр: ${name}`]
     if (code) parts.push(`Код: ${code}`)
     if (meterText) parts.push(meterText)
+    if (prevLine) parts.push(prevLine)
     if (totalLine) parts.push(totalLine)
     if (footer) parts.push(footer)
     return parts.join('\n')
