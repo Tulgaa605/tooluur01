@@ -12,6 +12,7 @@ import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { fetchWithAuth } from '@/lib/api'
 import { effectiveBillingCategory, normalizeBillingMode } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -919,9 +920,64 @@ export default function MonthlyReadingsGrid({
     [emptyMessage]
   )
 
+  const [pinMenu, setPinMenu] = useState<{
+    x: number
+    y: number
+    colId: string
+    pinned: 'left' | 'right' | null
+  } | null>(null)
+  const pinMenuRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!pinMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = pinMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setPinMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPinMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [pinMenu])
+
+  const handleHeaderContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!(e.target instanceof HTMLElement)) return
+    const headerCell = e.target.closest('.ag-header-cell') as HTMLElement | null
+    if (!headerCell) return
+    const colId = headerCell.getAttribute('col-id')
+    if (!colId) return
+    e.preventDefault()
+    e.stopPropagation()
+    const api = gridRef.current?.api
+    const column = api?.getColumn(colId)
+    const pinned = (column?.getPinned() as 'left' | 'right' | null) ?? null
+    setPinMenu({ x: e.clientX, y: e.clientY, colId, pinned })
+  }, [])
+
+  const applyPin = useCallback((colId: string, pinned: 'left' | 'right' | null) => {
+    const api = gridRef.current?.api
+    if (!api) return
+    api.applyColumnState({
+      state: [{ colId, pinned }],
+      defaultState: {},
+    })
+    setPinMenu(null)
+  }, [])
+
   return (
     <div className="bg-white rounded-lg border border-gray-200 w-full">
-      <div className="ag-theme-alpine" style={{ height, width: '100%' }}>
+      <div
+        className="ag-theme-alpine"
+        style={{ height, width: '100%' }}
+        onContextMenu={handleHeaderContextMenu}
+      >
         {loading ? (
           <div className="flex items-center justify-center h-full text-gray-600 min-h-[12rem]">
             Ачааллаж байна...
@@ -959,7 +1015,9 @@ export default function MonthlyReadingsGrid({
               sortable: true,
               filter: true,
               resizable: true,
+              lockPinned: false,
             }}
+            localeText={AG_GRID_LOCALE_MN}
             pagination
             paginationPageSize={20}
             domLayout="normal"
@@ -970,6 +1028,54 @@ export default function MonthlyReadingsGrid({
           />
         )}
       </div>
+      {pinMenu && (
+        <div
+          ref={pinMenuRef}
+          style={{
+            position: 'fixed',
+            top: pinMenu.y,
+            left: pinMenu.x,
+            zIndex: 99999,
+            background: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+            padding: 4,
+            minWidth: 180,
+          }}
+        >
+          <div className="px-3 py-1.5 text-xs text-gray-500 border-b border-gray-100 mb-1">
+            Багана түгжих
+          </div>
+          <button
+            type="button"
+            onClick={() => applyPin(pinMenu.colId, 'left')}
+            className={`w-full px-3 py-1.5 text-left text-sm rounded-md hover:bg-gray-50 ${
+              pinMenu.pinned === 'left' ? 'text-primary-700 font-medium' : 'text-gray-900'
+            }`}
+          >
+            {pinMenu.pinned === 'left' ? '✓ ' : ''}Зүүнд түгжих
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPin(pinMenu.colId, 'right')}
+            className={`w-full px-3 py-1.5 text-left text-sm rounded-md hover:bg-gray-50 ${
+              pinMenu.pinned === 'right' ? 'text-primary-700 font-medium' : 'text-gray-900'
+            }`}
+          >
+            {pinMenu.pinned === 'right' ? '✓ ' : ''}Баруунд түгжих
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPin(pinMenu.colId, null)}
+            className={`w-full px-3 py-1.5 text-left text-sm rounded-md hover:bg-gray-50 ${
+              pinMenu.pinned === null ? 'text-primary-700 font-medium' : 'text-gray-900'
+            }`}
+          >
+            {pinMenu.pinned === null ? '✓ ' : ''}Түгжихгүй
+          </button>
+        </div>
+      )}
     </div>
   )
 }

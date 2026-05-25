@@ -17,6 +17,7 @@ import {
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
 
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -2411,7 +2412,9 @@ export default function ReadingsContent() {
                         sortable: true,
                         filter: true,
                         resizable: true,
+                        lockPinned: false,
                       }}
+                      localeText={AG_GRID_LOCALE_MN}
                       onGridReady={(e) => e.api.sizeColumnsToFit()}
                       onCellValueChanged={handleCellValueChanged}
                       suppressContextMenu={true}
@@ -2562,7 +2565,9 @@ export default function ReadingsContent() {
                   sortable: true,
                   filter: true,
                   resizable: true,
+                  lockPinned: false,
                 }}
+                localeText={AG_GRID_LOCALE_MN}
                 onCellValueChanged={handleCellValueChanged}
                 pagination={true}
                 paginationPageSize={20}

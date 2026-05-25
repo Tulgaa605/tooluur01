@@ -10,7 +10,7 @@ import {
 } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
-import { DocumentArrowUpIcon, PlusIcon } from '@heroicons/react/24/outline'
+import { DocumentArrowUpIcon, PlusIcon, ClipboardIcon } from '@heroicons/react/24/outline'
 import {
   BILLING_EXCEL_REQUIRED_HEADERS,
   billingGridRowsToImportPayload,
@@ -20,6 +20,7 @@ import {
   parseBillingExportFromClipboard,
   type BillingExcelGridRow,
 } from '@/lib/billing-export-excel'
+import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -39,6 +40,8 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
   const [rows, setRows] = useState<BillingExcelGridRow[]>(() => createEmptyBillingGridRows(8))
   const [pasteHint, setPasteHint] = useState<string | null>(null)
   const [gridKey, setGridKey] = useState(0)
+  const [pasteMenu, setPasteMenu] = useState<{ x: number; y: number } | null>(null)
+  const pasteMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     setRows(createEmptyBillingGridRows(8))
@@ -46,44 +49,38 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
     setGridKey((k) => k + 1)
   }, [])
 
-  const syncRemaining = (row: BillingExcelGridRow): BillingExcelGridRow => {
-    const total = parseFloat(String(row.total ?? '').replace(/,/g, '')) || 0
-    const paid = parseFloat(String(row.paidAmount ?? '').replace(/,/g, '')) || 0
-    const rem = Math.max(0, Math.round((total - paid) * 100) / 100)
-    return { ...row, remaining: Number.isFinite(rem) ? String(rem) : '' }
-  }
+  useEffect(() => {
+    if (!pasteMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = pasteMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setPasteMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPasteMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [pasteMenu])
 
   const columnDefs = useMemo<ColDef<BillingExcelGridRow>[]>(
     () => [
-      { headerName: 'Он', field: 'year', width: 72 },
-      { headerName: 'Сар', field: 'month', width: 64 },
-      { headerName: 'Байгууллага', field: 'organizationName', flex: 1, minWidth: 120 },
-      { headerName: 'Тоолуур', field: 'meterNumber', width: 110 },
-      { headerName: 'Харилцагчийн утас', field: 'customerPhone', width: 130 },
-      {
-        headerName: 'Хэрэглээ (м³)',
-        field: 'usage',
-        width: 110,
-        cellClass: 'ag-right-aligned-cell',
-      },
-      {
-        headerName: 'Төлбөр (₮)',
-        field: 'total',
-        width: 110,
-        cellClass: 'ag-right-aligned-cell',
-      },
+      { headerName: 'Он', field: 'year', flex: 1, minWidth: 80 },
+      { headerName: 'Сар', field: 'month', flex: 1, minWidth: 80 },
+      { headerName: 'Байгууллага', field: 'organizationName', flex: 1, minWidth: 140 },
+      { headerName: 'Тоолуур', field: 'meterNumber', flex: 1, minWidth: 120 },
+      { headerName: 'Харилцагчийн утас', field: 'customerPhone', flex: 1, minWidth: 140 },
       {
         headerName: 'Төлөгдсөн (₮)',
         field: 'paidAmount',
-        width: 110,
+        flex: 1,
+        minWidth: 140,
         cellClass: 'ag-right-aligned-cell',
-      },
-      {
-        headerName: 'Үлдэгдэл (₮)',
-        field: 'remaining',
-        width: 110,
-        editable: false,
-        cellClass: 'ag-right-aligned-cell ag-cell-readonly',
       },
     ],
     []
@@ -92,16 +89,12 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
   const handleCellValueChanged = useCallback((e: CellValueChangedEvent<BillingExcelGridRow>) => {
     const field = e.colDef?.field as keyof BillingExcelGridRow | undefined
     const id = e.data?.id
-    if (!id || !field || field === 'id' || field === 'remaining') return
+    if (!id || !field || field === 'id') return
 
     const newVal = e.newValue != null ? String(e.newValue) : ''
 
     setRows((prev) =>
-      prev.map((r) => {
-        if (r.id !== id) return r
-        const next = syncRemaining({ ...r, [field]: newVal })
-        return next
-      })
+      prev.map((r) => (r.id === id ? { ...r, [field]: newVal } : r))
     )
   }, [])
 
@@ -116,23 +109,19 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
     }
     const stamp = Date.now()
     setRows(
-      parsed.map((r, i) =>
-        syncRemaining({
-          ...r,
-          id: `${source}-${i}-${stamp}`,
-          year: String(r.year ?? ''),
-          month: String(r.month ?? ''),
-          organizationName: String(r.organizationName ?? ''),
-          meterNumber: String(r.meterNumber ?? ''),
-          customerPhone: String(r.customerPhone ?? ''),
-          usage: String(r.usage ?? ''),
-          total: String(r.total ?? ''),
-          paidAmount: String(r.paidAmount ?? ''),
-        })
-      )
+      parsed.map((r, i) => ({
+        id: `${source}-${i}-${stamp}`,
+        year: String(r.year ?? ''),
+        month: String(r.month ?? ''),
+        organizationName: String(r.organizationName ?? ''),
+        meterNumber: String(r.meterNumber ?? ''),
+        customerPhone: String(r.customerPhone ?? ''),
+        usage: String(r.usage ?? ''),
+        total: String(r.total ?? ''),
+        paidAmount: String(r.paidAmount ?? ''),
+        remaining: String(r.remaining ?? ''),
+      }))
     )
-    setGridKey((k) => k + 1)
-    setPasteHint(`${parsed.length} мөр нэмэгдлээ. Нүдний дарж засварлана. «Хадгалах» дарна уу.`)
   }, [])
 
   const applyPasteText = useCallback(
@@ -157,6 +146,30 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
     },
     [applyPasteText]
   )
+
+  const handleClipboardPaste = useCallback(async () => {
+    setPasteMenu(null)
+    try {
+      if (!navigator.clipboard?.readText) {
+        setPasteHint('Browser-ийн clipboard зөвшөөрөл байхгүй. Ctrl+V дарна уу.')
+        return
+      }
+      const text = await navigator.clipboard.readText()
+      if (!text?.trim()) {
+        setPasteHint('Clipboard хоосон байна. Excel-ээс хуулсан өгөгдөл байх ёстой.')
+        return
+      }
+      applyPasteText(text)
+    } catch {
+      setPasteHint('Clipboard уншиж чадсангүй. Ctrl+V дарж шууд буулгана уу.')
+    }
+  }, [applyPasteText])
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setPasteMenu({ x: e.clientX, y: e.clientY })
+  }, [])
 
   const addRow = () => {
     setRows((prev) => [
@@ -199,7 +212,15 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
     <div
       className="bg-white rounded-lg border border-gray-200 w-full overflow-hidden flex flex-col"
       onPaste={handleWrapperPaste}
+      onContextMenu={handleContextMenu}
     >
+      {pasteHint && (
+        <div className="px-4 pt-3 shrink-0">
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            {pasteHint}
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 px-4 py-3 border-b border-gray-100 bg-gray-50 shrink-0">
         <button
@@ -247,7 +268,9 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
               filter: false,
               resizable: true,
               editable: !saving,
+              lockPinned: false,
             }}
+            localeText={AG_GRID_LOCALE_MN}
             onCellValueChanged={handleCellValueChanged}
             singleClickEdit
             stopEditingWhenCellsLoseFocus
@@ -276,6 +299,33 @@ export default function BankImportModal({ year, month, saving, onClose, onSave }
           {saving ? 'Хадгалж байна...' : 'Хадгалах'}
         </button>
       </div>
+
+      {pasteMenu && (
+        <div
+          ref={pasteMenuRef}
+          style={{
+            position: 'fixed',
+            top: pasteMenu.y,
+            left: pasteMenu.x,
+            zIndex: 99999,
+            background: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+            padding: 6,
+            minWidth: 220,
+          }}
+        >
+          <button
+            type="button"
+            onClick={handleClipboardPaste}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
+          >
+            <ClipboardIcon className="h-4 w-4" />
+            Excel-ээс буулгах (Paste)
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -20,8 +20,7 @@ function formatMeterLine(m: MeterUsageSmsLine): string {
 }
 
 /**
- * Нэг SMS текст — нэр, тоолуур/хэрэглээ, төлбөр, задаргааны холбоос.
- * API нэг удаа дуудагдана; олон SMS болгон хуваахгүй.
+ * Нэг SMS текст — нэр, код, тоолуур/хэрэглээ, төлбөр, задаргааны холбоос.
  */
 export function buildSmsMessage(input: {
   organizationName: string
@@ -30,7 +29,8 @@ export function buildSmsMessage(input: {
   total: number
   breakdownUrl?: string | null
 }): string {
-  const orgRaw = `${input.organizationName}${input.organizationCode ? ` (${input.organizationCode})` : ''}`
+  const orgName = String(input.organizationName ?? '').trim()
+  const orgCode = String(input.organizationCode ?? '').trim()
   const sortedMeters = [...input.meterLines]
     .filter((m) => String(m.meterNumber ?? '').trim())
     .sort((a, b) => String(a.meterNumber).localeCompare(String(b.meterNumber), 'mn'))
@@ -43,8 +43,9 @@ export function buildSmsMessage(input: {
       ? `Төлбөр: ${Math.round(input.total).toLocaleString('en-US')}₮`
       : ''
 
-  const buildBody = (orgName: string, meterText: string) => {
-    const parts = [`Нэр: ${orgName}`]
+  const buildBody = (name: string, code: string, meterText: string) => {
+    const parts = [`Нэр: ${name}`]
+    if (code) parts.push(`Код: ${code}`)
     if (meterText) parts.push(meterText)
     if (totalLine) parts.push(totalLine)
     if (footer) parts.push(footer)
@@ -52,7 +53,7 @@ export function buildSmsMessage(input: {
   }
 
   let meterText = sortedMeters.map(formatMeterLine).join('\n')
-  let message = buildBody(orgRaw, meterText)
+  let message = buildBody(orgName, orgCode, meterText)
 
   const maxLen = 480
   if (message.length <= maxLen) return message
@@ -62,17 +63,16 @@ export function buildSmsMessage(input: {
     const extra = sortedMeters.length - 3
     if (extra > 0) lines.push(`+${extra} тоолуур`)
     meterText = lines.join('\n')
-    message = buildBody(truncateText(orgRaw, 48), meterText)
+    message = buildBody(truncateText(orgName, 48), orgCode, meterText)
   }
 
   if (message.length > maxLen) {
-    const orgShort = truncateText(input.organizationName, 32)
     meterText = sortedMeters.length > 0 ? `${sortedMeters.length} тоолуур` : ''
-    message = buildBody(orgShort, meterText)
+    message = buildBody(truncateText(orgName, 32), truncateText(orgCode, 20), meterText)
   }
 
   if (message.length > maxLen && footer) {
-    const withoutFooter = buildBody(truncateText(orgRaw, 40), meterText)
+    const withoutFooter = buildBody(truncateText(orgName, 40), truncateText(orgCode, 16), meterText)
     const room = maxLen - withoutFooter.length - 1
     if (room > 24) {
       message = `${withoutFooter}\n${truncateText(footer, room)}`

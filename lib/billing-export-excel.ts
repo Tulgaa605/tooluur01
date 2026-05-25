@@ -13,7 +13,17 @@ export const BILLING_EXCEL_HEADER_LABELS = {
   remaining: 'Үлдэгдэл (₮)',
 } as const
 
-export const BILLING_EXCEL_REQUIRED_HEADERS: string[] = Object.values(BILLING_EXCEL_HEADER_LABELS)
+/** Экспортод бүгдийг харуулна, импортод эхний 6-г л шаардана */
+export const BILLING_EXCEL_REQUIRED_HEADERS: string[] = [
+  BILLING_EXCEL_HEADER_LABELS.year,
+  BILLING_EXCEL_HEADER_LABELS.month,
+  BILLING_EXCEL_HEADER_LABELS.organization,
+  BILLING_EXCEL_HEADER_LABELS.meter,
+  BILLING_EXCEL_HEADER_LABELS.phone,
+  BILLING_EXCEL_HEADER_LABELS.paid,
+]
+
+export const BILLING_EXCEL_EXPORT_HEADERS: string[] = Object.values(BILLING_EXCEL_HEADER_LABELS)
 
 export type BillingExcelImportRow = {
   rowIndex: number

@@ -661,28 +661,6 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
       </div>
       {bankImportReport && (bankImportReport.skipped.length > 0 || bankImportReport.applied.length > 0) && (
         <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
-          <div className="flex justify-between items-start gap-2 mb-2">
-            <span className="font-medium text-gray-800">Сүүлийн Excel импортын дэлгэрэнгүй</span>
-            <button
-              type="button"
-              className="text-gray-500 hover:text-gray-800 text-xs"
-              onClick={() => setBankImportReport(null)}
-            >
-              Хаах
-            </button>
-          </div>
-          {bankImportReport.applied.length > 0 && (
-            <ul className="mb-2 text-green-800 space-y-0.5 list-disc list-inside">
-              {bankImportReport.applied.map((a, i) => (
-                <li key={`${a.readingId}-${i}`}>
-                  Мөр {a.rowIndex}
-                  {a.organizationName ? `: ${a.organizationName}` : ''}
-                  {a.meterNumber ? `, тоолуур ${a.meterNumber}` : ''} — төлөгдсөн {formatMoney(a.paidAmount)} ₮ (
-                  нийт {formatMoney(a.total)} ₮)
-                </li>
-              ))}
-            </ul>
-          )}
           {bankImportReport.skipped.length > 0 && (
             <ul className="text-amber-900 space-y-0.5 list-disc list-inside">
               {bankImportReport.skipped.map((s, i) => (
