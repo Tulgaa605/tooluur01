@@ -361,12 +361,47 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
         const breakdownLine = data.breakdownUrl
           ? `\nТөлбөрийн задаргаа: ${data.breakdownUrl}`
           : ''
-        alert(
-          `Төлбөрийн мэдээлэл илгээлээ.\n` +
-            `Илгээгч: ${data.fromPhone || senderPhone.trim()}\n` +
-            `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}` +
-            breakdownLine
-        )
+
+        // SMS провайдерийн үр дүнг шалгаж тодорхой мэдээллээр харуулна.
+        const smsInfo = data.sms as
+          | {
+              provider?: string
+              sentOk?: number
+              sentFailed?: number
+              results?: Array<{ to: string; ok: boolean; error?: string }>
+            }
+          | undefined
+        const okCount = Number(smsInfo?.sentOk ?? 0) || 0
+        const failCount = Number(smsInfo?.sentFailed ?? 0) || 0
+        const provider = String(smsInfo?.provider ?? '')
+
+        if (provider === 'none') {
+          alert(
+            `SMS провайдер тохируулагдаагүй байна.\n` +
+              `Серверийн орчинд UNITEL_SMS_ENC эсвэл SMS_HTTP_URL .env-д нэмнэ үү.\n\n` +
+              `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}` +
+              breakdownLine
+          )
+        } else if (okCount === 0 && failCount > 0) {
+          const errSamples = (smsInfo?.results ?? [])
+            .filter((r) => !r.ok)
+            .slice(0, 3)
+            .map((r) => `• ${r.to}: ${r.error ?? 'тодорхойгүй алдаа'}`)
+            .join('\n')
+          alert(
+            `SMS илгээх амжилтгүй (${failCount} дугаар).\n` +
+              `Провайдер: ${provider}\n\n` +
+              `${errSamples}\n\n` +
+              `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}`
+          )
+        } else {
+          alert(
+            `SMS илгээлээ: ${okCount} амжилттай${failCount > 0 ? `, ${failCount} амжилтгүй` : ''}.\n` +
+              `Илгээгч: ${data.fromPhone || senderPhone.trim()}\n` +
+              `Хүлээн авагч: ${toPhones || 'Утас бүртгэгдээгүй'}` +
+              breakdownLine
+          )
+        }
         // SMS илгээснээр уг заалт түгжигдсэн тул UI-г шинэчилнэ
         await reloadReadings()
       } catch (err: unknown) {

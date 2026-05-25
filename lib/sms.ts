@@ -34,22 +34,52 @@ async function sendUnitel(toE164: string, message: string): Promise<void> {
   if (!to) throw new Error('Буруу утасны дугаар')
 
   const url = `https://pn.unitel.mn/api/message/send/sms?enc=${encodeURIComponent(enc)}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to, message }),
-  })
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, message }),
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[SMS][unitel] fetch failed', { to, error: msg })
+    throw new Error(`Unitel fetch: ${msg}`)
+  }
 
   const raw = await res.text()
+  // Серверийн логонд бодит хариуг үлдээнэ — тохиргооны асуудлыг хурдан илрүүлэхийн тулд.
+  console.log('[SMS][unitel] response', {
+    to,
+    status: res.status,
+    bodyPreview: raw.slice(0, 300),
+  })
   if (!res.ok) {
-    throw new Error(raw.slice(0, 500) || `Unitel SMS ${res.status}`)
+    throw new Error(`Unitel SMS ${res.status}: ${raw.slice(0, 300) || 'хариу хоосон'}`)
   }
   const t = raw.trim()
   if (!t.startsWith('{') && !t.startsWith('[')) return
   try {
-    const j = JSON.parse(t) as { success?: boolean; status?: string; error?: string; message?: string }
-    if (j.success === false || String(j.status || '').toLowerCase() === 'error') {
-      throw new Error(j.error || j.message || 'Unitel: амжилтгүй')
+    const j = JSON.parse(t) as {
+      success?: boolean
+      status?: string
+      error?: string
+      message?: string
+      code?: number | string
+      desc?: string
+      result?: string
+    }
+    const statusStr = String(j.status ?? j.result ?? '').toLowerCase()
+    const isFailure =
+      j.success === false ||
+      statusStr === 'error' ||
+      statusStr === 'fail' ||
+      statusStr === 'failed' ||
+      (j.code != null && String(j.code) !== '0' && String(j.code) !== '200')
+    if (isFailure) {
+      const errMsg =
+        j.error || j.desc || j.message || `Unitel: ${statusStr || 'амжилтгүй'} (code ${j.code ?? '-'})`
+      throw new Error(errMsg)
     }
   } catch (e) {
     if (e instanceof SyntaxError) return
