@@ -2119,7 +2119,7 @@ export default function ReadingsContent() {
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
-        return Number(params.value).toFixed(2)
+        return formatMoney(params.value)
       },
     },
   ], [
