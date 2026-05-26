@@ -22,6 +22,9 @@ type OrgCustomerCategory =
   | 'TRANSPORT_RECEPTION'
   | 'WATER_POINT'
 
+/** Тоолуур тус бүрт сонгогдох тарифын ангилал: байгууллагын төрөл + айл өрхийн тариф */
+type MeterBillingCategory = OrgCustomerCategory | 'HOUSEHOLD'
+
 const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
   ORGANIZATION: 'Төсөвт байгууллага',
   BUSINESS: 'Аж ахуйн нэгж',
@@ -29,6 +32,8 @@ const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
   TRANSPORT_RECEPTION: 'Зөөврөөр хүлээн авах',
   WATER_POINT: 'Ус түгээх байр',
 }
+
+const HOUSEHOLD_CATEGORY_LABEL = 'Иргэн, хувь хүн'
 
 function isOrgCustomerCategory(s: string | null | undefined): s is OrgCustomerCategory {
   return (
@@ -40,8 +45,12 @@ function isOrgCustomerCategory(s: string | null | undefined): s is OrgCustomerCa
   )
 }
 
+function isMeterBillingCategory(s: string | null | undefined): s is MeterBillingCategory {
+  return s === 'HOUSEHOLD' || isOrgCustomerCategory(s)
+}
+
 function customerTypeLabel(category: string | null | undefined): string {
-  if (!category || category === 'HOUSEHOLD') return 'Иргэн, хувь хүн'
+  if (!category || category === 'HOUSEHOLD') return HOUSEHOLD_CATEGORY_LABEL
   if (isOrgCustomerCategory(category)) return ORG_CUSTOMER_CATEGORY_LABELS[category]
   return category
 }
@@ -78,7 +87,7 @@ type OwnerType = '' | 'organization' | 'household'
 
 type MeterFormState = {
   ownerType: OwnerType
-  orgCustomerCategory: '' | OrgCustomerCategory
+  orgCustomerCategory: '' | MeterBillingCategory
   meterNumber: string
   defaultHeatM3M2: string
   organizationId: string
@@ -93,18 +102,27 @@ const ORG_CUSTOMER_CATEGORY_KEYS = Object.keys(
   ORG_CUSTOMER_CATEGORY_LABELS
 ) as OrgCustomerCategory[]
 
-function customerCategorySelectOptions(
-  placeholder: string,
-  includeHouseholdStandard = false
-) {
+type CustomerCategoryOptionsConfig = {
+  /** Placeholder сонголтын текст ('' value-тэй).  */
+  placeholder?: string
+  /** Айл өрхийн тарифыг 'Иргэн, хувь хүн (стандарт тариф)' гэж '' value-р үзүүлэх (айл өрхийн харилцагч сонгох үеэр). */
+  householdStandardPlaceholder?: boolean
+  /** Айл өрхийн тарифыг тусдаа 'HOUSEHOLD' value-тай сонголтоор нэмэх (байгууллагын харилцагч сонгох үеэр). */
+  includeHouseholdOverride?: boolean
+}
+
+function customerCategorySelectOptions(config: CustomerCategoryOptionsConfig) {
   const opts: { value: string; label: string }[] = []
-  if (includeHouseholdStandard) {
-    opts.push({ value: '', label: 'Иргэн, хувь хүн (стандарт тариф)' })
+  if (config.householdStandardPlaceholder) {
+    opts.push({ value: '', label: `${HOUSEHOLD_CATEGORY_LABEL} (стандарт тариф)` })
   } else {
-    opts.push({ value: '', label: placeholder })
+    opts.push({ value: '', label: config.placeholder ?? 'Сонгох...' })
   }
   for (const k of ORG_CUSTOMER_CATEGORY_KEYS) {
     opts.push({ value: k, label: ORG_CUSTOMER_CATEGORY_LABELS[k] })
+  }
+  if (config.includeHouseholdOverride) {
+    opts.push({ value: 'HOUSEHOLD', label: HOUSEHOLD_CATEGORY_LABEL })
   }
   return opts
 }
@@ -403,13 +421,18 @@ export default function MetersContent() {
       meter.billingCategory,
       co?.category ?? meter.organization?.category
     )
+    const ownerType: OwnerType = inHousehold ? 'household' : 'organization'
+    let orgCustomerCategory: '' | MeterBillingCategory
+    if (ownerType === 'household') {
+      orgCustomerCategory = ''
+    } else if (isMeterBillingCategory(eff)) {
+      orgCustomerCategory = eff
+    } else {
+      orgCustomerCategory = defaultOrgCustomerCategory(co)
+    }
     setForm({
-      ownerType: inHousehold ? 'household' : 'organization',
-      orgCustomerCategory: isOrgCustomerCategory(eff)
-        ? eff
-        : inHousehold
-          ? ''
-          : defaultOrgCustomerCategory(co),
+      ownerType,
+      orgCustomerCategory,
       meterNumber: meter.meterNumber,
       defaultHeatM3M2:
         meter.defaultHeatUsage != null && Number(meter.defaultHeatUsage) > 0
@@ -597,24 +620,34 @@ export default function MetersContent() {
                               onChange={(e) =>
                                 setForm((prev) => ({
                                   ...prev,
-                                  orgCustomerCategory: e.target.value as OrgCustomerCategory | '',
+                                  orgCustomerCategory: e.target.value as MeterBillingCategory | '',
                                 }))
                               }
                               className="w-full px-3 py-2 border border-gray-300 rounded-md"
                               required={Boolean(form.organizationId)}
                             >
                               {!form.organizationId
-                                ? customerCategorySelectOptions('Эхлээд байгууллага сонгоно уу').map((o) => (
+                                ? customerCategorySelectOptions({
+                                    placeholder: 'Эхлээд байгууллага сонгоно уу',
+                                  }).map((o) => (
                                     <option key={o.value || 'placeholder'} value={o.value}>
                                       {o.label}
                                     </option>
                                   ))
-                                : customerCategorySelectOptions('Сонгох...').map((o) => (
+                                : customerCategorySelectOptions({
+                                    placeholder: 'Сонгох...',
+                                    includeHouseholdOverride: true,
+                                  }).map((o) => (
                                     <option key={o.value || 'pick'} value={o.value}>
                                       {o.label}
                                     </option>
                                   ))}
                             </select>
+                            {form.orgCustomerCategory === 'HOUSEHOLD' && (
+                              <p className="mt-1 text-xs text-gray-500">
+                                Тоолуурын төлбөр иргэн, хувь хүний тарифаар бодогдоно.
+                              </p>
+                            )}
                           </>
                         )}
                         {form.ownerType === 'household' && (
@@ -650,18 +683,22 @@ export default function MetersContent() {
                               onChange={(e) =>
                                 setForm((prev) => ({
                                   ...prev,
-                                  orgCustomerCategory: e.target.value as OrgCustomerCategory | '',
+                                  orgCustomerCategory: e.target.value as MeterBillingCategory | '',
                                 }))
                               }
                               className="w-full px-3 py-2 border border-gray-300 rounded-md"
                             >
                               {!form.organizationId
-                                ? customerCategorySelectOptions('Эхлээд иргэн, хувь хүн сонгоно уу').map((o) => (
+                                ? customerCategorySelectOptions({
+                                    placeholder: 'Эхлээд иргэн, хувь хүн сонгоно уу',
+                                  }).map((o) => (
                                     <option key={o.value || 'placeholder'} value={o.value}>
                                       {o.label}
                                     </option>
                                   ))
-                                : customerCategorySelectOptions('', true).map((o) => (
+                                : customerCategorySelectOptions({
+                                    householdStandardPlaceholder: true,
+                                  }).map((o) => (
                                     <option key={o.value || 'household'} value={o.value}>
                                       {o.label}
                                     </option>

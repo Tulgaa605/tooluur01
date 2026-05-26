@@ -28,15 +28,20 @@ const METER_BILLING_CATEGORIES = [
   'TRANSPORT_DISPOSAL',
   'TRANSPORT_RECEPTION',
   'WATER_POINT',
+  'HOUSEHOLD',
 ] as const
 
 function parseMeterBillingCategory(
   raw: unknown,
-  _orgCategory?: string | null | undefined
+  orgCategory?: string | null | undefined
 ): string | null {
   const s = typeof raw === 'string' ? raw.trim().toUpperCase() : ''
-  if (!s || s === 'HOUSEHOLD') return null
-  return (METER_BILLING_CATEGORIES as readonly string[]).includes(s) ? s : null
+  if (!s) return null
+  if (!(METER_BILLING_CATEGORIES as readonly string[]).includes(s)) return null
+  // Хэрэв тоолуурын төрөл нь байгууллагын төрөлтэй ижил бол давталт хадгалахгүй (override шаардлагагүй).
+  const orgCat = String(orgCategory ?? '').trim().toUpperCase()
+  if (orgCat && s === orgCat) return null
+  return s
 }
 
 function parseWaterChargeSplit(raw: unknown, billingMode: string): string | null {

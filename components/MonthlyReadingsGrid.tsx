@@ -10,8 +10,7 @@ import {
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { fetchWithAuth } from '@/lib/api'
-import { effectiveBillingCategory, normalizeBillingMode } from '@/lib/meter-reading-calc-core'
-import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import { normalizeBillingMode } from '@/lib/meter-reading-calc-core'
 import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
 
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -142,6 +141,8 @@ export type BillingGridActions = {
   onIssueEbarimt: (row: MonthlyReadingRow) => void
   /** Inline төлбөр засах */
   onPaidAmountChange?: (row: MonthlyReadingRow, newPaid: number) => Promise<void> | void
+  /** 4-р сард жилийн нээлтийн үлдэгдэлийг засах */
+  onOpeningBalanceChange?: (row: MonthlyReadingRow, newAmount: number) => Promise<void> | void
   sendingId?: string | null
   issuingEbarimtId?: string | null
 }
@@ -150,34 +151,6 @@ interface Organization {
   id: string
   name: string
   category?: string
-}
-
-interface OrganizationTariff {
-  id: string
-  organizationId: string
-  year: number
-  month: number
-  baseCleanFee: number
-  baseDirtyFee: number
-  cleanPerM3: number
-  dirtyPerM3: number
-  heatBaseFee?: number
-  heatPerM3?: number
-  heatPerM2?: number
-  organization?: { id: string; category?: string }
-}
-
-interface CategoryTariff {
-  id: string
-  kind: 'category'
-  category: string
-  baseCleanFee: number
-  baseDirtyFee: number
-  cleanPerM3: number
-  dirtyPerM3: number
-  heatBaseFee?: number
-  heatPerM3?: number
-  heatPerM2?: number
 }
 
 interface Meter {
@@ -282,8 +255,6 @@ export default function MonthlyReadingsGrid({
   const gridRef = useRef<AgGridReact>(null)
   const [organizations, setOrganizations] = useState<Organization[]>([])
   const [allMeters, setAllMeters] = useState<Meter[]>([])
-  const [tariffs, setTariffs] = useState<OrganizationTariff[]>([])
-  const [categoryTariffs, setCategoryTariffs] = useState<CategoryTariff[]>([])
 
   const numberColStyle = useMemo(
     () => ({
@@ -303,58 +274,11 @@ export default function MonthlyReadingsGrid({
   }, [])
 
   useEffect(() => {
-    fetchWithAuth('/api/tariffs?includeCategory=1')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setTariffs(data.filter((t: { kind?: string }) => !t?.kind) as OrganizationTariff[])
-          setCategoryTariffs(data.filter((t: { kind?: string }) => t?.kind === 'category') as CategoryTariff[])
-        }
-      })
-      .catch(() => {
-        setTariffs([])
-        setCategoryTariffs([])
-      })
-  }, [])
-
-  useEffect(() => {
     fetchWithAuth('/api/meters')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setAllMeters(Array.isArray(data) ? (data as Meter[]) : []))
       .catch(() => setAllMeters([]))
   }, [])
-
-  const latestOrgTariffByOrgId = useMemo(() => {
-    const byOrg = new Map<string, OrganizationTariff>()
-    const score = (t: OrganizationTariff) => (Number(t.year) || 0) * 100 + (Number(t.month) || 0)
-    for (const t of tariffs) {
-      const orgId = t.organizationId
-      if (!orgId) continue
-      const existing = byOrg.get(orgId)
-      if (!existing || score(t) > score(existing)) byOrg.set(orgId, t)
-    }
-    return byOrg
-  }, [tariffs])
-
-  const latestOrgTariffByCategory = useMemo(() => {
-    const byCategory = new Map<string, OrganizationTariff>()
-    const score = (t: OrganizationTariff) => (Number(t.year) || 0) * 100 + (Number(t.month) || 0)
-    for (const t of tariffs) {
-      const category = t.organization?.category
-      if (!category) continue
-      const existing = byCategory.get(category)
-      if (!existing || score(t) > score(existing)) byCategory.set(category, t)
-    }
-    return byCategory
-  }, [tariffs])
-
-  const latestCategoryTariffByCategory = useMemo(() => {
-    const byCategory = new Map<string, CategoryTariff>()
-    for (const t of categoryTariffs) {
-      if (t.category && !byCategory.has(t.category)) byCategory.set(t.category, t)
-    }
-    return byCategory
-  }, [categoryTariffs])
 
   const heatQtyForDisplay = useCallback((r: MonthlyReadingRow | undefined): number | null => {
     if (!r || !readingRowUsesHeat(r)) return null
@@ -363,84 +287,35 @@ export default function MonthlyReadingsGrid({
     return 0
   }, [])
 
+  /**
+   * Дулааны дүнг сервер талын тухайн (он, сар)-ийн тарифт тулгуурлан тооцсон утгыг шууд харуулна
+   * ингэснээр Сарын заалт ба Төлбөрийн хуудас зөрүүтэй болохгүй.
+   *
+   * Өмнөх client-side fallback (latestOrgTariffByOrgId зэргийг ашиглах) нь сүүлийн сарын тарифыг
+   * хуучин заалтанд хэрэглэснээс зөрүү гарч байсан.
+   */
   const getTariffHeatDisplayAmount = useCallback(
     (r: MonthlyReadingRow | undefined): number => {
       if (!r || !readingRowUsesHeat(r)) return 0
-      if (!showCalculated) return Number(r.heatAmount ?? 0) || 0
-      const billingMode = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
-      const heatQty =
-        billingMode === 'HEAT' || billingMode === 'WATER_HEAT'
-          ? Number(r.heatUsage ?? r.usage ?? 0) || 0
-          : 0
-      const orgId = r.organizationId
-      const category = effectiveBillingCategory(
-        r.meter?.billingCategory,
-        r.organization?.category ?? organizations.find((o) => o.id === orgId)?.category ?? 'HOUSEHOLD'
-      )
-
-      let heatBase = r.heatBase ?? 0
-      let heatPerM3 = r.heatPerM3 ?? 0
-      let heatPerM2 = r.heatPerM2 ?? 0
-
-      let tariff: OrganizationTariff | CategoryTariff | undefined
-      if (orgId) tariff = latestOrgTariffByOrgId.get(orgId)
-      if (!tariff && category) {
-        tariff =
-          latestCategoryTariffByCategory.get(category) ?? latestOrgTariffByCategory.get(category)
-      }
-
-      if (tariff) {
-        heatBase = tariff.heatBaseFee ?? 0
-        heatPerM3 = tariff.heatPerM3 ?? 0
-        heatPerM2 = tariff.heatPerM2 ?? 0
-      }
-
-      const cat = String(category ?? '').toUpperCase()
-      let perM3 = Number(heatPerM3) || 0
-      let perM2 = Number(heatPerM2) || 0
-      if (perM3 === 0 && perM2 === 0 && cat) {
-        const d = heatDefaultsForCategory(cat)
-        perM3 = Number(d.heatPerM3) || 0
-        perM2 = Number(d.heatPerM2) || 0
-      }
-      const unitRate =
-        cat === 'HOUSEHOLD' ? (perM2 > 0 ? perM2 : perM3) : perM3 > 0 ? perM3 : perM2
-      return heatQty * (Number(unitRate) || 0) + (Number(heatBase) || 0)
+      return Number(r.heatAmount ?? 0) || 0
     },
-    [
-      latestOrgTariffByOrgId,
-      latestCategoryTariffByCategory,
-      latestOrgTariffByCategory,
-      organizations,
-      showCalculated,
-    ]
+    []
   )
 
+  /**
+   * Subtotal / VAT / Total: сервер талаас (recalculate=1) ирсэн утгыг шууд харуулна.
+   * Билл хуудастай ижил тарифын логик ашиглахаар цуцаагүй (зөрүүгүй болгох).
+   */
   const getDisplaySubtotalVatTotal = useCallback(
     (r: MonthlyReadingRow | undefined): { subtotal: number; vat: number; total: number } => {
       if (!r) return { subtotal: 0, vat: 0, total: 0 }
-      if (r.organization?.name === 'Нийт дүн') {
-        return {
-          subtotal: Number(r.subtotal ?? 0) || 0,
-          vat: Number(r.vat ?? 0) || 0,
-          total: Number(r.total ?? 0) || 0,
-        }
+      return {
+        subtotal: Number(r.subtotal ?? 0) || 0,
+        vat: Number(r.vat ?? 0) || 0,
+        total: Number(r.total ?? 0) || 0,
       }
-      if (!showCalculated) {
-        return {
-          subtotal: Number(r.subtotal ?? 0) || 0,
-          vat: Number(r.vat ?? 0) || 0,
-          total: Number(r.total ?? 0) || 0,
-        }
-      }
-      const clean = Number(r.cleanAmount ?? 0) || 0
-      const dirty = Number(r.dirtyAmount ?? 0) || 0
-      const heat = getTariffHeatDisplayAmount(r)
-      const subtotal = clean + dirty + heat
-      const vat = subtotal * 0.1
-      return { subtotal, vat, total: subtotal + vat }
     },
-    [getTariffHeatDisplayAmount, showCalculated]
+    []
   )
 
   const allReadingColumnDefs: ColDef<MonthlyReadingRow>[] = useMemo(
@@ -742,14 +617,44 @@ export default function MonthlyReadingsGrid({
         width: 140,
         colId: 'previousRemaining',
         ...numberColStyle,
-        editable: false,
+        // Зөвхөн 4-р сарын мөр + billing variant + handler байгаа үед засаж болно.
+        editable: (params) =>
+          Boolean(billingActions?.onOpeningBalanceChange) &&
+          params.data?.organization?.name !== 'Нийт дүн' &&
+          Number(params.data?.month) === 4,
         valueGetter: (params) => {
           if (params.data?.organization?.name === 'Нийт дүн') {
             return rowData.reduce((acc, r) => acc + previousRemainingForRow(r), 0)
           }
           return previousRemainingForRow(params.data)
         },
+        valueParser: (params) => {
+          const raw = params.newValue
+          if (raw == null || raw === '') return 0
+          const n =
+            typeof raw === 'number'
+              ? raw
+              : parseFloat(String(raw).replace(/,/g, '').replace(/₮/g, '').trim())
+          return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
+        },
+        valueSetter: (params) => {
+          if (!params.data) return false
+          const n = Number(params.newValue ?? 0)
+          ;(params.data as MonthlyReadingRow).previousRemaining = Number.isFinite(n) ? n : 0
+          return true
+        },
         valueFormatter: (params) => formatMoney(params.value ?? 0),
+        cellStyle: (params) => {
+          const base = { textAlign: 'right' as const }
+          if (
+            billingActions?.onOpeningBalanceChange &&
+            params.data?.organization?.name !== 'Нийт дүн' &&
+            Number(params.data?.month) === 4
+          ) {
+            return { ...base, backgroundColor: '#fff7ed' }
+          }
+          return base
+        },
       },
       {
         headerName: 'Төлөгдсөн (₮)',
@@ -1084,6 +989,17 @@ export default function MonthlyReadingsGrid({
                 const newPaid = Number(e.newValue ?? 0)
                 if (Number.isFinite(newPaid) && newPaid >= 0) {
                   void billingActions.onPaidAmountChange(e.data, newPaid)
+                }
+              }
+              if (
+                e.colDef.colId === 'previousRemaining' &&
+                billingActions?.onOpeningBalanceChange &&
+                e.data &&
+                Number(e.data.month) === 4
+              ) {
+                const newAmount = Number(e.newValue ?? 0)
+                if (Number.isFinite(newAmount) && newAmount >= 0) {
+                  void billingActions.onOpeningBalanceChange(e.data, newAmount)
                 }
               }
             }}

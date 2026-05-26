@@ -362,8 +362,14 @@ export async function GET(request: NextRequest) {
     type CarryData = {
       byKey: Map<string, number> // `${orgId}|${y}|${m}` -> carry BEFORE that period
       atFilter: Map<string, number> // orgId -> carry BEFORE (filterYear, filterMonth)
+      openingByOrgYear: Map<string, number> // `${orgId}|${year}` -> opening balance
       orgIds: string[]
     }
+    /** Нээлтийн үлдэгдэл 4-р сард шилждэг тул "carry-event" хэрхэн оруулахыг тооцно. */
+    type CarryEvent =
+      | { kind: 'opening'; year: number; month: number; amount: number }
+      | { kind: 'reading'; year: number; month: number; total: number; paid: number }
+
     async function computeCarry(
       filterYear: number | null,
       filterMonth: number | null
@@ -381,18 +387,37 @@ export async function GET(request: NextRequest) {
       }
       const byKey = new Map<string, number>()
       const atFilter = new Map<string, number>()
-      if (scopeOrgIds.length === 0) return { byKey, atFilter, orgIds: [] }
+      const openingByOrgYear = new Map<string, number>()
+      if (scopeOrgIds.length === 0) {
+        return { byKey, atFilter, openingByOrgYear, orgIds: [] }
+      }
 
-      const allReadings = (await prisma.meterReading.findMany({
-        where: { organizationId: { in: scopeOrgIds } },
-        select: {
-          organizationId: true,
-          year: true,
-          month: true,
-          total: true,
-          paidAmount: true,
-        },
-      })) as CarryRow[]
+      const [allReadings, allOpenings] = await Promise.all([
+        prisma.meterReading.findMany({
+          where: { organizationId: { in: scopeOrgIds } },
+          select: {
+            organizationId: true,
+            year: true,
+            month: true,
+            total: true,
+            paidAmount: true,
+          },
+        }) as Promise<CarryRow[]>,
+        prisma.organizationOpeningBalance.findMany({
+          where: { organizationId: { in: scopeOrgIds } },
+          select: { organizationId: true, year: true, amount: true },
+        }),
+      ])
+
+      const openingByOrg = new Map<string, Map<number, number>>()
+      for (const o of allOpenings) {
+        const amount = Math.max(0, Number(o.amount) || 0)
+        if (amount <= 0) continue
+        const map = openingByOrg.get(o.organizationId) ?? new Map<number, number>()
+        map.set(o.year, amount)
+        openingByOrg.set(o.organizationId, map)
+        openingByOrgYear.set(`${o.organizationId}|${o.year}`, amount)
+      }
 
       const byOrg = new Map<string, CarryRow[]>()
       for (const r of allReadings) {
@@ -401,32 +426,63 @@ export async function GET(request: NextRequest) {
         byOrg.set(r.organizationId, list)
       }
 
+      // Opening balance-тэй ч заалтгүй org-ыг ч тооцоонд оруулна.
+      for (const orgId of openingByOrg.keys()) {
+        if (!byOrg.has(orgId)) byOrg.set(orgId, [])
+      }
+
+      const filterSet = filterYear != null && filterMonth != null
+
       for (const [orgId, list] of byOrg) {
-        list.sort((a, b) => (a.year !== b.year ? a.year - b.year : a.month - b.month))
+        const orgOpenings = openingByOrg.get(orgId) ?? new Map<number, number>()
+
+        const events: CarryEvent[] = list.map((r) => ({
+          kind: 'reading',
+          year: r.year,
+          month: r.month,
+          total: Number(r.total) || 0,
+          paid: Number(r.paidAmount) || 0,
+        }))
+        for (const [year, amount] of orgOpenings) {
+          events.push({ kind: 'opening', year, month: 4, amount })
+        }
+
+        // Нэг (year, month) дотор: opening event эхэнд (тиймээс 4-р сарын reading-ын carry-д opening нэмэгдэнэ).
+        events.sort((a, b) => {
+          if (a.year !== b.year) return a.year - b.year
+          if (a.month !== b.month) return a.month - b.month
+          if (a.kind === b.kind) return 0
+          return a.kind === 'opening' ? -1 : 1
+        })
+
         let cumulative = 0
         let prevKey: string | null = null
         let carryBeforeFilter = 0
-        const filterSet = filterYear != null && filterMonth != null
-        for (const r of list) {
-          const k = `${r.year}|${r.month}`
-          if (k !== prevKey) {
-            byKey.set(`${orgId}|${k}`, Math.round(cumulative * 100) / 100)
-            prevKey = k
-          }
+
+        for (const ev of events) {
           const isBeforeFilter =
             filterSet &&
-            (r.year < (filterYear as number) ||
-              (r.year === filterYear && r.month < (filterMonth as number)))
-          if (isBeforeFilter) {
-            carryBeforeFilter += (Number(r.total) || 0) - (Number(r.paidAmount) || 0)
+            (ev.year < (filterYear as number) ||
+              (ev.year === filterYear && ev.month < (filterMonth as number)))
+          if (ev.kind === 'reading') {
+            const k = `${ev.year}|${ev.month}`
+            if (k !== prevKey) {
+              byKey.set(`${orgId}|${k}`, Math.round(cumulative * 100) / 100)
+              prevKey = k
+            }
+            if (isBeforeFilter) carryBeforeFilter += ev.total - ev.paid
+            cumulative += ev.total - ev.paid
+          } else {
+            // Opening event: 4-р сараас өмнө биш тул байх ёсгүй, гэхдээ шалгана.
+            if (isBeforeFilter) carryBeforeFilter += ev.amount
+            cumulative += ev.amount
           }
-          cumulative += (Number(r.total) || 0) - (Number(r.paidAmount) || 0)
         }
         if (filterSet) {
           atFilter.set(orgId, Math.round(carryBeforeFilter * 100) / 100)
         }
       }
-      return { byKey, atFilter, orgIds: scopeOrgIds }
+      return { byKey, atFilter, openingByOrgYear, orgIds: scopeOrgIds }
     }
 
     function attachCarry<T extends { organizationId: string; year: number; month: number }>(
@@ -449,16 +505,28 @@ export async function GET(request: NextRequest) {
       filterMonth: number,
       existingKeys: Set<string>
     ): Promise<Array<Record<string, unknown>>> {
-      const phantomOrgIds: string[] = []
+      const phantomOrgIds = new Set<string>()
+      // Шилжүүлэгдэх carry бүхий org-ууд (хуучин үлдэгдэлтэй)
       for (const [orgId, carry] of data.atFilter) {
         if (Math.abs(carry) < 0.005) continue
         const key = `${orgId}|${filterYear}|${filterMonth}`
         if (existingKeys.has(key)) continue
-        phantomOrgIds.push(orgId)
+        phantomOrgIds.add(orgId)
       }
-      if (phantomOrgIds.length === 0) return []
+      // 4-р сараас хойш filter байгаа бол тухайн жилийн нээлтийн үлдэгдэлтэй org-ыг ч phantom болгоно.
+      if (filterMonth >= 4) {
+        for (const [k, amount] of data.openingByOrgYear) {
+          const [orgId, yStr] = k.split('|')
+          if (!orgId || Number(yStr) !== filterYear) continue
+          if (amount <= 0.005) continue
+          const key = `${orgId}|${filterYear}|${filterMonth}`
+          if (existingKeys.has(key)) continue
+          phantomOrgIds.add(orgId)
+        }
+      }
+      if (phantomOrgIds.size === 0) return []
       const orgs = await prisma.organization.findMany({
-        where: { id: { in: phantomOrgIds } },
+        where: { id: { in: Array.from(phantomOrgIds) } },
         select: {
           id: true,
           name: true,
@@ -473,7 +541,13 @@ export async function GET(request: NextRequest) {
       for (const orgId of phantomOrgIds) {
         const o = orgMap.get(orgId)
         if (!o) continue
-        const carry = data.atFilter.get(orgId) ?? 0
+        const prior = data.atFilter.get(orgId) ?? 0
+        // Filter month >= 4 бол тухайн жилийн opening-г нэмж carry-г харуулна.
+        const opening =
+          filterMonth >= 4
+            ? data.openingByOrgYear.get(`${orgId}|${filterYear}`) ?? 0
+            : 0
+        const carry = Math.round((prior + opening) * 100) / 100
         out.push({
           id: `phantom-${orgId}-${filterYear}-${filterMonth}`,
           organizationId: orgId,

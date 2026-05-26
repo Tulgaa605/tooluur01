@@ -3,31 +3,9 @@ import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { getScopedOrganizationIds } from '@/lib/org-scope'
-import {
-  type BillingMode,
-  applyWaterChargeSplitToWaterRates,
-  computeReadingMoney,
-  computeReadingMoneySplit,
-  effectiveBillingCategory,
-  effectiveWaterChargeSplit,
-  getHeatTariffRatesForPeriod,
-  getWaterTariffRatesForPeriod,
-  normalizeBillingMode,
-  type WaterTariffRates,
-} from '@/lib/meter-reading-calc'
+import { type BillingMode, normalizeBillingMode } from '@/lib/meter-reading-calc'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
-
-function waterTariffAdjustedForMeter(
-  raw: WaterTariffRates,
-  billingMode: BillingMode,
-  waterChargeSplit: string | null | undefined
-): WaterTariffRates {
-  return applyWaterChargeSplitToWaterRates(
-    raw,
-    effectiveWaterChargeSplit(waterChargeSplit, billingMode)
-  )
-}
 
 function endReadingChanged(before: unknown, after: unknown): boolean {
   const a = Number(before)
@@ -50,6 +28,22 @@ function parseClientHeatUsage(
   if (!Number.isFinite(n) || n < 0) return undefined
   return Math.round(n * 100) / 100
 }
+
+const ZERO_MONEY = {
+  baseClean: 0,
+  baseDirty: 0,
+  cleanPerM3: 0,
+  dirtyPerM3: 0,
+  cleanAmount: 0,
+  dirtyAmount: 0,
+  heatBase: 0,
+  heatPerM3: 0,
+  heatPerM2: 0,
+  heatAmount: 0,
+  subtotal: 0,
+  vat: 0,
+  total: 0,
+} as const
 
 type BatchItem = {
   id?: string
@@ -131,20 +125,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'items массив шаардлагатай' }, { status: 400 })
     }
 
-    const officeOrgId = await ensureOfficeOrganizationId(user)
-    const office = officeOrgId ?? user.organizationId
-    if (!office) {
-      return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
-    }
-    const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
+    // Adminstrative fetches in parallel.
+    const officeOrgIdPromise = ensureOfficeOrganizationId(user)
     const roleStr = String(user.role)
-    let scopedOrgIdSet: Set<string> | null = null
-    if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-      scopedOrgIdSet = new Set(await getScopedOrganizationIds(scopedUser as any))
-    }
-
     const meterIds = [...new Set(items.map((i) => i.meterId))]
-    const meters = await prisma.meter.findMany({
+    const metersPromise = prisma.meter.findMany({
       where: { id: { in: meterIds } },
       select: {
         id: true,
@@ -156,6 +141,18 @@ export async function POST(request: NextRequest) {
         billingCategory: true,
       },
     })
+    const officeOrgId = await officeOrgIdPromise
+    const office = officeOrgId ?? user.organizationId
+    if (!office) {
+      return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
+    }
+    const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
+    let scopedOrgIdSet: Set<string> | null = null
+    if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+      scopedOrgIdSet = new Set(await getScopedOrganizationIds(scopedUser as any))
+    }
+
+    const meters = await metersPromise
     const meterById = new Map(meters.map((m) => [m.id, m]))
     for (const id of meterIds) {
       if (!meterById.has(id)) {
@@ -163,74 +160,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const claimedOrgs = new Set<string>()
+    // Тоолуурын organization-ийг урьдчилаад зэрэгцүүлэн "claim" хийнэ.
     if (roleStr === Role.ACCOUNTANT) {
-      for (const m of meters) {
-        if (m.organizationId === office) continue
-        if (claimedOrgs.has(m.organizationId)) continue
-        await claimCustomerOrgIfNeeded(office, m.organizationId)
-        claimedOrgs.add(m.organizationId)
-      }
-    }
-
-    const waterTariffCache = new Map<string, Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>>()
-    const heatTariffCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
-    const orgCategoryCache = new Map<string, string>()
-
-    const waterCached = async (
-      organizationId: string,
-      year: number,
-      month: number,
-      pipeDiameterMm: number | null | undefined,
-      meterBillingCategory: string | null | undefined
-    ) => {
-      const orgCat = await orgCatCached(organizationId)
-      const eff = effectiveBillingCategory(meterBillingCategory, orgCat)
-      const pipeKey =
-        pipeDiameterMm != null &&
-        Number.isFinite(Number(pipeDiameterMm)) &&
-        Number(pipeDiameterMm) > 0
-          ? Math.trunc(Number(pipeDiameterMm))
-          : 'org'
-      const k = `${organizationId}|${year}|${month}|${pipeKey}|${eff}`
-      let v = waterTariffCache.get(k)
-      if (!v) {
-        v = await getWaterTariffRatesForPeriod(organizationId, year, month, {
-          pipeDiameterMm:
-            pipeKey === 'org' ? null : pipeKey,
-          billingCategory: meterBillingCategory,
-        })
-        waterTariffCache.set(k, v)
-      }
-      return v
-    }
-    const heatCached = async (
-      organizationId: string,
-      year: number,
-      month: number,
-      meterBillingCategory: string | null | undefined
-    ) => {
-      const orgCat = await orgCatCached(organizationId)
-      const eff = effectiveBillingCategory(meterBillingCategory, orgCat)
-      const k = `${organizationId}|${year}|${month}|${eff}`
-      let v = heatTariffCache.get(k)
-      if (!v) {
-        v = await getHeatTariffRatesForPeriod(organizationId, year, month, {
-          billingCategory: meterBillingCategory,
-        })
-        heatTariffCache.set(k, v)
-      }
-      return v
-    }
-    const orgCatCached = async (organizationId: string) => {
-      if (orgCategoryCache.has(organizationId)) return orgCategoryCache.get(organizationId)!
-      const o = await prisma.organization.findUnique({
-        where: { id: organizationId },
-        select: { category: true },
-      })
-      const c = o?.category ?? 'HOUSEHOLD'
-      orgCategoryCache.set(organizationId, c)
-      return c
+      const claimOrgIds = [
+        ...new Set(meters.map((m) => m.organizationId).filter((id) => id !== office)),
+      ]
+      await Promise.all(claimOrgIds.map((orgId) => claimCustomerOrgIfNeeded(office, orgId)))
     }
 
     const tripleKey = (meterId: string, y: number, m: number) => `${meterId}\t${y}\t${m}`
@@ -267,38 +202,51 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const periodKeys = new Set<string>()
-    for (const it of items) {
-      const m = meterById.get(it.meterId)!
-      const pipeKey =
-        m.pipeDiameterMm != null &&
-        Number.isFinite(Number(m.pipeDiameterMm)) &&
-        Number(m.pipeDiameterMm) > 0
-          ? Math.trunc(Number(m.pipeDiameterMm))
-          : 'org'
-      periodKeys.add(`${m.id}\t${m.organizationId}\t${it.year}\t${it.month}\t${pipeKey}`)
-    }
-    await Promise.all(
-      [...periodKeys].map(async (pk) => {
-        const [meterId, orgId, ys, ms, pipePart] = pk.split('\t')
-        const m = meterById.get(meterId)!
-        const y = Number(ys)
-        const mo = Number(ms)
-        const pipeOpt = pipePart === 'org' ? null : Number(pipePart)
-        await Promise.all([
-          waterCached(orgId, y, mo, pipeOpt, m.billingCategory),
-          heatCached(orgId, y, mo, m.billingCategory),
-        ])
-      })
-    )
-
     const propagateAtEnd = new Map<string, PropagateTask>()
 
     if (items.some((i) => !i.id) && roleStr !== Role.ACCOUNTANT) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    for (const item of items) {
+    // Нэг (meterId, year, month) дээр олон item ирвэл сүүлчийнхийг авна
+    // (зэрэгцээ ажиллахад unique index дээр давхардахаас сэргийлнэ).
+    const dedupedById = new Map<string, BatchItem>()
+    const dedupedByKey = new Map<string, BatchItem>()
+    const orderedItems: BatchItem[] = []
+    for (const it of items) {
+      if (it.id) {
+        dedupedById.set(it.id, it)
+      } else {
+        dedupedByKey.set(tripleKey(it.meterId, it.year, it.month), it)
+      }
+    }
+    // Дарааллыг хадгална (анхны эрэмбэ): id-тай эхний орох, тэгээд key-тэй.
+    const seenIds = new Set<string>()
+    const seenKeys = new Set<string>()
+    for (const it of items) {
+      if (it.id) {
+        if (seenIds.has(it.id)) continue
+        seenIds.add(it.id)
+        orderedItems.push(dedupedById.get(it.id)!)
+      } else {
+        const k = tripleKey(it.meterId, it.year, it.month)
+        if (seenKeys.has(k)) continue
+        seenKeys.add(k)
+        orderedItems.push(dedupedByKey.get(k)!)
+      }
+    }
+
+    type ComputedItem = {
+      item: BatchItem
+      data: Record<string, unknown>
+      mode: 'updateById' | 'updateByKey' | 'create'
+      existingId?: string
+      propagate?: PropagateTask
+    }
+
+    const computed: ComputedItem[] = []
+
+    for (const item of orderedItems) {
       const meter = meterById.get(item.meterId)!
       const billingMode = normalizeBillingMode(meter.billingMode)
       const waterUsage = item.endValue - item.startValue
@@ -335,6 +283,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Зөвхөн хэрэглэгчийн оруулсан утгууд: startValue, endValue, heatUsage, usage.
+      // Мөнгөн дүн (baseClean, total, vat, гэх мэт) бүгд 0 болгож хадгална.
+      // "Бодолт" товч дарах үед сервер талд recalculate=1-ээр тооцоо хийгдэж дэлгэцэнд гарна.
       let heatUsage: number
       let usage: number
       if (item.id && existingById) {
@@ -355,28 +306,11 @@ export async function POST(request: NextRequest) {
         usage = billingMode === 'HEAT' ? heatUsage : waterUsage
       }
 
-      const orgCategory = effectiveBillingCategory(meter.billingCategory, await orgCatCached(meter.organizationId))
-      const pipeForItem =
-        meter.pipeDiameterMm != null &&
-        Number.isFinite(Number(meter.pipeDiameterMm)) &&
-        Number(meter.pipeDiameterMm) > 0
-          ? Math.trunc(Number(meter.pipeDiameterMm))
-          : null
-      const [waterTariffRaw, heatTariff] = await Promise.all([
-        waterCached(meter.organizationId, item.year, item.month, pipeForItem, meter.billingCategory),
-        heatCached(meter.organizationId, item.year, item.month, meter.billingCategory),
-      ])
-      const waterTariff = waterTariffAdjustedForMeter(waterTariffRaw, billingMode, meter.waterChargeSplit)
-      const finalMoney =
-        billingMode === 'WATER_HEAT'
-          ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
-          : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
-
-      const money = finalMoney
-
       if (item.id && existingById) {
-        await prisma.meterReading.update({
-          where: { id: item.id },
+        computed.push({
+          item,
+          mode: 'updateById',
+          existingId: item.id,
           data: {
             month: item.month,
             year: item.year,
@@ -384,37 +318,23 @@ export async function POST(request: NextRequest) {
             endValue: item.endValue,
             heatUsage,
             usage,
-            baseClean: money.baseClean,
-            baseDirty: money.baseDirty,
-            cleanPerM3: money.cleanPerM3,
-            dirtyPerM3: money.dirtyPerM3,
-            cleanAmount: money.cleanAmount,
-            dirtyAmount: money.dirtyAmount,
-            heatBase: money.heatBase,
-            heatPerM3: money.heatPerM3,
-            heatPerM2: money.heatPerM2,
-            heatAmount: money.heatAmount,
-            subtotal: money.subtotal,
-            vat: money.vat,
-            total: money.total,
+            ...ZERO_MONEY,
             updatedByUserId: user.userId,
           },
+          propagate:
+            Number(existingById.year) === Number(item.year) &&
+            Number(existingById.month) === Number(item.month) &&
+            endReadingChanged(existingById.endValue, item.endValue)
+              ? {
+                  meterId: meter.id,
+                  billingMode,
+                  waterChargeSplit: meter.waterChargeSplit,
+                  afterYear: Number(item.year),
+                  afterMonth: Number(item.month),
+                  carriedEnd: Number(item.endValue) || 0,
+                }
+              : undefined,
         })
-
-        const periodChanged =
-          Number(existingById.year) !== Number(item.year) ||
-          Number(existingById.month) !== Number(item.month)
-        const endChanged = endReadingChanged(existingById.endValue, item.endValue)
-        if (!periodChanged && endChanged) {
-          propagateAtEnd.set(meter.id, {
-            meterId: meter.id,
-            billingMode,
-            waterChargeSplit: meter.waterChargeSplit,
-            afterYear: Number(item.year),
-            afterMonth: Number(item.month),
-            carriedEnd: Number(item.endValue) || 0,
-          })
-        }
         continue
       }
 
@@ -422,42 +342,33 @@ export async function POST(request: NextRequest) {
         compoundByKey.get(tripleKey(item.meterId, item.year, item.month)) ?? null
 
       if (existing) {
-        await prisma.meterReading.update({
-          where: { id: existing.id },
+        computed.push({
+          item,
+          mode: 'updateByKey',
+          existingId: existing.id,
           data: {
             startValue: item.startValue,
             endValue: item.endValue,
             heatUsage,
             usage,
-            baseClean: money.baseClean,
-            baseDirty: money.baseDirty,
-            cleanPerM3: money.cleanPerM3,
-            dirtyPerM3: money.dirtyPerM3,
-            cleanAmount: money.cleanAmount,
-            dirtyAmount: money.dirtyAmount,
-            heatBase: money.heatBase,
-            heatPerM3: money.heatPerM3,
-            heatPerM2: money.heatPerM2,
-            heatAmount: money.heatAmount,
-            subtotal: money.subtotal,
-            vat: money.vat,
-            total: money.total,
+            ...ZERO_MONEY,
             updatedByUserId: user.userId,
           },
+          propagate: endReadingChanged(existing.endValue, item.endValue)
+            ? {
+                meterId: meter.id,
+                billingMode,
+                waterChargeSplit: meter.waterChargeSplit,
+                afterYear: Number(item.year),
+                afterMonth: Number(item.month),
+                carriedEnd: Number(item.endValue) || 0,
+              }
+            : undefined,
         })
-        const endChanged = endReadingChanged(existing.endValue, item.endValue)
-        if (endChanged) {
-          propagateAtEnd.set(meter.id, {
-            meterId: meter.id,
-            billingMode,
-            waterChargeSplit: meter.waterChargeSplit,
-            afterYear: Number(item.year),
-            afterMonth: Number(item.month),
-            carriedEnd: Number(item.endValue) || 0,
-          })
-        }
       } else {
-        await prisma.meterReading.create({
+        computed.push({
+          item,
+          mode: 'create',
           data: {
             meterId: item.meterId,
             organizationId: meter.organizationId,
@@ -467,32 +378,44 @@ export async function POST(request: NextRequest) {
             endValue: item.endValue,
             heatUsage,
             usage,
-            baseClean: money.baseClean,
-            baseDirty: money.baseDirty,
-            cleanPerM3: money.cleanPerM3,
-            dirtyPerM3: money.dirtyPerM3,
-            cleanAmount: money.cleanAmount,
-            dirtyAmount: money.dirtyAmount,
-            heatBase: money.heatBase,
-            heatPerM3: money.heatPerM3,
-            heatPerM2: money.heatPerM2,
-            heatAmount: money.heatAmount,
-            subtotal: money.subtotal,
-            vat: money.vat,
-            total: money.total,
+            ...ZERO_MONEY,
             createdBy: user.userId,
             createdByUserId: user.userId,
           },
-        })
-        propagateAtEnd.set(meter.id, {
-          meterId: meter.id,
-          billingMode,
-          waterChargeSplit: meter.waterChargeSplit,
-          afterYear: Number(item.year),
-          afterMonth: Number(item.month),
-          carriedEnd: Number(item.endValue) || 0,
+          propagate: {
+            meterId: meter.id,
+            billingMode,
+            waterChargeSplit: meter.waterChargeSplit,
+            afterYear: Number(item.year),
+            afterMonth: Number(item.month),
+            carriedEnd: Number(item.endValue) || 0,
+          },
         })
       }
+    }
+
+    // Зэрэгцээ долгионоор бичнэ. Wave хэмжээ нь mongo connection pool-той тааруулна.
+    const WRITE_WAVE = 32
+    const savedRows: Array<Awaited<ReturnType<typeof prisma.meterReading.update>>> = []
+    for (let i = 0; i < computed.length; i += WRITE_WAVE) {
+      const slice = computed.slice(i, i + WRITE_WAVE)
+      const rows = await Promise.all(
+        slice.map((c) => {
+          if (c.mode === 'updateById' || c.mode === 'updateByKey') {
+            return prisma.meterReading.update({
+              where: { id: c.existingId! },
+              data: c.data,
+            })
+          }
+          return prisma.meterReading.create({ data: c.data as never })
+        })
+      )
+      for (const r of rows) savedRows.push(r)
+    }
+
+    // Дагуулах ажлууд: тоолуур бүрд хамгийн сүүлд бичигдсэн item-ын мэдээллийг ашиглана.
+    for (const c of computed) {
+      if (c.propagate) propagateAtEnd.set(c.propagate.meterId, c.propagate)
     }
 
     const propTasks = [...propagateAtEnd.values()]
@@ -513,7 +436,47 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    return NextResponse.json({ ok: true, saved: items.length })
+    // Хадгалсан мөрүүдэд харагдах organization, meter relation-ыг хавсаргаж буцаана —
+    // ингэснээр client тал нь дахин fetchReadings хийлгүй гол хүснэгтэндээ шууд оруулна.
+    const savedOrgIds = [...new Set(savedRows.map((r) => r.organizationId))]
+    const savedMeterIdsAll = [...new Set(savedRows.map((r) => r.meterId))]
+    const [orgsForResp, metersForResp] = await Promise.all([
+      savedOrgIds.length
+        ? prisma.organization.findMany({
+            where: { id: { in: savedOrgIds } },
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              category: true,
+              phone: true,
+              users: { where: { phone: { not: null } }, select: { phone: true } },
+            },
+          })
+        : Promise.resolve([]),
+      savedMeterIdsAll.length
+        ? prisma.meter.findMany({
+            where: { id: { in: savedMeterIdsAll } },
+            select: {
+              id: true,
+              meterNumber: true,
+              billingMode: true,
+              waterChargeSplit: true,
+              pipeDiameterMm: true,
+              billingCategory: true,
+            },
+          })
+        : Promise.resolve([]),
+    ])
+    const orgRespMap = new Map(orgsForResp.map((o) => [o.id, o]))
+    const meterRespMap = new Map(metersForResp.map((m) => [m.id, m]))
+    const responseRows = savedRows.map((r) => ({
+      ...r,
+      organization: orgRespMap.get(r.organizationId) ?? null,
+      meter: meterRespMap.get(r.meterId) ?? null,
+    }))
+
+    return NextResponse.json({ ok: true, saved: computed.length, rows: responseRows })
   } catch (error: any) {
     console.error('readings/batch POST error:', error)
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {

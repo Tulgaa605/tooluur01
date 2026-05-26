@@ -481,16 +481,56 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
     [reloadReadings]
   )
 
+  const handleOpeningBalanceChange = useCallback(
+    async (row: MonthlyReadingRow, newAmount: number) => {
+      const orgId = String(row.organization?.id ?? row.organizationId ?? '').trim()
+      const year = Number(row.year)
+      if (!orgId || !Number.isInteger(year) || Number(row.month) !== 4) return
+      try {
+        const res = await fetchWithAuth('/api/readings/opening-balance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            organizationId: orgId,
+            year,
+            amount: Math.max(0, Number(newAmount) || 0),
+          }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Алдаа гарлаа')
+        }
+        setMessage({ type: 'success', text: 'Нээлтийн үлдэгдэл хадгаллаа' })
+        setTimeout(() => setMessage(null), 2500)
+        await reloadReadings()
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Нээлтийн үлдэгдэл хадгалахад алдаа гарлаа'
+        setMessage({ type: 'error', text: msg })
+        setTimeout(() => setMessage(null), 4000)
+      }
+    },
+    [reloadReadings]
+  )
+
   const billingGridActions = useMemo<BillingGridActions>(
     () => ({
       onDownload: handleDownload,
       onSendSms: handleSendNotification,
       onIssueEbarimt: handleIssueEbarimt,
       onPaidAmountChange: handleInlinePaidChange,
+      onOpeningBalanceChange: handleOpeningBalanceChange,
       sendingId: sending,
       issuingEbarimtId: issuingEbarimt,
     }),
-    [handleDownload, handleSendNotification, handleIssueEbarimt, handleInlinePaidChange, sending, issuingEbarimt]
+    [
+      handleDownload,
+      handleSendNotification,
+      handleIssueEbarimt,
+      handleInlinePaidChange,
+      handleOpeningBalanceChange,
+      sending,
+      issuingEbarimt,
+    ]
   )
 
   const handleSendAllNotifications = async () => {

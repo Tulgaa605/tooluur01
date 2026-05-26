@@ -1083,99 +1083,32 @@ export default function ReadingsContent() {
   }, [categoryTariffs])
 
   /**
-   * «Дулаан» (мөнгө): зөрүү × сүүлийн дулааны тариф + суурь.
-   * Мөрөн дээр хадгалагдсан heatPerM3/heatPerM2 ихэнхдээ 0 тул buildOneRow-той ижилээр
-   * байгууллага / төрлийн тарифаас уншина.
+   * Дулааны дүн: сервер талын тухайн (он, сар)-ийн тарифт тулгуурлан тооцсон утгыг шууд харуулна.
+   * Өмнөх client-side хувилбар (latestOrgTariffByOrgId — сүүлийн сарын тариф)-аас болж
+   * Сарын заалт ба Төлбөрийн хуудас зөрүүтэй болж байсан тул сервертэй ижил эх үүсвэрээс авна.
    */
   const getTariffHeatDisplayAmount = useCallback(
     (r: Reading | undefined): number => {
       if (!r || !readingRowUsesHeat(r)) return 0
-      // “Бодолт” дараагүй үед DB-д хадгалсан дулааны дүнг шууд харуулна.
-      if (!showCalculated) return Number(r.heatAmount ?? 0) || 0
-      const billingMode = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
-      // Дулааны дүн: үндсэн хүснэгтийн «м³/м²»-д харагдаж буй утгатай адил (HEAT/WATER_HEAT = heatUsage).
-      const heatQty =
-        billingMode === 'HEAT' || billingMode === 'WATER_HEAT'
-          ? Number(r.heatUsage ?? r.usage ?? 0) || 0
-          : 0
-      const orgId = r.organizationId
-      const category = effectiveBillingCategory(
-        r.meter?.billingCategory,
-        r.organization?.category ?? organizations.find((o) => o.id === orgId)?.category ?? 'HOUSEHOLD'
-      )
-
-      let heatBase = r.heatBase ?? 0
-      let heatPerM3 = r.heatPerM3 ?? 0
-      let heatPerM2 = r.heatPerM2 ?? 0
-
-      let tariff: OrganizationTariff | CategoryTariff | undefined
-      if (orgId) {
-        tariff = latestOrgTariffByOrgId.get(orgId)
-      }
-      if (!tariff && category) {
-        tariff =
-          latestCategoryTariffByCategory.get(category) ?? latestOrgTariffByCategory.get(category)
-      }
-
-      if (tariff) {
-        heatBase = tariff.heatBaseFee ?? 0
-        heatPerM3 = tariff.heatPerM3 ?? 0
-        heatPerM2 = tariff.heatPerM2 ?? 0
-      }
-
-      const cat = String(category ?? '').toUpperCase()
-      let perM3 = Number(heatPerM3) || 0
-      let perM2 = Number(heatPerM2) || 0
-      // Tariff API-г харах эрхгүй (эсвэл DB-д category tariff байхгүй) үед fallback default үнэ.
-      if (perM3 === 0 && perM2 === 0 && cat) {
-        const d = heatDefaultsForCategory(cat)
-        perM3 = Number(d.heatPerM3) || 0
-        perM2 = Number(d.heatPerM2) || 0
-      }
-      const unitRate =
-        cat === 'HOUSEHOLD'
-          ? perM2 > 0
-            ? perM2
-            : perM3
-          : perM3 > 0
-            ? perM3
-            : perM2
-      return heatQty * (Number(unitRate) || 0) + (Number(heatBase) || 0)
+      return Number(r.heatAmount ?? 0) || 0
     },
-    [
-      latestOrgTariffByOrgId,
-      latestCategoryTariffByCategory,
-      latestOrgTariffByCategory,
-      organizations,
-      showCalculated,
-    ],
+    []
   )
 
+  /**
+   * Subtotal / VAT / Total: сервер талаас (recalculate=1) ирсэн утгыг шууд харуулна.
+   * Бодолт товчийг дарсны дараа сервер дахин тооцоход энэ нь Төлбөрийн хуудастай ялгаагүй болно.
+   */
   const getDisplaySubtotalVatTotal = useCallback(
     (r: Reading | undefined): { subtotal: number; vat: number; total: number } => {
       if (!r) return { subtotal: 0, vat: 0, total: 0 }
-      if (r.organization?.name === 'Нийт дүн') {
-        const subtotal = Number(r.subtotal ?? 0) || 0
-        const vat = Number(r.vat ?? 0) || 0
-        const total = Number(r.total ?? 0) || 0
-        return { subtotal, vat, total }
+      return {
+        subtotal: Number(r.subtotal ?? 0) || 0,
+        vat: Number(r.vat ?? 0) || 0,
+        total: Number(r.total ?? 0) || 0,
       }
-      if (!showCalculated) {
-        return {
-          subtotal: Number(r.subtotal ?? 0) || 0,
-          vat: Number(r.vat ?? 0) || 0,
-          total: Number(r.total ?? 0) || 0,
-        }
-      }
-      const clean = Number(r.cleanAmount ?? 0) || 0
-      const dirty = Number(r.dirtyAmount ?? 0) || 0
-      const heat = getTariffHeatDisplayAmount(r)
-      const subtotal = clean + dirty + heat
-      const vat = subtotal * 0.1
-      const total = subtotal + vat
-      return { subtotal, vat, total }
     },
-    [getTariffHeatDisplayAmount, showCalculated]
+    []
   )
 
   const exportReadingsGridXlsx = useCallback(() => {
@@ -1706,6 +1639,65 @@ export default function ReadingsContent() {
         setShowCalculated(false)
         handleCloseAddModal()
 
+        // Сервер хариуны мөрүүдийг local readings-д шууд оруулна — дахин fetchReadings
+        // илгээхгүйгээр гол хүснэгт тэр даруйд шинэчлэгдэнэ.
+        const respRows = Array.isArray((data as { rows?: unknown }).rows)
+          ? ((data as { rows: Array<Record<string, unknown>> }).rows)
+          : []
+        if (respRows.length > 0) {
+          const toNum = (v: unknown): number => {
+            if (v == null || v === '') return 0
+            if (typeof v === 'number') return Number.isFinite(v) ? v : 0
+            if (typeof v === 'object' && v && '$numberDecimal' in (v as any)) {
+              const s = String((v as any).$numberDecimal ?? '').trim()
+              const n = parseFloat(s.replace(',', '.'))
+              return Number.isFinite(n) ? n : 0
+            }
+            const n = parseFloat(String(v).replace(',', '.').trim())
+            return Number.isFinite(n) ? n : 0
+          }
+          const normalized = respRows.map((r) => ({
+            ...r,
+            startValue: toNum((r as any).startValue ?? (r as any).start_value),
+            endValue: toNum((r as any).endValue ?? (r as any).end_value),
+            usage: toNum((r as any).usage),
+            heatUsage: toNum((r as any).heatUsage ?? (r as any).heat_usage),
+            baseClean: toNum((r as any).baseClean ?? (r as any).base_clean),
+            baseDirty: toNum((r as any).baseDirty ?? (r as any).base_dirty),
+            cleanPerM3: toNum((r as any).cleanPerM3 ?? (r as any).clean_per_m3),
+            dirtyPerM3: toNum((r as any).dirtyPerM3 ?? (r as any).dirty_per_m3),
+            cleanAmount: toNum((r as any).cleanAmount ?? (r as any).clean_amount),
+            dirtyAmount: toNum((r as any).dirtyAmount ?? (r as any).dirty_amount),
+            heatBase: toNum((r as any).heatBase ?? (r as any).heat_base),
+            heatPerM3: toNum((r as any).heatPerM3 ?? (r as any).heat_per_m3),
+            heatPerM2: toNum((r as any).heatPerM2 ?? (r as any).heat_per_m2),
+            heatAmount: toNum((r as any).heatAmount ?? (r as any).heat_amount),
+            subtotal: toNum((r as any).subtotal),
+            vat: toNum((r as any).vat),
+            total: toNum((r as any).total),
+          })) as Reading[]
+          setReadings((prev) => {
+            const byId = new Map<string, Reading>()
+            for (const r of prev) if (r.id) byId.set(r.id, r)
+            for (const r of normalized) if (r.id) byId.set(r.id, r)
+            const result: Reading[] = []
+            const usedIds = new Set<string>()
+            for (const r of prev) {
+              if (!r.id) continue
+              const replaced = byId.get(r.id)
+              if (replaced) {
+                result.push(replaced)
+                usedIds.add(r.id)
+              }
+            }
+            // Шинээр үүссэн мөрүүд: prev-д байхгүй id-уудыг нэмнэ.
+            for (const r of normalized) {
+              if (r.id && !usedIds.has(r.id)) result.push(r)
+            }
+            return result
+          })
+        }
+
         if (saveSuccessToastTimeoutRef.current) {
           clearTimeout(saveSuccessToastTimeoutRef.current)
           saveSuccessToastTimeoutRef.current = null
@@ -1717,6 +1709,8 @@ export default function ReadingsContent() {
             saveSuccessToastTimeoutRef.current = null
           }, 2000)
         })
+        // Background-аар нэг удаа sync хийнэ (дагуулсан мөрүүд, бусад өөрчлөлтийг ачаална).
+        // Гол хүснэгт хэрэглэгчид аль хэдийн optimistic-аар шинэчлэгдсэн тул silent.
         void fetchReadings({
           silent: true,
           year: savedYear,

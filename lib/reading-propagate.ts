@@ -1,35 +1,17 @@
 import { prisma } from '@/lib/prisma'
-import {
-  type BillingMode,
-  applyWaterChargeSplitToWaterRates,
-  computeReadingMoney,
-  computeReadingMoneySplit,
-  effectiveBillingCategory,
-  effectiveWaterChargeSplit,
-  getHeatTariffRatesForPeriod,
-  getWaterTariffRatesForPeriod,
-  type WaterTariffRates,
-} from '@/lib/meter-reading-calc'
+import { type BillingMode } from '@/lib/meter-reading-calc'
 
 function periodSortKey(year: number, month: number): number {
   return year * 100 + month
 }
 
-function waterTariffAdjustedForMeter(
-  raw: WaterTariffRates,
-  billingMode: BillingMode,
-  waterChargeSplit: string | null | undefined
-): WaterTariffRates {
-  return applyWaterChargeSplitToWaterRates(
-    raw,
-    effectiveWaterChargeSplit(waterChargeSplit, billingMode)
-  )
-}
-
 /**
  * Тухайн сарын эцсийн заалт өөрчлөгдсөний дараа ижил тоолуурын бүх ДАРААГИЙХ заалтуудыг
- * (сар алгассан ч) дараалан дагуулж шинэчилнө.
- * Тариф / тоолуурын billingCategory + байгууллагын category-г кэшлэж олон сарын дагуулалтыг хурдан болгоно.
+ * (сар алгассан ч) дараалан дагуулж шинэчилнэ.
+ *
+ * Тариф/мөнгөн тооцоолол ХИЙХГҮЙ — энэ зөвхөн `startValue` (хэрэглээний дараалал)-ыг
+ * шинэчилнэ. Мөнгөн дүнг (subtotal/vat/total) "Бодолт" товч дарагдах үед нь
+ * `GET /api/readings?recalculate=1`-аар тооцож харуулна.
  */
 export async function propagateLaterReadingsAfterEndChange(opts: {
   meterId: string
@@ -41,14 +23,12 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
   updatedByUserId: string
 }) {
   const { meterId, billingMode, afterYear, afterMonth, updatedByUserId } = opts
-  const split = opts.waterChargeSplit
   let carried = opts.carriedEnd
 
   const all = await prisma.meterReading.findMany({
     where: { meterId },
     select: {
       id: true,
-      organizationId: true,
       year: true,
       month: true,
       startValue: true,
@@ -63,54 +43,7 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
   const later = all.filter((r) => periodSortKey(r.year, r.month) > anchor)
   if (later.length === 0) return
 
-  const meterRow = await prisma.meter.findUnique({
-    where: { id: meterId },
-    select: { pipeDiameterMm: true, billingCategory: true, organizationId: true },
-  })
-  const orgRow = meterRow?.organizationId
-    ? await prisma.organization.findUnique({
-        where: { id: meterRow.organizationId },
-        select: { category: true },
-      })
-    : null
-  const billingCategoryEffective = effectiveBillingCategory(meterRow?.billingCategory, orgRow?.category)
-
-  const meterPipeMm =
-    meterRow?.pipeDiameterMm != null &&
-    Number.isFinite(Number(meterRow.pipeDiameterMm)) &&
-    Number(meterRow.pipeDiameterMm) > 0
-      ? Math.trunc(Number(meterRow.pipeDiameterMm))
-      : null
-
-  const waterTariffCache = new Map<string, Awaited<ReturnType<typeof getWaterTariffRatesForPeriod>>>()
-  const heatTariffCache = new Map<string, Awaited<ReturnType<typeof getHeatTariffRatesForPeriod>>>()
-
-  const waterCached = async (organizationId: string, year: number, month: number) => {
-    const k = `${organizationId}|${year}|${month}|${meterPipeMm ?? 'org'}|${billingCategoryEffective}`
-    let v = waterTariffCache.get(k)
-    if (!v) {
-      v = await getWaterTariffRatesForPeriod(organizationId, year, month, {
-        pipeDiameterMm: meterPipeMm,
-        billingCategory: meterRow?.billingCategory,
-      })
-      waterTariffCache.set(k, v)
-    }
-    return v
-  }
-  const heatCached = async (organizationId: string, year: number, month: number) => {
-    const k = `${organizationId}|${year}|${month}|${billingCategoryEffective}`
-    let v = heatTariffCache.get(k)
-    if (!v) {
-      v = await getHeatTariffRatesForPeriod(organizationId, year, month, {
-        billingCategory: meterRow?.billingCategory,
-      })
-      heatTariffCache.set(k, v)
-    }
-    return v
-  }
-
   for (const nextReading of later) {
-    const nextPeriod = { year: nextReading.year, month: nextReading.month }
     const nextStartValue = carried
     const prevStart = Number(nextReading.startValue ?? 0)
     const preservedEnd = Number(nextReading.endValue ?? 0)
@@ -128,34 +61,8 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
     const preservedHeat = Number(nextReading.heatUsage ?? 0) || 0
     const heatForSplit = billingMode === 'WATER' ? 0 : preservedHeat
 
-    const [nextWaterRaw, nextHeat] = await Promise.all([
-      waterCached(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
-      heatCached(nextReading.organizationId, nextPeriod.year, nextPeriod.month),
-    ])
-    const nextWater = waterTariffAdjustedForMeter(nextWaterRaw, billingMode, split)
-    const orgCategory = billingCategoryEffective
-
-    const usageForMoney =
-      billingMode === 'HEAT'
-        ? preservedHeat > 0
-          ? preservedHeat
-          : nextUsage
-        : nextUsage
-
-    const nextMoney =
-      billingMode === 'WATER_HEAT'
-        ? computeReadingMoneySplit(
-            nextUsage,
-            heatForSplit,
-            orgCategory,
-            billingMode,
-            nextWater,
-            nextHeat
-          )
-        : computeReadingMoney(usageForMoney, orgCategory, billingMode, nextWater, nextHeat)
-
     const nextHeatStored = billingMode === 'HEAT' || billingMode === 'WATER_HEAT' ? heatForSplit : 0
-    const nextUsageStored = billingMode === 'HEAT' ? usageForMoney : nextUsage
+    const nextUsageStored = billingMode === 'HEAT' ? (preservedHeat > 0 ? preservedHeat : nextUsage) : nextUsage
 
     await prisma.meterReading.update({
       where: { id: nextReading.id },
@@ -164,19 +71,19 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
         endValue: nextEndValue,
         heatUsage: nextHeatStored,
         usage: nextUsageStored,
-        baseClean: nextMoney.baseClean,
-        baseDirty: nextMoney.baseDirty,
-        cleanPerM3: nextMoney.cleanPerM3,
-        dirtyPerM3: nextMoney.dirtyPerM3,
-        heatBase: nextMoney.heatBase,
-        heatPerM3: nextMoney.heatPerM3,
-        heatPerM2: nextMoney.heatPerM2,
-        cleanAmount: nextMoney.cleanAmount,
-        dirtyAmount: nextMoney.dirtyAmount,
-        heatAmount: nextMoney.heatAmount,
-        subtotal: nextMoney.subtotal,
-        vat: nextMoney.vat,
-        total: nextMoney.total,
+        baseClean: 0,
+        baseDirty: 0,
+        cleanPerM3: 0,
+        dirtyPerM3: 0,
+        heatBase: 0,
+        heatPerM3: 0,
+        heatPerM2: 0,
+        cleanAmount: 0,
+        dirtyAmount: 0,
+        heatAmount: 0,
+        subtotal: 0,
+        vat: 0,
+        total: 0,
         updatedByUserId,
       },
     })

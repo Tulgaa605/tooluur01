@@ -35,6 +35,8 @@ model User {
   officePipeFeesUpdated      OfficePipeFee[]    @relation("OfficePipeUpdatedBy")
   categoryTariffsCreated     CategoryTariff[]   @relation("CategoryTariffCreatedBy")
   categoryTariffsUpdated     CategoryTariff[]   @relation("CategoryTariffUpdatedBy")
+  openingBalancesCreated     OrganizationOpeningBalance[] @relation("OrgOpeningBalanceCreatedBy")
+  openingBalancesUpdated     OrganizationOpeningBalance[] @relation("OrgOpeningBalanceUpdatedBy")
 
   @@map("users")
 }
@@ -61,6 +63,7 @@ model Organization {
   readings        MeterReading[]
   tariffs         OrganizationTariff[]
   officePipeFees OfficePipeFee[]
+  openingBalances OrganizationOpeningBalance[]
   createdByUserId String?  @db.ObjectId
   updatedByUserId String?  @db.ObjectId
   createdByUser   User?    @relation("OrganizationCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
@@ -203,6 +206,26 @@ model OfficePipeFee {
 
   @@unique([officeOrganizationId, diameterMm])
   @@map("office_pipe_fees")
+}
+
+/// Жилийн нээлтийн үлдэгдэл (4-р сараас үйлчилнэ).
+/// Тухайн жилийн төлбөрийн carry-forward тооцооллыг 4-р сард энэ дүнгээр эхлүүлнэ.
+model OrganizationOpeningBalance {
+  id              String       @id @default(auto()) @map("_id") @db.ObjectId
+  organizationId  String       @db.ObjectId
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  year            Int
+  amount          Float        @default(0)
+  createdByUserId String?      @db.ObjectId
+  updatedByUserId String?      @db.ObjectId
+  createdByUser   User?        @relation("OrgOpeningBalanceCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser   User?        @relation("OrgOpeningBalanceUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([organizationId, year])
+  @@index([year])
+  @@map("organization_opening_balances")
 }
 
 model CategoryTariff {
