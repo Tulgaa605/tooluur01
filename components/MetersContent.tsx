@@ -18,8 +18,6 @@ interface Organization {
 type OrgCustomerCategory =
   | 'ORGANIZATION'
   | 'BUSINESS'
-  | 'TRANSPORT_DISPOSAL'
-  | 'TRANSPORT_RECEPTION'
   | 'WATER_POINT'
 
 /** Тоолуур тус бүрт сонгогдох тарифын ангилал: байгууллагын төрөл + айл өрхийн тариф */
@@ -28,8 +26,6 @@ type MeterBillingCategory = OrgCustomerCategory | 'HOUSEHOLD'
 const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
   ORGANIZATION: 'Төсөвт байгууллага',
   BUSINESS: 'Аж ахуйн нэгж',
-  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
-  TRANSPORT_RECEPTION: 'Зөөврөөр хүлээн авах',
   WATER_POINT: 'Ус түгээх байр',
 }
 
@@ -39,8 +35,6 @@ function isOrgCustomerCategory(s: string | null | undefined): s is OrgCustomerCa
   return (
     s === 'ORGANIZATION' ||
     s === 'BUSINESS' ||
-    s === 'TRANSPORT_DISPOSAL' ||
-    s === 'TRANSPORT_RECEPTION' ||
     s === 'WATER_POINT'
   )
 }

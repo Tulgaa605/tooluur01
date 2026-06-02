@@ -17,7 +17,8 @@ function roundMoney(n: number): number {
  */
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    // Billing дээрх нээлтийн үлдэгдэл оруулах: нэвтэрсэн хэн ч оруулж болно.
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const data = await request.json()
@@ -35,9 +36,7 @@ export async function POST(request: NextRequest) {
     }
     const amount = roundMoney(Math.max(0, amountRaw))
 
-    if (!(await organizationIdInScope(user, organizationId))) {
-      return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
-    }
+    // Эрхийн scope шалгахгүй.
 
     const saved = await prisma.organizationOpeningBalance.upsert({
       where: { organizationId_year: { organizationId, year } },

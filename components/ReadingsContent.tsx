@@ -327,15 +327,11 @@ function isMeterEligibleForReadingModal(m: Pick<Meter, 'serviceStatus'>): boolea
 type OrgCustomerCategory =
   | 'ORGANIZATION'
   | 'BUSINESS'
-  | 'TRANSPORT_DISPOSAL'
-  | 'TRANSPORT_RECEPTION'
   | 'WATER_POINT'
 
 const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
   ORGANIZATION: 'Төсөвт байгууллага',
   BUSINESS: 'Аж ахуйн нэгж',
-  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
-  TRANSPORT_RECEPTION: 'Зөөврүүд хүлээн авах',
   WATER_POINT: 'Ус түгээх байр',
 }
 
@@ -824,12 +820,10 @@ export default function ReadingsContent() {
       if (yearToUse) params.append('year', yearToUse)
 
       params.append('limit', '3000')
-      // «Зөвхөн дулаан» тоолуурын автоматаар мөр үүсгэхийг зөвхөн "одоогийн сар"-д ажиллуулна.
-      // Бусад үед энэ нь unnecessary DB write хийж, fetch-ийг удаашруулдаг.
-      const now = new Date()
       const yNum = yearToUse ? parseInt(yearToUse, 10) : NaN
       const mNum = monthToUse ? parseInt(monthToUse, 10) : NaN
-      if (yNum === now.getFullYear() && mNum === now.getMonth() + 1) {
+      // «Зөвхөн дулаан» тоолуур: сонгосон (он, сар)-д мөр байхгүй бол автоматаар үүсгэнэ.
+      if (Number.isFinite(yNum) && Number.isFinite(mNum) && mNum >= 1 && mNum <= 12) {
         params.append('ensureHeatReadings', '1')
       }
       if (opts?.recalculate) params.append('recalculate', '1')
