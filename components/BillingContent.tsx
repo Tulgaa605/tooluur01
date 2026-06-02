@@ -519,8 +519,17 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
           const data = await res.json().catch(() => ({}))
           throw new Error(data.error || 'Алдаа гарлаа')
         }
-        // Хүссэн UX: Enter дарахад шууд хадгалаад, ямар ч success toast / refresh харагдуулахгүй.
-        await reloadReadings({ silent: true })
+        // Хүссэн UX: Enter дарахад шууд хадгалаад refresh/тостгүй.
+        // Серверт хадгалагдсаны дараа local state-г шинэчилж 0 болж буцахаас сэргийлнэ.
+        setReadings((prev) =>
+          prev.map((r) => {
+            const rid = String((r as any)?.organization?.id ?? (r as any)?.organizationId ?? '').trim()
+            if (!rid || rid !== orgId) return r
+            if (Number((r as any)?.year) !== year) return r
+            if (Number((r as any)?.month) !== 4) return r
+            return { ...r, previousRemaining: Math.max(0, Number(newAmount) || 0) }
+          })
+        )
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Нээлтийн үлдэгдэл хадгалахад алдаа гарлаа'
         setMessage({ type: 'error', text: msg })

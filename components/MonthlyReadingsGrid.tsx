@@ -987,9 +987,16 @@ export default function MonthlyReadingsGrid({
             stopEditingWhenCellsLoseFocus
             overlayNoRowsTemplate={overlayNoRows}
             onCellValueChanged={(e) => {
+              const parseMoneyInput = (raw: unknown): number => {
+                if (raw == null || raw === '') return 0
+                const n =
+                  typeof raw === 'number'
+                    ? raw
+                    : parseFloat(String(raw).replace(/,/g, '').replace(/₮/g, '').trim())
+                return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 0
+              }
               if (e.colDef.colId === 'paidAmount' && billingActions?.onPaidAmountChange && e.data) {
-                // valueParser/valueSetter-ээс хойш data дээрх тоо нь цэвэр (',', '₮' арилсан) утга байна.
-                const newPaid = Number((e.data as MonthlyReadingRow).paidAmount ?? 0)
+                const newPaid = parseMoneyInput(e.newValue)
                 if (Number.isFinite(newPaid) && newPaid >= 0) {
                   void billingActions.onPaidAmountChange(e.data, newPaid)
                 }
@@ -1000,7 +1007,7 @@ export default function MonthlyReadingsGrid({
                 e.data &&
                 Number(e.data.month) === 4
               ) {
-                const newAmount = Number((e.data as MonthlyReadingRow).previousRemaining ?? 0)
+                const newAmount = parseMoneyInput(e.newValue)
                 if (Number.isFinite(newAmount) && newAmount >= 0) {
                   void billingActions.onOpeningBalanceChange(e.data, newAmount)
                 }
