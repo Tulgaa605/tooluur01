@@ -988,7 +988,8 @@ export default function MonthlyReadingsGrid({
             overlayNoRowsTemplate={overlayNoRows}
             onCellValueChanged={(e) => {
               if (e.colDef.colId === 'paidAmount' && billingActions?.onPaidAmountChange && e.data) {
-                const newPaid = Number(e.newValue ?? 0)
+                // valueParser/valueSetter-ээс хойш data дээрх тоо нь цэвэр (',', '₮' арилсан) утга байна.
+                const newPaid = Number((e.data as MonthlyReadingRow).paidAmount ?? 0)
                 if (Number.isFinite(newPaid) && newPaid >= 0) {
                   void billingActions.onPaidAmountChange(e.data, newPaid)
                 }
@@ -999,7 +1000,7 @@ export default function MonthlyReadingsGrid({
                 e.data &&
                 Number(e.data.month) === 4
               ) {
-                const newAmount = Number(e.newValue ?? 0)
+                const newAmount = Number((e.data as MonthlyReadingRow).previousRemaining ?? 0)
                 if (Number.isFinite(newAmount) && newAmount >= 0) {
                   void billingActions.onOpeningBalanceChange(e.data, newAmount)
                 }
