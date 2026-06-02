@@ -148,6 +148,8 @@ export default function BillingContent() {
   const [issuingEbarimtAll, setIssuingEbarimtAll] = useState(false)
   const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()))
   const [filterMonth, setFilterMonth] = useState(String(new Date().getMonth() + 1))
+  const [debouncedYear, setDebouncedYear] = useState(filterYear)
+  const [debouncedMonth, setDebouncedMonth] = useState(filterMonth)
   const [senderPhone, setSenderPhone] = useState('')
   const [senderOptions, setSenderOptions] = useState<string[]>([])
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -160,6 +162,7 @@ export default function BillingContent() {
   } | null>(null)
   const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
+  const reloadAbortRef = useRef<AbortController | null>(null)
   const yearOptions = useMemo(() => {
     const y = new Date().getFullYear()
     return [y + 1, y, y - 1, y - 2]
@@ -221,16 +224,29 @@ export default function BillingContent() {
     return paymentTab === 'unpaid' ? 'Төлөөгүй төлбөр байхгүй' : 'Төлсөн төлбөр байхгүй'
   }, [readings.length, paymentTab])
 
-  const reloadReadings = useCallback(async () => {
-    setLoading(true)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedYear(filterYear)
+      setDebouncedMonth(filterMonth)
+    }, 300)
+    return () => clearTimeout(t)
+  }, [filterYear, filterMonth])
+
+  const reloadReadings = useCallback(async (opts?: { silent?: boolean }) => {
+    const showLoading = !opts?.silent
+    if (showLoading) setLoading(true)
     try {
+      reloadAbortRef.current?.abort()
+      const controller = new AbortController()
+      reloadAbortRef.current = controller
       const params = new URLSearchParams()
-      if (filterYear) params.append('year', filterYear)
-      if (filterMonth) params.append('month', filterMonth)
+      if (debouncedYear) params.append('year', debouncedYear)
+      if (debouncedMonth) params.append('month', debouncedMonth)
       params.append('limit', '3000')
-      params.append('recalculate', '1')
       params.append('withCarry', '1')
-      const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
+      const res = await fetchWithAuth(`/api/readings?${params.toString()}`, {
+        signal: controller.signal,
+      })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         throw new Error(err.error || 'Алдаа гарлаа')
@@ -239,12 +255,14 @@ export default function BillingContent() {
       if (data && data.error) setReadings([])
       else if (data && Array.isArray(data)) setReadings(normalizeApiReadings(data) as BillingReading[])
       else setReadings([])
-    } catch {
-      setReadings([])
+    } catch (e: unknown) {
+      // Abort бол дараагийн fetch ажиллаж байгаа гэсэн үг — алдаа гэж үзэхгүй.
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      if (!opts?.silent) setReadings([])
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
-  }, [filterYear, filterMonth])
+  }, [debouncedYear, debouncedMonth])
 
   useEffect(() => {
     reloadReadings()
@@ -471,7 +489,8 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
           const data = await res.json().catch(() => ({}))
           throw new Error(data.error || 'Алдаа гарлаа')
         }
-        await reloadReadings()
+        // Мессеж/refresh харагдуулахгүйгээр чимээгүй шинэчилнэ.
+        await reloadReadings({ silent: true })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Хадгалахад алдаа гарлаа'
         setMessage({ type: 'error', text: msg })
@@ -500,9 +519,8 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
           const data = await res.json().catch(() => ({}))
           throw new Error(data.error || 'Алдаа гарлаа')
         }
-        setMessage({ type: 'success', text: 'Нээлтийн үлдэгдэл хадгаллаа' })
-        setTimeout(() => setMessage(null), 2500)
-        await reloadReadings()
+        // Хүссэн UX: Enter дарахад шууд хадгалаад, ямар ч success toast / refresh харагдуулахгүй.
+        await reloadReadings({ silent: true })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Нээлтийн үлдэгдэл хадгалахад алдаа гарлаа'
         setMessage({ type: 'error', text: msg })
