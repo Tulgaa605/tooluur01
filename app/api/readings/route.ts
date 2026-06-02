@@ -393,7 +393,8 @@ export async function GET(request: NextRequest) {
 
     async function computeCarry(
       filterYear: number | null,
-      filterMonth: number | null
+      filterMonth: number | null,
+      extraOrgIds?: string[]
     ): Promise<CarryData> {
       // scope-ын бүх org-ыг тодорхойлно. Ингэснээр заалтгүй сар дээр ч phantom гарна.
       let scopeOrgIds: string[] = []
@@ -405,6 +406,15 @@ export async function GET(request: NextRequest) {
           ...user,
           organizationId: officeOrgId ?? user.organizationId,
         })
+      }
+      // Billing/Readings жагсаалтад гарсан байгууллага scope-д багтаагүй байсан ч carry/opening тооцоонд оруулна.
+      if (extraOrgIds && extraOrgIds.length > 0) {
+        const merged = new Set<string>(scopeOrgIds)
+        for (const id of extraOrgIds) {
+          const s = String(id ?? '').trim()
+          if (s) merged.add(s)
+        }
+        scopeOrgIds = [...merged]
       }
       const byKey = new Map<string, number>()
       const atFilter = new Map<string, number>()
@@ -631,7 +641,11 @@ export async function GET(request: NextRequest) {
     if (!shouldRecalculate) {
       const withFees = await attachAdditionalFeesToReadings(readings)
       if (withCarry) {
-        const carryData = await computeCarry(filterYearNum, filterMonthNum)
+      const carryData = await computeCarry(
+        filterYearNum,
+        filterMonthNum,
+        readings.map((r) => r.organizationId)
+      )
         const attached = attachCarry(withFees, carryData.byKey)
         if (canPhantom) {
           const existingKeys = new Set(
@@ -668,7 +682,11 @@ export async function GET(request: NextRequest) {
     await persistReadingMoneyFields(withExtras)
 
     if (withCarry) {
-      const carryData = await computeCarry(filterYearNum, filterMonthNum)
+      const carryData = await computeCarry(
+        filterYearNum,
+        filterMonthNum,
+        readings.map((r) => r.organizationId)
+      )
       const attached = attachCarry(withExtras, carryData.byKey)
       if (canPhantom) {
         const existingKeys = new Set(
