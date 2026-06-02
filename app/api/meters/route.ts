@@ -13,6 +13,7 @@ import {
   getWaterTariffRatesForPeriod,
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc'
+import { ensureHeatMeterReadingForCurrentPeriod } from '@/lib/ensure-heat-meter-reading'
 
 type OrgMini = {
   id: string
@@ -381,6 +382,21 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    if (billingMode === 'HEAT') {
+      await ensureHeatMeterReadingForCurrentPeriod(
+        {
+          id: meter.id,
+          organizationId: meter.organizationId,
+          billingMode: meter.billingMode,
+          defaultHeatUsage: meter.defaultHeatUsage,
+          waterChargeSplit: meter.waterChargeSplit,
+          pipeDiameterMm: meter.pipeDiameterMm,
+          billingCategory: meter.billingCategory,
+        },
+        user.userId
+      )
+    }
+
     return NextResponse.json(meter)
   } catch (error: any) {
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
@@ -579,6 +595,21 @@ export async function PUT(request: NextRequest) {
     const nextDefaultHeatUsage = Number(defaultHeatUsageOut ?? 0) || 0
     const finalWaterChargeSplit =
       nextWaterChargeSplit !== undefined ? nextWaterChargeSplit : existing.waterChargeSplit
+    if (nextBilling === 'HEAT') {
+      await ensureHeatMeterReadingForCurrentPeriod(
+        {
+          id: meter.id,
+          organizationId: meter.organizationId,
+          billingMode: meter.billingMode,
+          defaultHeatUsage: meter.defaultHeatUsage,
+          waterChargeSplit: meter.waterChargeSplit,
+          pipeDiameterMm: meter.pipeDiameterMm,
+          billingCategory: meter.billingCategory,
+        },
+        user.userId
+      )
+    }
+
     if (
       (nextBilling === 'HEAT' || nextBilling === 'WATER_HEAT') &&
       Math.abs(nextDefaultHeatUsage - previousDefaultHeatUsage) > 1e-6

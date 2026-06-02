@@ -14,6 +14,7 @@ import {
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import { findCategoryTariffForCustomer } from '@/lib/category-tariff-scope'
 
 export type { BillingMode, HeatTariffRates, ReadingMoneySnapshot, WaterChargeSplit, WaterTariffRates }
 export {
@@ -87,10 +88,7 @@ export async function getWaterTariffRatesForPeriod(
     }
   }
 
-  const catRow = await prisma.categoryTariff.findUnique({
-    where: { category: categoryForTariffs },
-    select: { baseCleanFee: true, baseDirtyFee: true, cleanPerM3: true, dirtyPerM3: true },
-  })
+  const catRow = await findCategoryTariffForCustomer(organizationId, categoryForTariffs)
   if (catRow) {
     if (Number.isNaN(pipeDiam)) {
       baseClean = catRow.baseCleanFee ?? 0
@@ -140,10 +138,7 @@ export async function getHeatTariffRatesForPeriod(
     }
   }
 
-  const catRow = await prisma.categoryTariff.findUnique({
-    where: { category: categoryForTariffs },
-    select: { heatBaseFee: true, heatPerM3: true, heatPerM2: true },
-  })
+  const catRow = await findCategoryTariffForCustomer(organizationId, categoryForTariffs)
   if (catRow) {
     return {
       heatBase: catRow.heatBaseFee ?? 0,

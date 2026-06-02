@@ -41,6 +41,12 @@ function parseClientHeatUsage(
 import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
+import {
+  attachAdditionalFeesToReadings,
+  persistReadingMoneyFields,
+  recalculateAndPersistOrgPeriodAdditionalFees,
+} from '@/lib/readings-with-additional-fees'
+import { syncHeatMeterReadingsForPeriod } from '@/lib/ensure-heat-meter-reading'
 
 function waterTariffAdjustedForMeter(
   raw: WaterTariffRates,
@@ -336,6 +342,24 @@ export async function GET(request: NextRequest) {
     const shouldRecalculate = searchParams.get('recalculate') === '1'
     const withCarry = searchParams.get('withCarry') === '1'
 
+    // «Зөвхөн дулаан» тоолуур: modal-аар оруулахгүйгээр үндсэн grid-д гарахын тулд заалт автоматаар үүсгэнэ.
+    if (searchParams.get('ensureHeatReadings') === '1') {
+      const syncYear = year ? parseInt(year, 10) : new Date().getFullYear()
+      const syncMonth = month ? parseInt(month, 10) : new Date().getMonth() + 1
+      if (
+        Number.isFinite(syncYear) &&
+        Number.isFinite(syncMonth) &&
+        syncMonth >= 1 &&
+        syncMonth <= 12
+      ) {
+        try {
+          await syncHeatMeterReadingsForPeriod(user, syncYear, syncMonth)
+        } catch (e) {
+          console.error('syncHeatMeterReadingsForPeriod:', e)
+        }
+      }
+    }
+
     const rawReadings = await prisma.meterReading.findMany({
       where,
       orderBy: [
@@ -606,11 +630,12 @@ export async function GET(request: NextRequest) {
     const canPhantom =
       withCarry && filterYearNum != null && filterMonthNum != null
 
-    // Хурдны үндсэн горим: хадгалсан дүнг шууд буцаана.
+    // Хурдны үндсэн горим: тарифын мөр дүн + сонгосон нэмэлт төлбөр + НӨАТ.
     if (!shouldRecalculate) {
+      const withFees = await attachAdditionalFeesToReadings(readings)
       if (withCarry) {
         const carryData = await computeCarry(filterYearNum, filterMonthNum)
-        const attached = attachCarry(readings, carryData.byKey)
+        const attached = attachCarry(withFees, carryData.byKey)
         if (canPhantom) {
           const existingKeys = new Set(
             rawReadings
@@ -627,7 +652,7 @@ export async function GET(request: NextRequest) {
         }
         return NextResponse.json(attached)
       }
-      return NextResponse.json(readings)
+      return NextResponse.json(withFees)
     }
 
     // Сонголтоор (recalculate=1) тарифаар дүнг дахин тооцоолж буцаана.
@@ -691,9 +716,12 @@ export async function GET(request: NextRequest) {
       })
     )
 
+    const withExtras = await attachAdditionalFeesToReadings(result)
+    await persistReadingMoneyFields(withExtras)
+
     if (withCarry) {
       const carryData = await computeCarry(filterYearNum, filterMonthNum)
-      const attached = attachCarry(result, carryData.byKey)
+      const attached = attachCarry(withExtras, carryData.byKey)
       if (canPhantom) {
         const existingKeys = new Set(
           rawReadings
@@ -710,7 +738,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json(attached)
     }
-    return NextResponse.json(result)
+    return NextResponse.json(withExtras)
   } catch (error: any) {
     console.error('Readings GET error:', error)
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
@@ -882,7 +910,13 @@ export async function PUT(request: NextRequest) {
         updatedByUserId: user.userId,
       },
     })
-    const [reading] = await attachOrgsAndMetersToReadings([updatedRow])
+    await recalculateAndPersistOrgPeriodAdditionalFees(
+      existingReading.organizationId,
+      Number(data.year),
+      Number(data.month)
+    )
+    const refreshed = await prisma.meterReading.findUnique({ where: { id } })
+    const [reading] = await attachOrgsAndMetersToReadings([refreshed ?? updatedRow])
 
     // Эцсийн заалт өөрчлөгдвөл ижил тоолуурын бүх дараагийн сарууд (алгассан ч) дагуулалтаар шинэчлэгдэнэ.
     const periodChanged =

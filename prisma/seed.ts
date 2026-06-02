@@ -152,7 +152,23 @@ async function main() {
       console.log('ℹ️  Хэрэглэгч 2 аль хэдийн байна:', user2.email)
     }
 
-    await ensureHeatCategoryTariffsInDb()
+    // Нягтлангийн албан байгууллагад тохирох ownerOrganizationId дээр default heat тариф үүсгэнэ.
+    // Token дээр organizationId байхгүй байж болох тул ensureOfficeOrganizationId-оор дараа нь үүсдэг.
+    // Seed дээр туршилтын орг үүсгээд түүнд ownerOrganizationId онооно.
+    const officeOrg = await prisma.organization.create({
+      data: {
+        name: 'Seed Office (accountant)',
+        category: 'ORGANIZATION',
+        baseCleanFee: 0,
+        baseDirtyFee: 0,
+        year: new Date().getFullYear(),
+      },
+    })
+    await prisma.user.update({
+      where: { id: accountant.id },
+      data: { organizationId: officeOrg.id },
+    })
+    await ensureHeatCategoryTariffsInDb(officeOrg.id)
     console.log('✅ Төрлийн дулааны тариф (Төсөвт/ААН/Айл өрх) шалгагдлаа')
 
     console.log('\n🎉 Seed амжилттай дууслаа!')

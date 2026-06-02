@@ -3,7 +3,9 @@ import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { getAccountantOwnerOrganizationId } from '@/lib/category-tariff-scope'
 import { ensureHeatCategoryTariffsInDb } from '@/lib/ensure-heat-category-tariffs'
+import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
 
 function parseNumberOrDefault(value: any, defaultValue: number) {
   if (typeof value === 'number') return value
@@ -69,6 +71,7 @@ async function attachOrganizationsToTariffs<T extends { organizationId: string }
 async function upsertCategoryTariff(
   params: {
     category: string
+    ownerOrganizationId: string
     baseCleanFee: number
     baseDirtyFee: number
     cleanPerM3: number
@@ -82,7 +85,7 @@ async function upsertCategoryTariff(
   // Хуучин Mongo баримтууд createdAt-ийг string хадгалсан байвал `upsert`/`update` дотоодоор
   // баримтыг DateTime болгож унших үед алдаа гарна. `updateMany` зөвхөн шинэчлэл хийнэ.
   const upd = await prisma.categoryTariff.updateMany({
-    where: { category: params.category },
+    where: { category: params.category, ownerOrganizationId: params.ownerOrganizationId },
     data: {
       baseCleanFee: params.baseCleanFee,
       baseDirtyFee: params.baseDirtyFee,
@@ -99,6 +102,7 @@ async function upsertCategoryTariff(
     await prisma.categoryTariff.create({
       data: {
         category: params.category,
+        ownerOrganizationId: params.ownerOrganizationId,
         baseCleanFee: params.baseCleanFee,
         baseDirtyFee: params.baseDirtyFee,
         cleanPerM3: params.cleanPerM3,
@@ -114,7 +118,7 @@ async function upsertCategoryTariff(
     const code = e && typeof e === 'object' && 'code' in e ? (e as { code: string }).code : ''
     if (code === 'P2002') {
       await prisma.categoryTariff.updateMany({
-        where: { category: params.category },
+        where: { category: params.category, ownerOrganizationId: params.ownerOrganizationId },
         data: {
           baseCleanFee: params.baseCleanFee,
           baseDirtyFee: params.baseDirtyFee,
@@ -140,7 +144,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const year = searchParams.get('year') ? parseInt(searchParams.get('year') as string, 10) : undefined
 
-    const scoped = await getScopedOrganizationIds(user)
+    // Token дээр organizationId хоосон байж болно → албан байгууллагыг сэргээж scope-оо зөв авна.
+    const officeOrgId = await ensureOfficeOrganizationId(user)
+    const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId ?? user.organizationId })
     // Хоосон scoped (organizationId байхгүй гэх мэт) үед ч доорх category_tariffs-ийг унших ёстой —
     // урьд нь шууд [] буцааж төрлийн тарифыг алдаж байсан.
     const where: any = { organizationId: { in: scoped } }
@@ -158,12 +164,19 @@ export async function GET(request: NextRequest) {
     const includeCategory = searchParams.get('includeCategory') === '1'
     if (!includeCategory) return NextResponse.json(tariffs)
 
+    const ownerOrganizationId = await getAccountantOwnerOrganizationId({
+      ...user,
+      organizationId: officeOrgId ?? user.organizationId,
+    })
+    if (!ownerOrganizationId) return NextResponse.json(tariffs)
+
     // Төсөвт / ААН / Айл өрхийн дулааны үнэ DB-д 0 байвал албан жагсаалтаар автоматаар бөглөнө.
-    await ensureHeatCategoryTariffsInDb()
+    await ensureHeatCategoryTariffsInDb(ownerOrganizationId)
 
     // createdAt/updatedAt нь string байж болзошгүй тул DateTime талбаруудыг буцаахгүй.
     // Эрэмбэлэх шаардлагатай бол өгөгдлөө Compass/mongosh дээр Date болгоод дараа нь orderBy-г буцааж нэмж болно.
     const catRows = await prisma.categoryTariff.findMany({
+      where: { ownerOrganizationId },
       take: 500,
       select: {
         category: true,
@@ -340,10 +353,23 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const officeOrgId = await ensureOfficeOrganizationId(user)
+    const ownerOrganizationId = await getAccountantOwnerOrganizationId({
+      ...user,
+      organizationId: officeOrgId ?? user.organizationId,
+    })
+    if (!ownerOrganizationId) {
+      return NextResponse.json(
+        { error: 'Албан байгууллага тохируулаагүй байна. Дахин нэвтэрнэ үү.' },
+        { status: 400 }
+      )
+    }
+
     // Нэг төрлийн тариф нэг л байна; шинэчлэх хүртэл идэвхтэй
     await upsertCategoryTariff(
       {
         category,
+        ownerOrganizationId,
         baseCleanFee,
         baseDirtyFee,
         cleanPerM3,
@@ -358,8 +384,16 @@ export async function POST(request: NextRequest) {
     // Байгууллага бүрт тухайн сарын тариф бичлэг үүсгэж, уншилтанд хэрэглэгдэнэ.
     // Өмнө нь org бүрт find+write дарааллаар (2N query) удаан байсан тул:
     // нэг findMany + createMany + update-уудыг багцаар параллель хийнэ.
+    const scoped = await getScopedOrganizationIds({
+      ...user,
+      organizationId: ownerOrganizationId,
+    })
     const orgs = await prisma.organization.findMany({
-      where: { category },
+      where: {
+        category,
+        id: { in: scoped },
+        NOT: { id: ownerOrganizationId },
+      },
       select: { id: true, name: true, connectionNumber: true },
     })
 
@@ -563,9 +597,18 @@ export async function DELETE(request: NextRequest) {
       if (!category) {
         return NextResponse.json({ error: 'Хэрэглэгчийн төрөл (category) шаардлагатай' }, { status: 400 })
       }
+      const officeOrgId = await ensureOfficeOrganizationId(user)
+      const ownerOrganizationId = await getAccountantOwnerOrganizationId({
+        ...user,
+        organizationId: officeOrgId ?? user.organizationId,
+      })
+      if (!ownerOrganizationId) {
+        return NextResponse.json({ error: 'Албан байгууллага олдсонгүй' }, { status: 400 })
+      }
+      const catWhere = { category, ownerOrganizationId }
       if (part === 'water') {
         await prisma.categoryTariff.updateMany({
-          where: { category },
+          where: catWhere,
           data: {
             baseCleanFee: 0,
             baseDirtyFee: 0,
@@ -576,7 +619,7 @@ export async function DELETE(request: NextRequest) {
         })
       } else if (part === 'heat') {
         await prisma.categoryTariff.updateMany({
-          where: { category },
+          where: catWhere,
           data: {
             heatBaseFee: 0,
             heatPerM3: 0,
@@ -585,7 +628,7 @@ export async function DELETE(request: NextRequest) {
           },
         })
       } else {
-        await prisma.categoryTariff.deleteMany({ where: { category } })
+        await prisma.categoryTariff.deleteMany({ where: catWhere })
       }
       return NextResponse.json({ success: true })
     }

@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../lib/prisma-generated"
 }
 
 datasource db {
@@ -112,6 +113,7 @@ model Meter {
   // Тоолуур тус бүрийн тарифын ангилал; хоосон бол organization.category.
   billingCategory  String?
   readings       MeterReading[]
+  additionalFeeSelections MeterAdditionalFeeSelection[]
   createdByUserId String?      @db.ObjectId
   updatedByUserId String?      @db.ObjectId
   createdByUser   User?        @relation("MeterCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
@@ -229,21 +231,66 @@ model OrganizationOpeningBalance {
 }
 
 model CategoryTariff {
+  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
+  category              String
+  /// Нягтлан бүрийн албан байгууллага — төрлийн тариф тус бүрт өөр
+  ownerOrganizationId   String   @db.ObjectId
+  baseCleanFee          Float    @default(0)
+  baseDirtyFee          Float    @default(0)
+  cleanPerM3            Float    @default(0)
+  dirtyPerM3            Float    @default(0)
+  heatBaseFee           Float    @default(0)
+  heatPerM3             Float    @default(0)
+  heatPerM2             Float    @default(0)
+  createdByUserId       String?  @db.ObjectId
+  updatedByUserId       String?  @db.ObjectId
+  createdByUser         User?    @relation("CategoryTariffCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  updatedByUser         User?    @relation("CategoryTariffUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([category, ownerOrganizationId])
+  @@index([ownerOrganizationId])
+  @@map("category_tariffs")
+}
+
+/// Тариф хуудасны «Бусад нэмэлт төлбөр» — нэр, тооцооллын төрөл, нэгжийн үнэ.
+model AdditionalFeeDefinition {
   id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  category        String   @unique
-  baseCleanFee    Float    @default(0)
-  baseDirtyFee    Float    @default(0)
-  cleanPerM3      Float    @default(0)
-  dirtyPerM3      Float    @default(0)
-  heatBaseFee     Float    @default(0)
-  heatPerM3       Float    @default(0)
-  heatPerM2       Float    @default(0)
+  name            String
+  /// M3 | M2 | PIECE | AMOUNT (AMOUNT: заалтад шууд ₮)
+  chargeBasis     String
+  unitPrice       Float    @default(0)
+  /// Санхүүгийн дансны код/дугаар (сонголтоор)
+  accountCode     String?
+  sortOrder       Int      @default(0)
+  active          Boolean  @default(true)
   createdByUserId String?  @db.ObjectId
   updatedByUserId String?  @db.ObjectId
-  createdByUser   User?    @relation("CategoryTariffCreatedBy", fields: [createdByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
-  updatedByUser   User?    @relation("CategoryTariffUpdatedBy", fields: [updatedByUserId], references: [id], onUpdate: NoAction, onDelete: NoAction)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  @@map("category_tariffs")
+  selections MeterAdditionalFeeSelection[]
+
+  @@map("additional_fee_definitions")
+}
+
+/// Сарын заалт: тоолуур + сар бүр сонгосон нэмэлт төлбөр.
+model MeterAdditionalFeeSelection {
+  id              String                  @id @default(auto()) @map("_id") @db.ObjectId
+  meterId         String                  @db.ObjectId
+  meter           Meter                    @relation(fields: [meterId], references: [id])
+  year            Int
+  month           Int
+  feeDefinitionId String                  @db.ObjectId
+  feeDefinition   AdditionalFeeDefinition @relation(fields: [feeDefinitionId], references: [id])
+  enabled         Boolean                 @default(true)
+  /// M3/M2: 0 бол тухайн сарын заалтаас автоматаар
+  quantity        Float                   @default(0)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([meterId, year, month, feeDefinitionId])
+  @@index([meterId, year, month])
+  @@map("meter_additional_fee_selections")
 }

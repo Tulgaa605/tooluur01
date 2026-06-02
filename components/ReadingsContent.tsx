@@ -18,6 +18,12 @@ import {
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
 import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
+import {
+  ADDITIONAL_FEE_BASIS_LABELS,
+  additionalFeeReadingsInputLabel,
+  additionalFeeUsesUnitPrice,
+  type AdditionalFeeChargeBasis,
+} from '@/lib/additional-fees-calc'
 
 // Register AG Grid modules
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -82,6 +88,84 @@ function endValueFromReadingsPreviousPayload(data: unknown): number | null {
   const n = typeof d.endValue === 'number' ? d.endValue : Number(d.endValue)
   if (!Number.isFinite(n)) return null
   return n
+}
+
+function readingMeterPeriodKey(r: { meterId?: string; year?: number; month?: number }): string {
+  return `${r.meterId ?? ''}|${Number(r.year ?? 0)}|${Number(r.month ?? 0)}`
+}
+
+/** Тухайн (он, сар)-ын хадгалсан заалтуудыг үндсэн grid-ийн state-д нэгтгэнэ. */
+function mergeReadingsForPeriod(
+  prev: Reading[],
+  incoming: Reading[],
+  year: number,
+  month: number
+): Reading[] {
+  const byMeter = new Map<string, Reading>()
+  for (const r of incoming) {
+    if (r.meterId) byMeter.set(r.meterId, { ...r, _isNew: false })
+  }
+  const used = new Set<string>()
+  const out: Reading[] = []
+  for (const r of prev) {
+    if (Number(r.year) === year && Number(r.month) === month && r.meterId && byMeter.has(r.meterId)) {
+      out.push(byMeter.get(r.meterId)!)
+      used.add(r.meterId)
+    } else {
+      out.push(r)
+    }
+  }
+  for (const [meterId, r] of byMeter) {
+    if (!used.has(meterId)) out.push(r)
+  }
+  return out
+}
+
+function enrichSavedReadingFromSource(saved: Reading, source: Reading): Reading {
+  return {
+    ...saved,
+    organizationId: saved.organizationId ?? source.organizationId,
+    organization: saved.organization ?? source.organization,
+    meterId: saved.meterId ?? source.meterId,
+    meter: saved.meter ?? source.meter,
+    billingMode: saved.billingMode ?? source.billingMode,
+  }
+}
+
+function normalizeApiReadingRow(r: Record<string, unknown>): Reading {
+  const toNum = (v: unknown): number => {
+    if (v == null || v === '') return 0
+    if (typeof v === 'number') return Number.isFinite(v) ? v : 0
+    if (typeof v === 'object' && v && '$numberDecimal' in (v as object)) {
+      const s = String((v as { $numberDecimal?: string }).$numberDecimal ?? '').trim()
+      const n = parseFloat(s.replace(',', '.'))
+      return Number.isFinite(n) ? n : 0
+    }
+    const n = parseFloat(String(v).replace(',', '.').trim())
+    return Number.isFinite(n) ? n : 0
+  }
+  const raw = r as Record<string, unknown>
+  return {
+    ...r,
+    startValue: toNum(raw.startValue ?? raw.start_value),
+    endValue: toNum(raw.endValue ?? raw.end_value),
+    usage: toNum(raw.usage),
+    heatUsage: toNum(raw.heatUsage ?? raw.heat_usage),
+    baseClean: toNum(raw.baseClean ?? raw.base_clean),
+    baseDirty: toNum(raw.baseDirty ?? raw.base_dirty),
+    cleanPerM3: toNum(raw.cleanPerM3 ?? raw.clean_per_m3),
+    dirtyPerM3: toNum(raw.dirtyPerM3 ?? raw.dirty_per_m3),
+    cleanAmount: toNum(raw.cleanAmount ?? raw.clean_amount),
+    dirtyAmount: toNum(raw.dirtyAmount ?? raw.dirty_amount),
+    heatBase: toNum(raw.heatBase ?? raw.heat_base),
+    heatPerM3: toNum(raw.heatPerM3 ?? raw.heat_per_m3),
+    heatPerM2: toNum(raw.heatPerM2 ?? raw.heat_per_m2),
+    heatAmount: toNum(raw.heatAmount ?? raw.heat_amount),
+    subtotal: toNum(raw.subtotal),
+    vat: toNum(raw.vat),
+    total: toNum(raw.total),
+    additionalFeesAmount: toNum(raw.additionalFeesAmount ?? raw.additional_fees_amount),
+  } as unknown as Reading
 }
 
 function filterReadingGridColumnsByBilling(
@@ -289,7 +373,12 @@ function resolveModalOrgAndMeterLists(
   )
   const allowedOrgIds = new Set(orgList.map((o) => o.id))
   const metersList = metersListRaw.filter((m) => m.organizationId && allowedOrgIds.has(m.organizationId))
-  const eligibleMeters = metersList.filter((m) => isMeterEligibleForReadingModal(m))
+  // «Зөвхөн дулаан» тоолуур: заалт тоолуур бүртгэхэд автоматаар үүсдэг — modal-д оруулах шаардлагагүй.
+  const eligibleMeters = metersList.filter(
+    (m) =>
+      isMeterEligibleForReadingModal(m) &&
+      normalizeBillingMode(m.billingMode) !== 'HEAT'
+  )
   return { orgList, metersList, eligibleMeters }
 }
 
@@ -428,6 +517,25 @@ export default function ReadingsContent() {
   // “Бодолт” товч дарсан үед л тарифаар дахин тооцсон дүнг харуулна (recalculate=1).
   const [showCalculated, setShowCalculated] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [additionalFeesModal, setAdditionalFeesModal] = useState<{
+    meterId: string
+    meterNumber: string
+    organizationName: string
+    year: number
+    month: number
+  } | null>(null)
+  const [additionalFeeItems, setAdditionalFeeItems] = useState<
+    Array<{
+      feeDefinitionId: string
+      name: string
+      chargeBasis: AdditionalFeeChargeBasis
+      unitPrice: number
+      enabled: boolean
+      quantity: string
+    }>
+  >([])
+  const [additionalFeesLoading, setAdditionalFeesLoading] = useState(false)
+  const [additionalFeesSaving, setAdditionalFeesSaving] = useState(false)
   const [addModalYear, setAddModalYear] = useState(() => new Date().getFullYear())
   const [addModalMonth, setAddModalMonth] = useState(() => new Date().getMonth() + 1)
   const [addModalSearch, setAddModalSearch] = useState('')
@@ -678,7 +786,15 @@ export default function ReadingsContent() {
       .catch(() => setAllMeters([]))
   }, [])
 
-  const fetchReadings = useCallback(async (opts?: { silent?: boolean; month?: string | number; year?: string | number; recalculate?: boolean }) => {
+  const fetchReadings = useCallback(
+    async (opts?: {
+      silent?: boolean
+      month?: string | number
+      year?: string | number
+      recalculate?: boolean
+      /** Хадгалалтын дараа: серверийн жагсаалтыг тухайн сарт нэгтгэнэ (бүх state-ийг дарж бичихгүй). */
+      mergePeriod?: { year: number; month: number }
+    }): Promise<Reading[]> => {
     const showLoading = !opts?.silent
     if (showLoading) setReadingsLoading(true)
     try {
@@ -693,12 +809,19 @@ export default function ReadingsContent() {
       if (monthToUse) params.append('month', monthToUse)
       if (yearToUse) params.append('year', yearToUse)
 
-      params.append('limit', '300')
+      params.append('limit', '3000')
+      // «Зөвхөн дулаан» тоолуурын автоматаар мөр үүсгэхийг зөвхөн "одоогийн сар"-д ажиллуулна.
+      // Бусад үед энэ нь unnecessary DB write хийж, fetch-ийг удаашруулдаг.
+      const now = new Date()
+      const yNum = yearToUse ? parseInt(yearToUse, 10) : NaN
+      const mNum = monthToUse ? parseInt(monthToUse, 10) : NaN
+      if (yNum === now.getFullYear() && mNum === now.getMonth() + 1) {
+        params.append('ensureHeatReadings', '1')
+      }
       if (opts?.recalculate) params.append('recalculate', '1')
-      // Зөвхөн “Бодолт” дээр (recalculate=1) тооцсон дүнг харуулна.
       setShowCalculated(opts?.recalculate === true)
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
-      let data: any = null
+      let data: unknown = null
       try {
         data = await res.json()
       } catch {
@@ -706,62 +829,36 @@ export default function ReadingsContent() {
       }
 
       if (res.ok && Array.isArray(data)) {
-        const toNum = (v: any): number => {
-          if (v == null || v === '') return 0
-          if (typeof v === 'number') return Number.isFinite(v) ? v : 0
-          // Mongo Decimal128-like: { $numberDecimal: "12.34" }
-          if (typeof v === 'object' && v && '$numberDecimal' in v) {
-            const s = String((v as any).$numberDecimal ?? '').trim()
-            const n = parseFloat(s.replace(',', '.'))
-            return Number.isFinite(n) ? n : 0
-          }
-          const n = parseFloat(String(v).replace(',', '.').trim())
-          return Number.isFinite(n) ? n : 0
-        }
-        const normalized = data.map((r: any) => {
-          const startVal = r.startValue ?? r.start_value
-          const endVal = r.endValue ?? r.end_value
-          const heatUsageVal = r.heatUsage ?? r.heat_usage
-          return {
-            ...r,
-            startValue: toNum(startVal),
-            endValue: toNum(endVal),
-            usage: toNum(r.usage),
-            heatUsage: toNum(heatUsageVal),
-            baseClean: toNum(r.baseClean ?? r.base_clean),
-            baseDirty: toNum(r.baseDirty ?? r.base_dirty),
-            cleanPerM3: toNum(r.cleanPerM3 ?? r.clean_per_m3),
-            dirtyPerM3: toNum(r.dirtyPerM3 ?? r.dirty_per_m3),
-            cleanAmount: toNum(r.cleanAmount ?? r.clean_amount),
-            dirtyAmount: toNum(r.dirtyAmount ?? r.dirty_amount),
-            heatBase: toNum(r.heatBase ?? r.heat_base),
-            heatPerM3: toNum(r.heatPerM3 ?? r.heat_per_m3),
-            heatPerM2: toNum(r.heatPerM2 ?? r.heat_per_m2),
-            heatAmount: toNum(r.heatAmount ?? r.heat_amount),
-            subtotal: toNum(r.subtotal),
-            vat: toNum(r.vat),
-            total: toNum(r.total),
-          }
-        })
-        setReadings(normalized as Reading[])
-      } else if (res.ok) {
-        // Амжилттай хариу боловч массив биш (жишээ: {} / null) бол хоосон жагсаалт гэж үзнэ.
-        setReadings([])
-      } else {
-        if (data?.error) {
-          console.error('Error fetching readings:', data.error)
+        const normalized = (data as Record<string, unknown>[]).map((r) => normalizeApiReadingRow(r))
+        if (opts?.mergePeriod) {
+          const { year, month } = opts.mergePeriod
+          setReadings((prev) => mergeReadingsForPeriod(prev, normalized, year, month))
         } else {
-          console.error('Error fetching readings: request failed', res.status)
+          setReadings(normalized)
         }
-        setReadings([])
+        return normalized
       }
+      if (res.ok) {
+        if (!opts?.mergePeriod) setReadings([])
+        return []
+      }
+      if (data && typeof data === 'object' && 'error' in data) {
+        console.error('Error fetching readings:', (data as { error?: string }).error)
+      } else {
+        console.error('Error fetching readings: request failed', res.status)
+      }
+      if (!opts?.mergePeriod) setReadings([])
+      return []
     } catch (error) {
       console.error('Error fetching readings:', error)
-      setReadings([])
+      if (!opts?.mergePeriod) setReadings([])
+      return []
     } finally {
       if (showLoading) setReadingsLoading(false)
     }
-  }, [filterMonth, filterYear])
+  },
+    [filterMonth, filterYear]
+  )
 
   useEffect(() => {
     fetchReadings()
@@ -1637,66 +1734,57 @@ export default function ReadingsContent() {
         setFilterYear(String(savedYear))
         setFilterMonth(String(savedMonth))
         setShowCalculated(false)
-        handleCloseAddModal()
 
-        // Сервер хариуны мөрүүдийг local readings-д шууд оруулна — дахин fetchReadings
-        // илгээхгүйгээр гол хүснэгт тэр даруйд шинэчлэгдэнэ.
         const respRows = Array.isArray((data as { rows?: unknown }).rows)
-          ? ((data as { rows: Array<Record<string, unknown>> }).rows)
+          ? (data as { rows: Array<Record<string, unknown>> }).rows
           : []
-        if (respRows.length > 0) {
-          const toNum = (v: unknown): number => {
-            if (v == null || v === '') return 0
-            if (typeof v === 'number') return Number.isFinite(v) ? v : 0
-            if (typeof v === 'object' && v && '$numberDecimal' in (v as any)) {
-              const s = String((v as any).$numberDecimal ?? '').trim()
-              const n = parseFloat(s.replace(',', '.'))
-              return Number.isFinite(n) ? n : 0
-            }
-            const n = parseFloat(String(v).replace(',', '.').trim())
-            return Number.isFinite(n) ? n : 0
-          }
-          const normalized = respRows.map((r) => ({
-            ...r,
-            startValue: toNum((r as any).startValue ?? (r as any).start_value),
-            endValue: toNum((r as any).endValue ?? (r as any).end_value),
-            usage: toNum((r as any).usage),
-            heatUsage: toNum((r as any).heatUsage ?? (r as any).heat_usage),
-            baseClean: toNum((r as any).baseClean ?? (r as any).base_clean),
-            baseDirty: toNum((r as any).baseDirty ?? (r as any).base_dirty),
-            cleanPerM3: toNum((r as any).cleanPerM3 ?? (r as any).clean_per_m3),
-            dirtyPerM3: toNum((r as any).dirtyPerM3 ?? (r as any).dirty_per_m3),
-            cleanAmount: toNum((r as any).cleanAmount ?? (r as any).clean_amount),
-            dirtyAmount: toNum((r as any).dirtyAmount ?? (r as any).dirty_amount),
-            heatBase: toNum((r as any).heatBase ?? (r as any).heat_base),
-            heatPerM3: toNum((r as any).heatPerM3 ?? (r as any).heat_per_m3),
-            heatPerM2: toNum((r as any).heatPerM2 ?? (r as any).heat_per_m2),
-            heatAmount: toNum((r as any).heatAmount ?? (r as any).heat_amount),
-            subtotal: toNum((r as any).subtotal),
-            vat: toNum((r as any).vat),
-            total: toNum((r as any).total),
-          })) as Reading[]
-          setReadings((prev) => {
-            const byId = new Map<string, Reading>()
-            for (const r of prev) if (r.id) byId.set(r.id, r)
-            for (const r of normalized) if (r.id) byId.set(r.id, r)
-            const result: Reading[] = []
-            const usedIds = new Set<string>()
-            for (const r of prev) {
-              if (!r.id) continue
-              const replaced = byId.get(r.id)
-              if (replaced) {
-                result.push(replaced)
-                usedIds.add(r.id)
-              }
-            }
-            // Шинээр үүссэн мөрүүд: prev-д байхгүй id-уудыг нэмнэ.
-            for (const r of normalized) {
-              if (r.id && !usedIds.has(r.id)) result.push(r)
-            }
-            return result
-          })
+        const sourceByKey = new Map(rowsToSave.map((r) => [readingMeterPeriodKey(r), r]))
+        const normalizedFromApi = respRows.map((r) => normalizeApiReadingRow(r))
+        const enriched: Reading[] = normalizedFromApi.map((saved) => {
+          const src = sourceByKey.get(readingMeterPeriodKey(saved))
+          return src ? enrichSavedReadingFromSource(saved, src) : saved
+        })
+
+        // Modal-д харагдаж буй мөрүүдийг үндсэн grid state-д шууд нэгтгэнэ.
+        if (enriched.length > 0) {
+          setReadings((prev) => mergeReadingsForPeriod(prev, enriched, savedYear, savedMonth))
         }
+
+        const savedByKey = new Map<string, Reading>()
+        for (const r of enriched) {
+          if (!r.meterId) continue
+          savedByKey.set(readingMeterPeriodKey(r), r)
+        }
+        setNewReadings((prev) => {
+          const next = prev.map((r) => {
+            const saved = savedByKey.get(readingMeterPeriodKey(r))
+            if (!saved) return r
+            return {
+              ...r,
+              id: saved.id,
+              _isNew: false,
+              startValue: saved.startValue,
+              endValue: saved.endValue,
+              usage: saved.usage,
+              heatUsage: saved.heatUsage ?? r.heatUsage,
+              baseClean: saved.baseClean,
+              baseDirty: saved.baseDirty,
+              cleanPerM3: saved.cleanPerM3 ?? r.cleanPerM3,
+              dirtyPerM3: saved.dirtyPerM3 ?? r.dirtyPerM3,
+              cleanAmount: saved.cleanAmount,
+              dirtyAmount: saved.dirtyAmount,
+              heatBase: saved.heatBase ?? r.heatBase,
+              heatPerM3: saved.heatPerM3 ?? r.heatPerM3,
+              heatPerM2: saved.heatPerM2 ?? r.heatPerM2,
+              heatAmount: saved.heatAmount ?? r.heatAmount,
+              subtotal: saved.subtotal,
+              vat: saved.vat,
+              total: saved.total,
+            }
+          })
+          snapshotRows(next)
+          return next
+        })
 
         if (saveSuccessToastTimeoutRef.current) {
           clearTimeout(saveSuccessToastTimeoutRef.current)
@@ -1709,14 +1797,6 @@ export default function ReadingsContent() {
             saveSuccessToastTimeoutRef.current = null
           }, 2000)
         })
-        // Background-аар нэг удаа sync хийнэ (дагуулсан мөрүүд, бусад өөрчлөлтийг ачаална).
-        // Гол хүснэгт хэрэглэгчид аль хэдийн optimistic-аар шинэчлэгдсэн тул silent.
-        void fetchReadings({
-          silent: true,
-          year: savedYear,
-          month: savedMonth,
-          recalculate: false,
-        }).catch(() => {})
       } catch (err: any) {
         setMessage({ type: 'error', text: err?.message || 'Алдаа гарлаа' })
         setTimeout(() => setMessage(null), 6000)
@@ -1726,6 +1806,116 @@ export default function ReadingsContent() {
       }
     })()
   }
+
+  const openMeterAdditionalFees = useCallback(
+    async (row: Reading) => {
+      const meterId = row.meterId ?? row.meter?.id
+      if (!meterId || (row as { isPhantom?: boolean }).isPhantom) return
+      const year =
+        parseInt(filterYear.trim(), 10) ||
+        Number(row.year) ||
+        new Date().getFullYear()
+      const month =
+        parseInt(filterMonth.trim(), 10) ||
+        Number(row.month) ||
+        new Date().getMonth() + 1
+      if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+        setMessage({ type: 'error', text: 'Нэмэлт төлбөр сонгохын тулд он, сарыг шүүлтээр сонгоно уу' })
+        setTimeout(() => setMessage(null), 5000)
+        return
+      }
+      setAdditionalFeesModal({
+        meterId,
+        meterNumber: row.meter?.meterNumber ?? '(Тоолуур)',
+        organizationName: row.organization?.name ?? '(Харилцагч)',
+        year,
+        month,
+      })
+      setAdditionalFeesLoading(true)
+      setAdditionalFeeItems([])
+      try {
+        const params = new URLSearchParams({
+          meterId,
+          year: String(year),
+          month: String(month),
+        })
+        const res = await fetchWithAuth(`/api/additional-fees/selections?${params}`)
+        const data = await res.json()
+        if (!res.ok) {
+          setMessage({
+            type: 'error',
+            text: typeof data?.error === 'string' ? data.error : 'Ачааллахад алдаа гарлаа',
+          })
+          setAdditionalFeesModal(null)
+          return
+        }
+        const items = Array.isArray(data?.items) ? data.items : []
+        setAdditionalFeeItems(
+          items.map(
+            (it: {
+              feeDefinitionId: string
+              name: string
+              chargeBasis: AdditionalFeeChargeBasis
+              unitPrice: number
+              enabled: boolean
+              quantity: number
+            }) => ({
+              feeDefinitionId: it.feeDefinitionId,
+              name: it.name,
+              chargeBasis: it.chargeBasis,
+              unitPrice: Number(it.unitPrice) || 0,
+              enabled: !!it.enabled,
+              quantity:
+                it.enabled && Number(it.quantity) > 0 ? String(it.quantity) : '',
+            })
+          )
+        )
+      } catch (e) {
+        setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
+        setAdditionalFeesModal(null)
+      } finally {
+        setAdditionalFeesLoading(false)
+      }
+    },
+    [filterYear, filterMonth]
+  )
+
+  const saveMeterAdditionalFees = useCallback(async () => {
+    if (!additionalFeesModal) return
+    setAdditionalFeesSaving(true)
+    try {
+      const res = await fetchWithAuth('/api/additional-fees/selections', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meterId: additionalFeesModal.meterId,
+          year: additionalFeesModal.year,
+          month: additionalFeesModal.month,
+          selections: additionalFeeItems.map((it) => ({
+            feeDefinitionId: it.feeDefinitionId,
+            enabled: it.enabled,
+            quantity: it.enabled ? parseFloat(it.quantity.replace(',', '.')) || 0 : 0,
+          })),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setMessage({
+          type: 'error',
+          text: typeof data?.error === 'string' ? data.error : 'Хадгалахад алдаа гарлаа',
+        })
+        return
+      }
+      setAdditionalFeesModal(null)
+      setMessage({ type: 'success', text: 'Нэмэлт төлбөр хадгалагдлаа' })
+      setTimeout(() => setMessage(null), 4000)
+      await fetchReadings({ silent: true })
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Алдаа гарлаа' })
+    } finally {
+      setAdditionalFeesSaving(false)
+    }
+  }, [additionalFeesModal, additionalFeeItems, showCalculated, fetchReadings])
 
   // Meter dropdown — reactive cell editor (onValueChange + stopEditing)
   const MeterCellEditor = useMemo(() => {
@@ -1844,7 +2034,22 @@ export default function ReadingsContent() {
         }
         return '-'
       },
-      onCellClicked: undefined,
+      cellClass: (params: any) => {
+        const d = params.data
+        if (
+          !showAddModal &&
+          d?.meterId &&
+          !(d as { isPhantom?: boolean }).isPhantom &&
+          d?.organization?.name !== 'Нийт дүн'
+        ) {
+          return 'text-primary-700 cursor-pointer hover:underline'
+        }
+        return ''
+      },
+      onCellClicked: (params: any) => {
+        if (showAddModal || !params.data) return
+        void openMeterAdditionalFees(params.data as Reading)
+      },
     },
     {
       headerName: 'Хэрэглэгчийн нэр',
@@ -1852,6 +2057,10 @@ export default function ReadingsContent() {
       minWidth: 140,
       editable: false,
       valueGetter: (params: any) => params.data?.organization?.name || '-',
+      cellClass: (params: any) => {
+        return ''
+      },
+      onCellClicked: undefined,
     },
     {
       headerName: 'Огноо',
@@ -2033,7 +2242,12 @@ export default function ReadingsContent() {
       ...numberColStyle,
       suppressNavigable: (params: any) => !readingRowUsesHeat(params.data),
       cellClass: (params: any) =>
-        !readingRowUsesHeat(params.data) ? 'reading-billing-cell-disabled' : '',
+        [
+          numberColStyle.cellClass,
+          !readingRowUsesHeat(params.data) ? 'reading-billing-cell-disabled' : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
       editable: (params: any) =>
         modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
         readingRowUsesHeat(params.data),
@@ -2067,13 +2281,35 @@ export default function ReadingsContent() {
       ...numberColStyle,
       suppressNavigable: (params: any) => !readingRowUsesHeat(params.data),
       cellClass: (params: any) =>
-        !readingRowUsesHeat(params.data) ? 'reading-billing-cell-disabled' : '',
+        [
+          numberColStyle.cellClass,
+          !readingRowUsesHeat(params.data) ? 'reading-billing-cell-disabled' : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
       editable: false,
       valueGetter: (params: any) => {
         const d = params.data as Reading | undefined
         if (!d) return 0
         if (d.organization?.name === 'Нийт дүн') return Number(d.heatAmount ?? 0) || 0
         return getTariffHeatDisplayAmount(d)
+      },
+      valueFormatter: (params: any) => {
+        if (params.value == null) return '0.00'
+        return formatMoney(params.value)
+      },
+    },
+    {
+      headerName: 'Нэмэлт төлбөр',
+      width: 140,
+      colId: 'additionalFeesAmount',
+      field: 'additionalFeesAmount' as any,
+      ...numberColStyle,
+      hide: showAddModal || !showCalculated,
+      valueGetter: (params: any) => {
+        const d = params.data as any
+        if (!d || d.organization?.name === 'Нийт дүн') return 0
+        return Number(d.additionalFeesAmount ?? 0) || 0
       },
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
@@ -2134,15 +2370,33 @@ export default function ReadingsContent() {
     getTariffHeatDisplayAmount,
     getDisplaySubtotalVatTotal,
     heatQtyForDisplay,
+    openMeterAdditionalFees,
+    showCalculated,
   ])
 
+  /** Үндсэн хүснэгт: дээд талын Сар/Он шүүлттэй үргэлж тааруулна (state-д өөр сар үлдсэн байж болно). */
+  const mainGridReadings = useMemo(() => {
+    let rows = readings
+    const fy = filterYear.trim()
+    const fm = filterMonth.trim()
+    if (fy) {
+      const y = parseInt(fy, 10)
+      if (Number.isFinite(y)) rows = rows.filter((r) => Number(r.year) === y)
+    }
+    if (fm) {
+      const m = parseInt(fm, 10)
+      if (Number.isFinite(m)) rows = rows.filter((r) => Number(r.month) === m)
+    }
+    return rows
+  }, [readings, filterYear, filterMonth])
+
   const gridNeedsWater = useMemo(
-    () => readings.length === 0 || readings.some(readingRowUsesWater),
-    [readings]
+    () => mainGridReadings.length === 0 || mainGridReadings.some(readingRowUsesWater),
+    [mainGridReadings]
   )
   const gridNeedsHeat = useMemo(
-    () => readings.length === 0 || readings.some(readingRowUsesHeat),
-    [readings]
+    () => mainGridReadings.length === 0 || mainGridReadings.some(readingRowUsesHeat),
+    [mainGridReadings]
   )
 
   const columnDefs = useMemo(
@@ -2161,19 +2415,19 @@ export default function ReadingsContent() {
 
   const pinnedBottomRowData = useMemo(() => {
     const sum = (field: keyof Reading) =>
-      readings.reduce((acc, row) => acc + (Number(row[field] ?? 0) || 0), 0)
-    const usageWaterDiffSum = readings.reduce((acc, r) => {
+      mainGridReadings.reduce((acc, row) => acc + (Number(row[field] ?? 0) || 0), 0)
+    const usageWaterDiffSum = mainGridReadings.reduce((acc, r) => {
       const s = Number(r.startValue ?? 0)
       const e = Number(r.endValue ?? 0)
       return acc + (e > s ? e - s : 0)
     }, 0)
-    const heatReadingSum = readings.reduce((acc, r) => {
+    const heatReadingSum = mainGridReadings.reduce((acc, r) => {
       if (!readingRowUsesHeat(r)) return acc
       return acc + (Number(r.heatUsage ?? 0) || 0)
     }, 0)
-    const subtotalSum = readings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).subtotal, 0)
-    const vatSum = readings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).vat, 0)
-    const totalSum = readings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).total, 0)
+    const subtotalSum = mainGridReadings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).subtotal, 0)
+    const vatSum = mainGridReadings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).vat, 0)
+    const totalSum = mainGridReadings.reduce((acc, r) => acc + getDisplaySubtotalVatTotal(r).total, 0)
     return [
       {
         meterId: '',
@@ -2187,13 +2441,13 @@ export default function ReadingsContent() {
         baseClean: sum('baseClean'),
         dirtyAmount: sum('dirtyAmount'),
         cleanAmount: sum('cleanAmount'),
-        heatAmount: readings.reduce((acc, row) => acc + getTariffHeatDisplayAmount(row), 0),
+        heatAmount: mainGridReadings.reduce((acc, row) => acc + getTariffHeatDisplayAmount(row), 0),
         subtotal: subtotalSum,
         vat: vatSum,
         total: totalSum,
       } as Reading,
     ]
-  }, [readings, getTariffHeatDisplayAmount, getDisplaySubtotalVatTotal])
+  }, [mainGridReadings, getTariffHeatDisplayAmount, getDisplaySubtotalVatTotal])
 
   const modalColumnDefs: ColDef<Reading>[] = useMemo(() => {
     const MODAL_HIDE_HEADERS = new Set([
@@ -2247,6 +2501,116 @@ export default function ReadingsContent() {
         </div>
       )}
 
+      {additionalFeesModal && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">Бусад нэмэлт төлбөр</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                {additionalFeesModal.organizationName} · {additionalFeesModal.meterNumber} — {additionalFeesModal.year}-
+                {String(additionalFeesModal.month).padStart(2, '0')}
+              </p>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto flex-1">
+              {additionalFeesLoading ? (
+                <p className="text-gray-600 text-sm">Ачааллаж байна...</p>
+              ) : additionalFeeItems.length === 0 ? (
+                <p className="text-gray-500 text-sm">
+                  Идэвхтэй нэмэлт төлбөр байхгүй. Тариф хуудас → «Бусад нэмэлт төлбөр» tab-аас нэмнэ үү.
+                </p>
+              ) : (
+                <ul className="space-y-4">
+                  {additionalFeeItems.map((it, idx) => (
+                    <li key={it.feeDefinitionId} className="border border-gray-200 rounded-md p-3">
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={it.enabled}
+                          onChange={(e) => {
+                            const enabled = e.target.checked
+                            setAdditionalFeeItems((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, enabled } : row
+                              )
+                            )
+                          }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-gray-900">{it.name}</div>
+                          <div className="text-xs text-gray-500 mt-0.5">
+                            {ADDITIONAL_FEE_BASIS_LABELS[it.chargeBasis] ?? it.chargeBasis}
+                            {additionalFeeUsesUnitPrice(it.chargeBasis) && (
+                              <> — нэгжийн үнэ: {it.unitPrice.toFixed(2)} ₮</>
+                            )}
+                          </div>
+                          {it.enabled && (
+                            <div className="mt-2">
+                              <label className="text-xs text-gray-600 block mb-1">
+                                {additionalFeeReadingsInputLabel(it.chargeBasis)}
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                value={it.quantity}
+                                onChange={(e) => {
+                                  const quantity = e.target.value
+                                  setAdditionalFeeItems((prev) =>
+                                    prev.map((row, i) =>
+                                      i === idx ? { ...row, quantity } : row
+                                    )
+                                  )
+                                }}
+                                placeholder={
+                                  it.chargeBasis === 'AMOUNT' ? '0.00' : '0'
+                                }
+                                className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                              />
+                              {additionalFeeUsesUnitPrice(it.chargeBasis) &&
+                                Number(it.quantity) > 0 && (
+                                  <p className="text-xs text-gray-600 mt-1">
+                                    Нэмэгдэх дүн:{' '}
+                                    {(
+                                      Number(it.quantity) * it.unitPrice
+                                    ).toLocaleString('en-US', {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}{' '}
+                                    ₮
+                                  </p>
+                                )}
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAdditionalFeesModal(null)}
+                disabled={additionalFeesSaving}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+              >
+                Хаах
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveMeterAdditionalFees()}
+                disabled={additionalFeesSaving || additionalFeesLoading}
+                className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50"
+              >
+                {additionalFeesSaving ? 'Хадгалж байна...' : 'Хадгалах'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mb-8 flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-900">Заалтын мэдээлэл</h2>
         <button
@@ -2274,12 +2638,9 @@ export default function ReadingsContent() {
       {showAddModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex min-h-full items-center justify-center p-4">
-            {/* Backdrop */}
+            {/* Backdrop — зөвхөн "Хаах" товч дээр дарж модалийг хаана */}
             <div
               className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
-              onClick={() => {
-                if (!modalSaving) handleCloseAddModal()
-              }}
               aria-hidden
             />
 
@@ -2550,7 +2911,7 @@ export default function ReadingsContent() {
                 theme="legacy"
                 reactiveCustomComponents
                 ref={gridRef}
-                rowData={readings}
+                rowData={mainGridReadings}
                 pinnedBottomRowData={pinnedBottomRowData}
                 columnDefs={columnDefs}
                     suppressContextMenu={true}

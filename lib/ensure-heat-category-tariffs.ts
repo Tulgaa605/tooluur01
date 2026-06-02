@@ -3,12 +3,18 @@ import { HEAT_CATEGORY_DEFAULT_RATES } from './heat-tariff-defaults'
 
 /**
  * Төрлийн тарифын мөрүүдэд дулааны үнэ бүгд 0 байвал албан жагсаалтын үнийг автоматаар бичнэ.
- * (Seed ажиллуулаагүй DB-д хүснэгт 0 харагдахаас сэргийлнэ.)
+ * Зөвхөн тухайн нягтлангийн албан байгууллагын (ownerOrganizationId) мөрүүдэд.
  */
-export async function ensureHeatCategoryTariffsInDb(): Promise<void> {
+export async function ensureHeatCategoryTariffsInDb(ownerOrganizationId: string): Promise<void> {
+  if (!ownerOrganizationId) return
   for (const h of HEAT_CATEGORY_DEFAULT_RATES) {
     const existing = await prisma.categoryTariff.findUnique({
-      where: { category: h.category },
+      where: {
+        category_ownerOrganizationId: {
+          category: h.category,
+          ownerOrganizationId,
+        },
+      },
       select: {
         category: true,
         baseCleanFee: true,
@@ -25,6 +31,7 @@ export async function ensureHeatCategoryTariffsInDb(): Promise<void> {
       await prisma.categoryTariff.create({
         data: {
           category: h.category,
+          ownerOrganizationId,
           baseCleanFee: 0,
           baseDirtyFee: 0,
           cleanPerM3: 0,
@@ -45,7 +52,7 @@ export async function ensureHeatCategoryTariffsInDb(): Promise<void> {
     // `update()` нь баримтыг DateTime болгож дахин уншина; хуучин DB-д createdAt string байвал алдаа гарна.
     if (heatAllZero) {
       await prisma.categoryTariff.updateMany({
-        where: { category: h.category },
+        where: { category: h.category, ownerOrganizationId },
         data: {
           heatPerM3: h.heatPerM3,
           heatPerM2: h.heatPerM2,

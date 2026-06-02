@@ -10,6 +10,14 @@ import {
   type BillingMode,
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc'
+import {
+  computeOrganizationAdditionalFees,
+  formatAdditionalFeeLineDetail,
+  sumOrgUsageTotals,
+  type AdditionalFeeLine,
+} from '@/lib/additional-fees-calc'
+import { loadAdditionalFeeDefinitionsByIds } from '@/lib/additional-fees-db'
+import { prisma } from '@/lib/prisma'
 
 export function formatMoney(value: unknown): string {
   const n = Number(value ?? 0)
@@ -69,6 +77,111 @@ export function waterTariffAdjustedForMeter(
   )
 }
 
+export type AdditionalFeeDisplayLine = {
+  name: string
+  detail: string
+  amount: number
+}
+
+export type OrgAdditionalFeesBreakdown = {
+  lines: AdditionalFeeDisplayLine[]
+  extraSubtotal: number
+  extraVat: number
+  extraTotal: number
+}
+
+function additionalFeeLinesToDisplay(lines: AdditionalFeeLine[]): AdditionalFeeDisplayLine[] {
+  return lines.map((l) => ({
+    name: l.name,
+    detail: formatAdditionalFeeLineDetail(l),
+    amount: l.amount,
+  }))
+}
+
+/** Сонгосон бусад нэмэлт төлбөрүүдийг нэр, дүнгээр нь буцаана (НӨАТ орсон нийт дүн тусад). */
+export async function loadOrgAdditionalFeesBreakdown(
+  organizationId: string,
+  year: number,
+  month: number,
+  readings: Parameters<typeof sumOrgUsageTotals>[0]
+): Promise<OrgAdditionalFeesBreakdown> {
+  const empty: OrgAdditionalFeesBreakdown = {
+    lines: [],
+    extraSubtotal: 0,
+    extraVat: 0,
+    extraTotal: 0,
+  }
+
+  const meterIds = [
+    ...new Set(
+      readings
+        .map((r: any) => String(r?.meterId ?? r?.meter?.id ?? '').trim())
+        .filter(Boolean)
+    ),
+  ]
+  if (meterIds.length === 0) return empty
+
+  const selections = await prisma.meterAdditionalFeeSelection.findMany({
+    where: { meterId: { in: meterIds }, year, month, enabled: true },
+    select: { meterId: true, feeDefinitionId: true, enabled: true, quantity: true },
+  })
+  if (selections.length === 0) return empty
+
+  const definitions = await loadAdditionalFeeDefinitionsByIds(
+    selections.map((s: { feeDefinitionId: string }) => s.feeDefinitionId)
+  )
+  if (definitions.length === 0) return empty
+
+  const selsByMeter = new Map<string, typeof selections>()
+  for (const s of selections) {
+    const k = String(s.meterId)
+    const list = selsByMeter.get(k) ?? []
+    list.push(s)
+    selsByMeter.set(k, list)
+  }
+
+  const meterNumberById = new Map(
+    readings
+      .map((r: any) => [String(r?.meterId ?? r?.meter?.id ?? ''), String(r?.meter?.meterNumber ?? '')] as const)
+      .filter((x) => x[0] && x[1])
+  )
+
+  let extraSubtotal = 0
+  const displayLines: AdditionalFeeDisplayLine[] = []
+  for (const [meterId, sels] of selsByMeter) {
+    const meterReadings = readings.filter((r: any) => String(r?.meterId ?? r?.meter?.id ?? '') === meterId)
+    const usage = sumOrgUsageTotals(meterReadings)
+    const { lines, extraSubtotal: sub } = computeOrganizationAdditionalFees(
+      definitions,
+      sels.map((s: { feeDefinitionId: string; enabled: boolean; quantity: unknown }) => ({
+        feeDefinitionId: s.feeDefinitionId,
+        enabled: s.enabled,
+        quantity: Number(s.quantity) || 0,
+      })),
+      usage
+    )
+    if (sub > 0) {
+      extraSubtotal = roundMoneyLocal(extraSubtotal + sub)
+      const meterNo = meterNumberById.get(meterId) ?? ''
+      for (const l of lines) {
+        displayLines.push({
+          name: meterNo ? `${meterNo} — ${l.name}` : l.name,
+          detail: formatAdditionalFeeLineDetail(l),
+          amount: l.amount,
+        })
+      }
+    }
+  }
+  const extraVat = roundMoneyLocal(extraSubtotal * 0.1)
+  const extraTotal = roundMoneyLocal(extraSubtotal + extraVat)
+  return {
+    lines: displayLines,
+    extraSubtotal,
+    extraVat,
+    extraTotal,
+  }
+}
+
 export type ReadingBreakdownLine = {
   readingId: string
   meterNumber: string
@@ -93,6 +206,9 @@ export async function computeReadingBreakdownLine(reading: {
   usage?: unknown
   heatUsage?: unknown
   paidAmount?: unknown
+  subtotal?: unknown
+  vat?: unknown
+  total?: unknown
   meter?: {
     meterNumber: string
     billingMode?: string | null
@@ -137,6 +253,15 @@ export async function computeReadingBreakdownLine(reading: {
   const total = Number(money.total ?? 0) || 0
   const paid = effectivePaid(reading.paidAmount)
 
+  const storedSubtotal = Number(reading.subtotal ?? NaN)
+  const storedVat = Number(reading.vat ?? NaN)
+  const storedTotal = Number(reading.total ?? NaN)
+  const useStored =
+    Number.isFinite(storedSubtotal) &&
+    Number.isFinite(storedVat) &&
+    Number.isFinite(storedTotal) &&
+    storedTotal >= 0
+
   return {
     readingId: reading.id,
     meterNumber: reading.meter?.meterNumber ?? '-',
@@ -144,10 +269,10 @@ export async function computeReadingBreakdownLine(reading: {
     cleanAmount: Number(money.cleanAmount ?? 0) || 0,
     dirtyAmount: Number(money.dirtyAmount ?? 0) || 0,
     heatAmount: Number(money.heatAmount ?? 0) || 0,
-    subtotal: Number(money.subtotal ?? 0) || 0,
-    vat: Number(money.vat ?? 0) || 0,
-    total,
+    subtotal: useStored ? storedSubtotal : Number(money.subtotal ?? 0) || 0,
+    vat: useStored ? storedVat : Number(money.vat ?? 0) || 0,
+    total: useStored ? storedTotal : total,
     paid,
-    remaining: remainingBalance(total, reading.paidAmount),
+    remaining: remainingBalance(useStored ? storedTotal : total, reading.paidAmount),
   }
 }

@@ -444,6 +444,7 @@ export default function MonthlyReadingsGrid({
         colId: 'heatReading',
         field: 'heatUsage',
         ...numberColStyle,
+        cellStyle: { textAlign: 'right' },
         editable: false,
         valueGetter: (params) => {
           const d = params.data
@@ -463,6 +464,7 @@ export default function MonthlyReadingsGrid({
         width: 120,
         field: 'heatAmount',
         ...numberColStyle,
+        cellStyle: { textAlign: 'right' },
         editable: false,
         valueGetter: (params) => {
           const d = params.data

@@ -37,5 +37,6 @@ next-env.d.ts
 
 # prisma
 /prisma/migrations
+/lib/prisma-generated
 
 .next-build/

@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { organizationIdInScope } from '@/lib/org-scope'
+import { userCanSendSms } from '@/lib/org-scope'
 import { sendTextSms } from '@/lib/sms'
 import { resolveEffectiveSmsSender } from '@/lib/sms-senders'
 import {
   computeReadingBreakdownLine,
+  loadOrgAdditionalFeesBreakdown,
   waterUsageFromReading,
 } from '@/lib/public-billing-breakdown'
 import { normalizeBillingMode } from '@/lib/meter-reading-calc-core'
@@ -148,7 +149,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         )
       }
-      if (!(await organizationIdInScope(user, r.organizationId))) {
+      if (!(await userCanSendSms(user, r.organizationId))) {
         return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
       }
     }
@@ -180,7 +181,19 @@ export async function POST(request: NextRequest) {
     })
 
     const lines = await Promise.all(readings.map((r) => computeReadingBreakdownLine(r)))
-    const totalSum = lines.reduce((a, l) => a + l.total, 0)
+    const allPeriodReadings = await prisma.meterReading.findMany({
+      where: { organizationId: orgId, year, month },
+      include: { meter: { select: { billingMode: true } } },
+    })
+    const additionalFees = await loadOrgAdditionalFeesBreakdown(
+      orgId,
+      year,
+      month,
+      allPeriodReadings
+    )
+    const totalFromDb = allPeriodReadings.reduce((a, r) => a + (Number(r.total) || 0), 0)
+    const totalFromLines = lines.reduce((a, l) => a + l.total, 0) + additionalFees.extraTotal
+    const totalSum = totalFromDb > 0 ? totalFromDb : totalFromLines
     const meterLines = readings.map((r, i) => {
       const line = lines[i]
       const bm = normalizeBillingMode(r.meter?.billingMode)
@@ -229,6 +242,10 @@ export async function POST(request: NextRequest) {
       meterLines,
       total: totalSum,
       previousRemaining,
+      additionalFeeLines: additionalFees.lines.map((f) => ({
+        name: f.name,
+        amount: f.amount,
+      })),
       breakdownUrl,
     })
 
@@ -298,7 +315,7 @@ type PhantomCtx = {
  */
 async function handlePhantomSend(ctx: PhantomCtx): Promise<NextResponse> {
   const { organizationId, year, month, fromPhone } = ctx
-  if (!(await organizationIdInScope(ctx.user as never, organizationId))) {
+  if (!(await userCanSendSms(ctx.user as never, organizationId))) {
     return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
   }
 

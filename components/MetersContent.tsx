@@ -389,9 +389,15 @@ export default function MetersContent() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
 
+      const savedHeatOnly =
+        form.billingMode === 'HEAT' && !editingId
       setMessage({
         type: 'success',
-        text: editingId ? 'Амжилттай шинэчиллээ' : 'Амжилттай хадгаллаа',
+        text: savedHeatOnly
+          ? 'Дулаан тоолуур бүртгэгдлээ. Сарын заалт → үндсэн хүснэгтэд гарна. «Бодолт» дарж тооцоолно уу.'
+          : editingId
+            ? 'Амжилттай шинэчиллээ'
+            : 'Амжилттай хадгаллаа',
       })
       setShowForm(false)
       setEditingId(null)

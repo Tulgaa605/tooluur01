@@ -22,6 +22,8 @@ function formatMeterLine(m: MeterUsageSmsLine): string {
 /**
  * Нэг SMS текст — нэр, код, тоолуур/хэрэглээ, төлбөр, задаргааны холбоос.
  */
+export type AdditionalFeeSmsLine = { name: string; amount: number }
+
 export function buildSmsMessage(input: {
   organizationName: string
   organizationCode?: string | null
@@ -29,6 +31,8 @@ export function buildSmsMessage(input: {
   total: number
   /** Өмнөх саруудаас шилжсэн үлдэгдэл — байвал тусад нь мөр болж харагдана */
   previousRemaining?: number | null
+  /** Бусад нэмэлт төлбөр — задаргааны холбоос дээр дэлгэрэнгүй */
+  additionalFeeLines?: AdditionalFeeSmsLine[]
   breakdownUrl?: string | null
 }): string {
   const orgName = String(input.organizationName ?? '').trim()
@@ -54,10 +58,19 @@ export function buildSmsMessage(input: {
       ? `Төлбөр: ${Math.round(grandTotal).toLocaleString('en-US')}₮`
       : ''
 
-  const buildBody = (name: string, code: string, meterText: string) => {
+  const feeLines = (input.additionalFeeLines ?? [])
+    .filter((f) => String(f.name ?? '').trim() && Number(f.amount) > 0)
+    .map((f) => {
+      const amt = Math.round(Number(f.amount) || 0)
+      return `${String(f.name).trim()}: ${amt.toLocaleString('en-US')}₮`
+    })
+  const feeText = feeLines.join('\n')
+
+  const buildBody = (name: string, code: string, meterText: string, feesText: string) => {
     const parts = [`Нэр: ${name}`]
     if (code) parts.push(`Код: ${code}`)
     if (meterText) parts.push(meterText)
+    if (feesText) parts.push(feesText)
     if (prevLine) parts.push(prevLine)
     if (totalLine) parts.push(totalLine)
     if (footer) parts.push(footer)
@@ -65,7 +78,8 @@ export function buildSmsMessage(input: {
   }
 
   let meterText = sortedMeters.map(formatMeterLine).join('\n')
-  let message = buildBody(orgName, orgCode, meterText)
+  let feesText = feeText
+  let message = buildBody(orgName, orgCode, meterText, feesText)
 
   const maxLen = 480
   if (message.length <= maxLen) return message
@@ -75,16 +89,23 @@ export function buildSmsMessage(input: {
     const extra = sortedMeters.length - 3
     if (extra > 0) lines.push(`+${extra} тоолуур`)
     meterText = lines.join('\n')
-    message = buildBody(truncateText(orgName, 48), orgCode, meterText)
+    message = buildBody(truncateText(orgName, 48), orgCode, meterText, feesText)
+  }
+
+  if (message.length > maxLen && feeLines.length > 2) {
+    feesText = feeLines.slice(0, 2).join('\n')
+    if (feeLines.length > 2) feesText += `\n+${feeLines.length - 2} нэмэлт`
+    message = buildBody(truncateText(orgName, 48), orgCode, meterText, feesText)
   }
 
   if (message.length > maxLen) {
     meterText = sortedMeters.length > 0 ? `${sortedMeters.length} тоолуур` : ''
-    message = buildBody(truncateText(orgName, 32), truncateText(orgCode, 20), meterText)
+    feesText = feeLines.length > 0 ? `${feeLines.length} нэмэлт төлбөр` : ''
+    message = buildBody(truncateText(orgName, 32), truncateText(orgCode, 20), meterText, feesText)
   }
 
   if (message.length > maxLen && footer) {
-    const withoutFooter = buildBody(truncateText(orgName, 40), truncateText(orgCode, 16), meterText)
+    const withoutFooter = buildBody(truncateText(orgName, 40), truncateText(orgCode, 16), meterText, feesText)
     const room = maxLen - withoutFooter.length - 1
     if (room > 24) {
       message = `${withoutFooter}\n${truncateText(footer, room)}`

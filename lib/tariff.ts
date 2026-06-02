@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { findCategoryTariffForCustomer } from '@/lib/category-tariff-scope'
 
 type CategoryTariffDoc = {
   category?: string
@@ -28,28 +29,17 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
     return pipe ? { baseCleanFee: pipe.baseCleanFee, baseDirtyFee: pipe.baseDirtyFee } : null
   }
 
-  const catRow = await prisma.categoryTariff.findUnique({
-    where: { category: org.category },
-    select: {
-      baseCleanFee: true,
-      baseDirtyFee: true,
-      cleanPerM3: true,
-      dirtyPerM3: true,
-      heatBaseFee: true,
-      heatPerM3: true,
-      heatPerM2: true,
-    },
-  })
+  const catRow = await findCategoryTariffForCustomer(organizationId, org.category)
   const catDocs: CategoryTariffDoc[] = catRow
     ? [
         {
-          baseCleanFee: catRow.baseCleanFee,
-          baseDirtyFee: catRow.baseDirtyFee,
-          cleanPerM3: catRow.cleanPerM3,
-          dirtyPerM3: catRow.dirtyPerM3,
-          heatBaseFee: catRow.heatBaseFee,
-          heatPerM3: catRow.heatPerM3,
-          heatPerM2: catRow.heatPerM2,
+          baseCleanFee: catRow.baseCleanFee ?? 0,
+          baseDirtyFee: catRow.baseDirtyFee ?? 0,
+          cleanPerM3: catRow.cleanPerM3 ?? 0,
+          dirtyPerM3: catRow.dirtyPerM3 ?? 0,
+          heatBaseFee: catRow.heatBaseFee ?? 0,
+          heatPerM3: catRow.heatPerM3 ?? 0,
+          heatPerM2: catRow.heatPerM2 ?? 0,
         },
       ]
     : []

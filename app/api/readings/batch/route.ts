@@ -204,7 +204,11 @@ export async function POST(request: NextRequest) {
 
     const propagateAtEnd = new Map<string, PropagateTask>()
 
-    if (items.some((i) => !i.id) && roleStr !== Role.ACCOUNTANT) {
+    if (
+      items.some((i) => !i.id) &&
+      roleStr !== Role.ACCOUNTANT &&
+      roleStr !== Role.MANAGER
+    ) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 

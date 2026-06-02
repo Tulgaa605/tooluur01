@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
+import AdditionalFeesTab from './AdditionalFeesTab'
 import { fetchWithAuth } from '@/lib/api'
 import { HEAT_CATEGORY_DEFAULT_RATES, heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
 
@@ -112,6 +113,7 @@ export default function TariffsContent() {
   })
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'tariff' | 'pipe'; id: string; part?: 'water' | 'heat' } | null>(null)
   const [tariffEditTarget, setTariffEditTarget] = useState<TariffEditTarget>({ mode: 'new' })
+  const [pageTab, setPageTab] = useState<'tariffs' | 'additional'>('tariffs')
 
   const loadAll = async () => {
     setLoading(true)
@@ -563,23 +565,58 @@ export default function TariffsContent() {
 
   return (
     <div className="px-4 sm:px-0">
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900">Тариф</h2>
-          <p className="mt-1 text-sm text-gray-600">
-            Доор ус болон дулааны тарифыг <strong>тусдаа хүснэгтээр</strong> харуулна. Усны суурь хураамж шугамын голчоор доорх
-            хэсгээс автоматаар тооцогдоно.
-          </p>
+          {pageTab === 'tariffs' && (
+            <p className="mt-1 text-sm text-gray-600">
+              Доор ус болон дулааны тарифыг <strong>тусдаа хүснэгтээр</strong> харуулна. Усны суурь хураамж шугамын голчоор доорх
+              хэсгээс автоматаар тооцогдоно.
+            </p>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={openNewTariffModal}
-          className="shrink-0 px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-        >
-          Шинэ тариф нэмэх
-        </button>
+        {pageTab === 'tariffs' && (
+          <button
+            type="button"
+            onClick={openNewTariffModal}
+            className="shrink-0 px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+          >
+            Шинэ тариф нэмэх
+          </button>
+        )}
       </div>
 
+      <div className="mb-6 border-b border-gray-200">
+        <nav className="-mb-px flex gap-6">
+          <button
+            type="button"
+            onClick={() => setPageTab('tariffs')}
+            className={`pb-3 text-sm font-medium border-b-2 ${
+              pageTab === 'tariffs'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Тариф
+          </button>
+          <button
+            type="button"
+            onClick={() => setPageTab('additional')}
+            className={`pb-3 text-sm font-medium border-b-2 ${
+              pageTab === 'additional'
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Бусад нэмэлт төлбөр
+          </button>
+        </nav>
+      </div>
+
+      {pageTab === 'additional' ? (
+        <AdditionalFeesTab />
+      ) : (
+        <>
       {message && (
         <div
           className={`mb-6 p-4 rounded-md ${
@@ -1285,6 +1322,8 @@ export default function TariffsContent() {
           onConfirm={deleteConfirm.type === 'tariff' ? doDeleteTariff : doDeletePipe}
           onCancel={() => setDeleteConfirm(null)}
         />
+      )}
+        </>
       )}
     </div>
   )

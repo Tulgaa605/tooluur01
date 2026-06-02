@@ -99,3 +99,21 @@ export async function organizationIdInScope(
   const ids = await getScopedOrganizationIds(user)
   return ids.includes(organizationId)
 }
+
+/**
+ * SMS илгээх эрх: нягтлан/захирал — төлбөрийн хуудсан дээрх бүх харилцагч руу (байгууллагын scope-оор хязгаарлахгүй).
+ * Энгийн хэрэглэгч (USER) — зөвхөн өөрийн байгууллага.
+ */
+export async function userCanSendSms(
+  user: TokenPayload,
+  organizationId: string
+): Promise<boolean> {
+  const roleStr = String(user.role)
+  if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+    return true
+  }
+  if (roleStr === Role.USER) {
+    return !!user.organizationId && user.organizationId === organizationId
+  }
+  return false
+}
