@@ -5,13 +5,11 @@ import {
   computeReadingMoneySplit,
   effectiveBillingCategory,
   effectiveWaterChargeSplit,
-  getHeatTariffRatesForPeriod,
-  getWaterTariffRatesForPeriod,
   normalizeBillingMode,
   type BillingMode,
-  type HeatTariffRates,
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc'
+import { TariffPeriodCache } from '@/lib/tariff-period-cache'
 
 export function waterUsageFromReading(r: {
   startValue?: unknown
@@ -37,30 +35,16 @@ function waterTariffAdjustedForMeter(
   )
 }
 
-type TariffCaches = {
-  rawWater: Map<string, WaterTariffRates>
-  heat: Map<string, HeatTariffRates>
-}
-
-function tariffCacheKey(
-  organizationId: string,
-  year: number,
-  month: number,
-  pipeMm: number | null,
-  orgCategory: string
-): string {
-  return `${organizationId}-${year}-${month}-${pipeMm ?? 'org'}|${orgCategory}`
-}
-
 export type ReadingForTariffRecalc = {
-  id?: string
+  id: string
+  meterId: string
   organizationId: string
   year: number
   month: number
-  startValue?: unknown
-  endValue?: unknown
-  usage?: unknown
-  heatUsage?: unknown
+  startValue?: number
+  endValue?: number
+  usage?: number
+  heatUsage?: number
   meter?: {
     billingMode?: string | null
     pipeDiameterMm?: number | null
@@ -70,27 +54,25 @@ export type ReadingForTariffRecalc = {
   organization?: { category?: string | null } | null
 }
 
-/** Нэг заалтын мөрийг тухайн сарын тариф + зөрүүгээр дахин тооцно. */
-export async function recalculateReadingRowMoney<T extends ReadingForTariffRecalc>(
+/** Нэг заалтын мөрийг тухайн сарын тариф + зөрүүгээр дахин тооцно (синхрон). */
+export function recalculateReadingRowMoney<T extends ReadingForTariffRecalc>(
   r: T,
-  caches?: TariffCaches
-): Promise<
-  T & {
-    baseClean: number
-    baseDirty: number
-    cleanPerM3: number
-    dirtyPerM3: number
-    heatBase: number
-    heatPerM3: number
-    heatPerM2: number
-    cleanAmount: number
-    dirtyAmount: number
-    heatAmount: number
-    subtotal: number
-    vat: number
-    total: number
-  }
-> {
+  tariffCache: TariffPeriodCache
+): T & {
+  baseClean: number
+  baseDirty: number
+  cleanPerM3: number
+  dirtyPerM3: number
+  heatBase: number
+  heatPerM3: number
+  heatPerM2: number
+  cleanAmount: number
+  dirtyAmount: number
+  heatAmount: number
+  subtotal: number
+  vat: number
+  total: number
+} {
   const m = r.meter
   const pipeMm =
     m?.pipeDiameterMm != null &&
@@ -99,24 +81,14 @@ export async function recalculateReadingRowMoney<T extends ReadingForTariffRecal
       ? Math.trunc(Number(m.pipeDiameterMm))
       : null
   const orgCategory = effectiveBillingCategory(m?.billingCategory, r.organization?.category)
-  const cacheKey = tariffCacheKey(r.organizationId, r.year, r.month, pipeMm, orgCategory)
 
-  let rawWater = caches?.rawWater.get(cacheKey)
-  if (!rawWater) {
-    rawWater = await getWaterTariffRatesForPeriod(r.organizationId, r.year, r.month, {
-      pipeDiameterMm: pipeMm,
-      billingCategory: m?.billingCategory,
-    })
-    caches?.rawWater.set(cacheKey, rawWater)
-  }
-
-  let heat = caches?.heat.get(cacheKey)
-  if (!heat) {
-    heat = await getHeatTariffRatesForPeriod(r.organizationId, r.year, r.month, {
-      billingCategory: m?.billingCategory,
-    })
-    caches?.heat.set(cacheKey, heat)
-  }
+  const rawWater = tariffCache.getWaterTariffRates(r.organizationId, {
+    pipeDiameterMm: pipeMm,
+    billingCategory: m?.billingCategory,
+  })
+  const heat = tariffCache.getHeatTariffRates(r.organizationId, {
+    billingCategory: m?.billingCategory,
+  })
 
   const billingMode = normalizeBillingMode(m?.billingMode)
   const water = waterTariffAdjustedForMeter(rawWater, billingMode, m?.waterChargeSplit)
@@ -146,49 +118,62 @@ export async function recalculateReadingRowMoney<T extends ReadingForTariffRecal
   }
 }
 
+const readingInclude = {
+  meter: {
+    select: {
+      billingMode: true,
+      pipeDiameterMm: true,
+      billingCategory: true,
+      waterChargeSplit: true,
+    },
+  },
+  organization: { select: { category: true } },
+} as const
+
+async function recalculateRawRows(
+  raw: ReadingForTariffRecalc[],
+  year: number,
+  month: number
+): Promise<number> {
+  if (raw.length === 0) return 0
+
+  const tariffCache = await TariffPeriodCache.build(
+    [...new Set(raw.map((r) => r.organizationId))],
+    year,
+    month
+  )
+  const recalculated = raw.map((r) => recalculateReadingRowMoney(r, tariffCache))
+
+  const { persistReadingMoneyFields, attachAdditionalFeesToReadings } = await import(
+    '@/lib/readings-with-additional-fees'
+  )
+  const withExtras = await attachAdditionalFeesToReadings(recalculated)
+  await persistReadingMoneyFields(
+    withExtras as Parameters<typeof persistReadingMoneyFields>[0]
+  )
+  return withExtras.length
+}
+
+/** Олон байгууллагын нэг сарын заалтыг нэг удаа тарифаар дахин тооцно. */
+export async function recalculateOrgIdsForPeriod(
+  organizationIds: string[],
+  year: number,
+  month: number
+): Promise<number> {
+  const orgIds = [...new Set(organizationIds.filter(Boolean))]
+  if (orgIds.length === 0) return 0
+  const raw = await prisma.meterReading.findMany({
+    where: { organizationId: { in: orgIds }, year, month },
+    include: readingInclude,
+  })
+  return recalculateRawRows(raw, year, month)
+}
+
 /** Байгууллагын тухайн сарын бүх заалтыг тарифаар дахин тооцож DB-д хадгална. */
 export async function recalculateOrgPeriodReadings(
   organizationId: string,
   year: number,
   month: number
 ): Promise<number> {
-  const raw = await prisma.meterReading.findMany({
-    where: { organizationId, year, month },
-    include: {
-      meter: {
-        select: {
-          billingMode: true,
-          pipeDiameterMm: true,
-          billingCategory: true,
-          waterChargeSplit: true,
-        },
-      },
-      organization: { select: { category: true } },
-    },
-  })
-  if (raw.length === 0) return 0
-
-  const caches: TariffCaches = { rawWater: new Map(), heat: new Map() }
-  const recalculated = await Promise.all(
-    raw.map((r) =>
-      recalculateReadingRowMoney(
-        {
-          ...r,
-          organizationId: r.organizationId,
-          year: r.year,
-          month: r.month,
-          meter: r.meter,
-          organization: r.organization,
-        },
-        caches
-      )
-    )
-  )
-
-  const { persistReadingMoneyFields } = await import('@/lib/readings-with-additional-fees')
-  const { attachAdditionalFeesToReadings } = await import('@/lib/readings-with-additional-fees')
-
-  const withExtras = await attachAdditionalFeesToReadings(recalculated)
-  await persistReadingMoneyFields(withExtras)
-  return withExtras.length
+  return recalculateOrgIdsForPeriod([organizationId], year, month)
 }

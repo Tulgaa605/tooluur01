@@ -105,30 +105,34 @@ export async function persistReadingMoneyFields(
   const rows = readings.filter((r) => r.id && !r.isPhantom)
   if (rows.length === 0) return
 
-  await Promise.all(
-    rows.map((r) =>
-      prisma.meterReading.update({
-        where: { id: r.id! },
-        data: {
-          subtotal: Number(r.subtotal) || 0,
-          vat: Number(r.vat) || 0,
-          total: Number(r.total) || 0,
-          ...(r.cleanAmount != null ? { cleanAmount: Number(r.cleanAmount) || 0 } : {}),
-          ...(r.dirtyAmount != null ? { dirtyAmount: Number(r.dirtyAmount) || 0 } : {}),
-          ...(r.heatAmount != null ? { heatAmount: Number(r.heatAmount) || 0 } : {}),
-          ...(r.baseClean != null ? { baseClean: Number(r.baseClean) || 0 } : {}),
-          ...(r.baseDirty != null ? { baseDirty: Number(r.baseDirty) || 0 } : {}),
-          ...(r.cleanPerM3 != null ? { cleanPerM3: Number(r.cleanPerM3) || 0 } : {}),
-          ...(r.dirtyPerM3 != null ? { dirtyPerM3: Number(r.dirtyPerM3) || 0 } : {}),
-          ...(r.heatBase != null ? { heatBase: Number(r.heatBase) || 0 } : {}),
-          ...(r.heatPerM3 != null ? { heatPerM3: Number(r.heatPerM3) || 0 } : {}),
-          ...(r.heatPerM2 != null ? { heatPerM2: Number(r.heatPerM2) || 0 } : {}),
-          ...(r.heatUsage != null ? { heatUsage: Number(r.heatUsage) || 0 } : {}),
-          ...(r.usage != null ? { usage: Number(r.usage) || 0 } : {}),
-        },
-      })
+  const WAVE = 48
+  for (let i = 0; i < rows.length; i += WAVE) {
+    const slice = rows.slice(i, i + WAVE)
+    await Promise.all(
+      slice.map((r) =>
+        prisma.meterReading.update({
+          where: { id: r.id! },
+          data: {
+            subtotal: Number(r.subtotal) || 0,
+            vat: Number(r.vat) || 0,
+            total: Number(r.total) || 0,
+            ...(r.cleanAmount != null ? { cleanAmount: Number(r.cleanAmount) || 0 } : {}),
+            ...(r.dirtyAmount != null ? { dirtyAmount: Number(r.dirtyAmount) || 0 } : {}),
+            ...(r.heatAmount != null ? { heatAmount: Number(r.heatAmount) || 0 } : {}),
+            ...(r.baseClean != null ? { baseClean: Number(r.baseClean) || 0 } : {}),
+            ...(r.baseDirty != null ? { baseDirty: Number(r.baseDirty) || 0 } : {}),
+            ...(r.cleanPerM3 != null ? { cleanPerM3: Number(r.cleanPerM3) || 0 } : {}),
+            ...(r.dirtyPerM3 != null ? { dirtyPerM3: Number(r.dirtyPerM3) || 0 } : {}),
+            ...(r.heatBase != null ? { heatBase: Number(r.heatBase) || 0 } : {}),
+            ...(r.heatPerM3 != null ? { heatPerM3: Number(r.heatPerM3) || 0 } : {}),
+            ...(r.heatPerM2 != null ? { heatPerM2: Number(r.heatPerM2) || 0 } : {}),
+            ...(r.heatUsage != null ? { heatUsage: Number(r.heatUsage) || 0 } : {}),
+            ...(r.usage != null ? { usage: Number(r.usage) || 0 } : {}),
+          },
+        })
+      )
     )
-  )
+  }
 }
 
 /** Нэг байгууллагын тухайн сарын заалтуудыг DB-ээс уншиж, нэмэлт төлбөртэй дүнг хадгална. */

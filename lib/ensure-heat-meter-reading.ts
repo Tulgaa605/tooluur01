@@ -47,7 +47,8 @@ export type HeatMeterSnapshot = {
 export async function ensureHeatMeterReadingForPeriod(
   meter: HeatMeterSnapshot,
   userId: string,
-  period: { year: number; month: number }
+  period: { year: number; month: number },
+  opts?: { skipCategorySeed?: boolean }
 ): Promise<boolean> {
   const billingMode = normalizeBillingMode(meter.billingMode)
   if (billingMode !== 'HEAT') return false
@@ -71,10 +72,12 @@ export async function ensureHeatMeterReadingForPeriod(
   })
   if (existing) return false
 
-  const ownerOrgId = meter.organizationId
-    ? await getCategoryTariffOwnerOrgIdForCustomer(meter.organizationId)
-    : null
-  if (ownerOrgId) await ensureHeatCategoryTariffsInDb(ownerOrgId)
+  if (!opts?.skipCategorySeed) {
+    const ownerOrgId = meter.organizationId
+      ? await getCategoryTariffOwnerOrgIdForCustomer(meter.organizationId)
+      : null
+    if (ownerOrgId) await ensureHeatCategoryTariffsInDb(ownerOrgId)
+  }
 
   await prisma.meterReading.create({
     data: {
@@ -149,24 +152,37 @@ export async function syncHeatMeterReadingsForPeriod(
     },
   })
 
-  let created = 0
-  for (const m of heatMeters) {
+  const officeOrgId = await ensureOfficeOrganizationId(user)
+  if (officeOrgId) await ensureHeatCategoryTariffsInDb(officeOrgId)
+
+  const candidates = heatMeters.filter((m) => {
     const heat = Number(m.defaultHeatUsage ?? 0)
-    if (!Number.isFinite(heat) || heat <= 0) continue
-    const ok = await ensureHeatMeterReadingForPeriod(
-      {
-        id: m.id,
-        organizationId: m.organizationId,
-        billingMode: m.billingMode,
-        defaultHeatUsage: m.defaultHeatUsage,
-        waterChargeSplit: m.waterChargeSplit,
-        pipeDiameterMm: m.pipeDiameterMm,
-        billingCategory: m.billingCategory,
-      },
-      user.userId,
-      { year, month }
+    return Number.isFinite(heat) && heat > 0
+  })
+
+  let created = 0
+  const WAVE = 24
+  for (let i = 0; i < candidates.length; i += WAVE) {
+    const slice = candidates.slice(i, i + WAVE)
+    const results = await Promise.all(
+      slice.map((m) =>
+        ensureHeatMeterReadingForPeriod(
+          {
+            id: m.id,
+            organizationId: m.organizationId,
+            billingMode: m.billingMode,
+            defaultHeatUsage: m.defaultHeatUsage,
+            waterChargeSplit: m.waterChargeSplit,
+            pipeDiameterMm: m.pipeDiameterMm,
+            billingCategory: m.billingCategory,
+          },
+          user.userId,
+          { year, month },
+          { skipCategorySeed: true }
+        )
+      )
     )
-    if (ok) created += 1
+    created += results.filter(Boolean).length
   }
   return created
 }

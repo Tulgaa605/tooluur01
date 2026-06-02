@@ -6,7 +6,7 @@ import { getScopedOrganizationIds } from '@/lib/org-scope'
 import { type BillingMode, normalizeBillingMode } from '@/lib/meter-reading-calc'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
-import { recalculateOrgPeriodReadings } from '@/lib/recalculate-readings-tariff'
+import { recalculateOrgIdsForPeriod } from '@/lib/recalculate-readings-tariff'
 
 function endReadingChanged(before: unknown, after: unknown): boolean {
   const a = Number(before)
@@ -419,19 +419,21 @@ export async function POST(request: NextRequest) {
     }
 
     // Хадгалсны дараа тухайн сарын тарифаар (төрлийн тариф + зөрүү) дүнг тооцож DB-д бичнэ.
-    const periodKeys = new Map<string, { organizationId: string; year: number; month: number }>()
+    const periodBuckets = new Map<
+      string,
+      { year: number; month: number; orgIds: Set<string> }
+    >()
     for (const r of savedRows) {
-      periodKeys.set(`${r.organizationId}|${r.year}|${r.month}`, {
-        organizationId: r.organizationId,
-        year: Number(r.year),
-        month: Number(r.month),
-      })
+      const year = Number(r.year)
+      const month = Number(r.month)
+      const k = `${year}|${month}`
+      const bucket = periodBuckets.get(k) ?? { year, month, orgIds: new Set<string>() }
+      bucket.orgIds.add(r.organizationId)
+      periodBuckets.set(k, bucket)
     }
-    await Promise.all(
-      [...periodKeys.values()].map((p) =>
-        recalculateOrgPeriodReadings(p.organizationId, p.year, p.month)
-      )
-    )
+    for (const bucket of periodBuckets.values()) {
+      await recalculateOrgIdsForPeriod([...bucket.orgIds], bucket.year, bucket.month)
+    }
 
     const savedIds = savedRows.map((r) => r.id).filter(Boolean) as string[]
     const savedRowsForResponse =

@@ -512,8 +512,11 @@ export default function ReadingsContent() {
   const [saveSuccessToast, setSaveSuccessToast] = useState<string | null>(null)
   const [readings, setReadings] = useState<Reading[]>([])
   const [readingsLoading, setReadingsLoading] = useState(false)
-  const [filterMonth, setFilterMonth] = useState('')
+  const [recalculating, setRecalculating] = useState(false)
+  const [filterMonth, setFilterMonth] = useState(() => String(new Date().getMonth() + 1))
   const [filterYear, setFilterYear] = useState(() => String(new Date().getFullYear()))
+  const [debouncedMonth, setDebouncedMonth] = useState(() => String(new Date().getMonth() + 1))
+  const [debouncedYear, setDebouncedYear] = useState(() => String(new Date().getFullYear()))
   // “Бодолт” товч дарсан үед л тарифаар дахин тооцсон дүнг харуулна (recalculate=1).
   const [showCalculated, setShowCalculated] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -786,6 +789,14 @@ export default function ReadingsContent() {
       .catch(() => setAllMeters([]))
   }, [])
 
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedMonth(filterMonth)
+      setDebouncedYear(filterYear)
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [filterMonth, filterYear])
+
   const fetchReadings = useCallback(
     async (opts?: {
       silent?: boolean
@@ -804,8 +815,11 @@ export default function ReadingsContent() {
       const yearOverride =
         opts?.year != null && String(opts.year).trim() !== '' ? String(opts.year).trim() : ''
 
-      const monthToUse = monthOverride || filterMonth.trim()
-      const yearToUse = yearOverride || filterYear.trim()
+      const monthToUse =
+        monthOverride ||
+        (opts?.recalculate ? filterMonth : debouncedMonth).trim()
+      const yearToUse =
+        yearOverride || (opts?.recalculate ? filterYear : debouncedYear).trim()
       if (monthToUse) params.append('month', monthToUse)
       if (yearToUse) params.append('year', yearToUse)
 
@@ -857,12 +871,32 @@ export default function ReadingsContent() {
       if (showLoading) setReadingsLoading(false)
     }
   },
-    [filterMonth, filterYear]
+    [debouncedMonth, debouncedYear, filterMonth, filterYear]
   )
 
   useEffect(() => {
     fetchReadings()
   }, [fetchReadings])
+
+  const handleRecalculate = useCallback(async () => {
+    if (recalculating || readingsLoading) return
+    if (!filterMonth.trim() || !filterYear.trim()) {
+      setMessage({ type: 'error', text: 'Бодолтохын тулд он, сарыг сонгоно уу' })
+      setTimeout(() => setMessage(null), 4000)
+      return
+    }
+    setRecalculating(true)
+    try {
+      await fetchReadings({
+        recalculate: true,
+        month: filterMonth,
+        year: filterYear,
+        silent: true,
+      })
+    } finally {
+      setRecalculating(false)
+    }
+  }, [recalculating, readingsLoading, filterMonth, filterYear, fetchReadings])
 
   const exportReadingsGrid = useCallback(() => {
     const api = gridRef.current?.api as any
@@ -2889,10 +2923,11 @@ export default function ReadingsContent() {
               <div className="flex items-end">
                 <button
                   type="button"
-                  onClick={() => void fetchReadings({ recalculate: true })}
-                  className="w-full px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  onClick={() => void handleRecalculate()}
+                  disabled={recalculating || readingsLoading}
+                  className="w-full px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60"
                 >
-                  Бодолт
+                  {recalculating ? 'Тооцоолж байна...' : 'Бодолт'}
                 </button>
               </div>
             </div>
@@ -2901,9 +2936,9 @@ export default function ReadingsContent() {
 
         <div className="bg-white rounded-lg border border-gray-200 w-full">
           <div className="ag-theme-alpine" style={{ height: '600px', width: '100%' }}>
-            {readingsLoading ? (
+            {readingsLoading || recalculating ? (
               <div className="flex items-center justify-center h-full text-gray-600">
-                Ачааллаж байна...
+                {recalculating ? 'Тарифаар тооцоолж байна...' : 'Ачааллаж байна...'}
               </div>
             ) : (
               <>
