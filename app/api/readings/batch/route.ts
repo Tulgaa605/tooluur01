@@ -6,6 +6,7 @@ import { getScopedOrganizationIds } from '@/lib/org-scope'
 import { type BillingMode, normalizeBillingMode } from '@/lib/meter-reading-calc'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
+import { recalculateOrgPeriodReadings } from '@/lib/recalculate-readings-tariff'
 
 function endReadingChanged(before: unknown, after: unknown): boolean {
   const a = Number(before)
@@ -417,6 +418,27 @@ export async function POST(request: NextRequest) {
       for (const r of rows) savedRows.push(r)
     }
 
+    // Хадгалсны дараа тухайн сарын тарифаар (төрлийн тариф + зөрүү) дүнг тооцож DB-д бичнэ.
+    const periodKeys = new Map<string, { organizationId: string; year: number; month: number }>()
+    for (const r of savedRows) {
+      periodKeys.set(`${r.organizationId}|${r.year}|${r.month}`, {
+        organizationId: r.organizationId,
+        year: Number(r.year),
+        month: Number(r.month),
+      })
+    }
+    await Promise.all(
+      [...periodKeys.values()].map((p) =>
+        recalculateOrgPeriodReadings(p.organizationId, p.year, p.month)
+      )
+    )
+
+    const savedIds = savedRows.map((r) => r.id).filter(Boolean) as string[]
+    const savedRowsForResponse =
+      savedIds.length > 0
+        ? await prisma.meterReading.findMany({ where: { id: { in: savedIds } } })
+        : savedRows
+
     // Дагуулах ажлууд: тоолуур бүрд хамгийн сүүлд бичигдсэн item-ын мэдээллийг ашиглана.
     for (const c of computed) {
       if (c.propagate) propagateAtEnd.set(c.propagate.meterId, c.propagate)
@@ -442,8 +464,8 @@ export async function POST(request: NextRequest) {
 
     // Хадгалсан мөрүүдэд харагдах organization, meter relation-ыг хавсаргаж буцаана —
     // ингэснээр client тал нь дахин fetchReadings хийлгүй гол хүснэгтэндээ шууд оруулна.
-    const savedOrgIds = [...new Set(savedRows.map((r) => r.organizationId))]
-    const savedMeterIdsAll = [...new Set(savedRows.map((r) => r.meterId))]
+    const savedOrgIds = [...new Set(savedRowsForResponse.map((r) => r.organizationId))]
+    const savedMeterIdsAll = [...new Set(savedRowsForResponse.map((r) => r.meterId))]
     const [orgsForResp, metersForResp] = await Promise.all([
       savedOrgIds.length
         ? prisma.organization.findMany({
@@ -474,7 +496,7 @@ export async function POST(request: NextRequest) {
     ])
     const orgRespMap = new Map(orgsForResp.map((o) => [o.id, o]))
     const meterRespMap = new Map(metersForResp.map((m) => [m.id, m]))
-    const responseRows = savedRows.map((r) => ({
+    const responseRows = savedRowsForResponse.map((r) => ({
       ...r,
       organization: orgRespMap.get(r.organizationId) ?? null,
       meter: meterRespMap.get(r.meterId) ?? null,

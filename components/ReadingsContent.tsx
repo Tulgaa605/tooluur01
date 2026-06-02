@@ -1733,7 +1733,7 @@ export default function ReadingsContent() {
 
         setFilterYear(String(savedYear))
         setFilterMonth(String(savedMonth))
-        setShowCalculated(false)
+        setShowCalculated(true)
 
         const respRows = Array.isArray((data as { rows?: unknown }).rows)
           ? (data as { rows: Array<Record<string, unknown>> }).rows

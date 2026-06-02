@@ -14,7 +14,25 @@ import {
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
-import { findCategoryTariffForCustomer } from '@/lib/category-tariff-scope'
+import {
+  findCategoryTariffForCustomer,
+  type CategoryTariffLookup,
+} from '@/lib/category-tariff-scope'
+
+/** Байгууллагын сарын тариф дээр ₮/м³ 0 байвал төрлийн тарифаас нөхнө (зөрүү × тариф). */
+function applyCategoryPerM3Fallback(
+  rates: WaterTariffRates,
+  catRow: CategoryTariffLookup | null
+): WaterTariffRates {
+  if (!catRow) return rates
+  let cleanPerM3 = Number(rates.cleanPerM3) || 0
+  let dirtyPerM3 = Number(rates.dirtyPerM3) || 0
+  const catClean = Number(catRow.cleanPerM3) || 0
+  const catDirty = Number(catRow.dirtyPerM3) || 0
+  if (cleanPerM3 <= 0 && catClean > 0) cleanPerM3 = catClean
+  if (dirtyPerM3 <= 0 && catDirty > 0) dirtyPerM3 = catDirty
+  return { ...rates, cleanPerM3, dirtyPerM3 }
+}
 
 export type { BillingMode, HeatTariffRates, ReadingMoneySnapshot, WaterChargeSplit, WaterTariffRates }
 export {
@@ -41,6 +59,7 @@ export async function getWaterTariffRatesForPeriod(
   if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
 
   const categoryForTariffs = effectiveBillingCategory(opts?.billingCategory, org.category)
+  const catRow = await findCategoryTariffForCustomer(organizationId, categoryForTariffs)
   // Тоолуурт өөрийн billingCategory тогтоосон бол түүний тариф (CategoryTariff)-аар тооцно;
   // байгууллагын сарын тариф (OrganizationTariff) уг тоолуурт хамаарахгүй.
   const meterCategoryOverride =
@@ -84,11 +103,13 @@ export async function getWaterTariffRatesForPeriod(
       }
       cleanPerM3 = orgTariff.cleanPerM3 ?? 0
       dirtyPerM3 = orgTariff.dirtyPerM3 ?? 0
-      return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
+      return applyCategoryPerM3Fallback(
+        { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
+        catRow
+      )
     }
   }
 
-  const catRow = await findCategoryTariffForCustomer(organizationId, categoryForTariffs)
   if (catRow) {
     if (Number.isNaN(pipeDiam)) {
       baseClean = catRow.baseCleanFee ?? 0
@@ -96,14 +117,20 @@ export async function getWaterTariffRatesForPeriod(
     }
     cleanPerM3 = catRow.cleanPerM3 ?? 0
     dirtyPerM3 = catRow.dirtyPerM3 ?? 0
-    return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
+    return applyCategoryPerM3Fallback(
+      { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
+      catRow
+    )
   }
 
   if (Number.isNaN(pipeDiam)) {
     baseClean = org.baseCleanFee ?? 0
     baseDirty = org.baseDirtyFee ?? 0
   }
-  return { baseClean, baseDirty, cleanPerM3, dirtyPerM3 }
+  return applyCategoryPerM3Fallback(
+    { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
+    catRow
+  )
 }
 
 /** Дулааны тариф: байгууллагын сарын тариф эсвэл төрлийн тариф. */
