@@ -16,7 +16,7 @@ const menuItems = [
   { path: '/readings', label: 'Сарын заалт', roles: ['ACCOUNTANT'] },
   { path: '/tariffs', label: 'Тариф', roles: ['ACCOUNTANT'] },
   { path: '/billing', label: 'Төлбөр', roles: ['ACCOUNTANT', 'USER'] },
-  { path: '/reports', label: 'Тайлан', roles: ['MANAGER'] },
+  { path: '/reports', label: 'Тайлан', roles: ['ACCOUNTANT', 'MANAGER'] },
   { path: '/users', label: 'Хэрэглэгчид', roles: ['ACCOUNTANT'] },
 ]
 

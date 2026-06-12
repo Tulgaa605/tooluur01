@@ -294,3 +294,16 @@ model MeterAdditionalFeeSelection {
   @@index([meterId, year, month])
   @@map("meter_additional_fee_selections")
 }
+
+model PhoneVerification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  phone     String   @unique
+  codeHash  String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("phone_verifications")
+}

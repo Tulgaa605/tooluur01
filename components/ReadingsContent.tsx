@@ -1236,38 +1236,6 @@ export default function ReadingsContent() {
     []
   )
 
-  const exportMonthlyAccountingReport = useCallback(async () => {
-    const year = parseInt(filterYear.trim(), 10)
-    const month = parseInt(filterMonth.trim(), 10)
-    if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
-      setMessage({ type: 'error', text: 'Тайлан гаргахын тулд он, сарыг сонгоно уу' })
-      setTimeout(() => setMessage(null), 4000)
-      return
-    }
-    try {
-      const res = await fetchWithAuth(
-        `/api/exports/monthly-accounting-report?year=${year}&month=${month}`
-      )
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error((err as { error?: string }).error || res.statusText)
-      }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `Тайлан-${year}-${String(month).padStart(2, '0')}.xlsx`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e: unknown) {
-      setMessage({
-        type: 'error',
-        text: e instanceof Error ? e.message : 'Тайлан татахад алдаа гарлаа',
-      })
-      setTimeout(() => setMessage(null), 5000)
-    }
-  }, [filterYear, filterMonth])
-
   const exportReadingsGridXlsx = useCallback(() => {
     const rows = readings.map((r) => ({
       'Он': r.year ?? '',
@@ -3043,16 +3011,6 @@ export default function ReadingsContent() {
                     className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md"
                   >
                     Excel файл болгох
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setExcelExportMenu(null)
-                      void exportMonthlyAccountingReport()
-                    }}
-                    className="w-full px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-50 rounded-md border-t border-gray-100 mt-1 pt-2"
-                  >
-                    Санхүүгийн тайлан (Excel)
                   </button>
                 </div>
               )}

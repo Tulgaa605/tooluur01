@@ -252,7 +252,45 @@ export function buildMonthlyAccountingReportByMeter(
   })
 }
 
-function valuesToArray(v: AccountingReportValues): number[] {
+export type MonthlyAccountingTableView = {
+  period: string
+  headers: string[]
+  summaryLabel: string
+  summaryCells: number[]
+  footerLabel: string
+  footerCells: number[]
+  rows: Array<{ label: string; cells: number[] }>
+}
+
+/** UI хүснэгт (Excel-тэй ижил багана, мөр) */
+export function buildMonthlyAccountingTableView(
+  year: number,
+  month: number,
+  meterRows: MeterReportRow[]
+): MonthlyAccountingTableView {
+  let grandTotal = { ...ZERO_VALUES }
+  for (const row of meterRows) {
+    grandTotal = sumReportValues(grandTotal, row.values)
+  }
+  const totals = valuesToArray(grandTotal)
+  return {
+    period: `${year}.${String(month).padStart(2, '0')}`,
+    headers: [...MONTHLY_ACCOUNTING_REPORT_HEADERS],
+    summaryLabel: SUMMARY_ROW_LABEL,
+    summaryCells: totals,
+    footerLabel: FOOTER_ROW_LABEL,
+    footerCells: totals,
+    rows: meterRows.map((item) => {
+      const label =
+        item.meterNumber && item.meterNumber !== '—'
+          ? `${item.organizationName} (${item.meterNumber})`
+          : item.organizationName
+      return { label, cells: valuesToArray(item.values) }
+    }),
+  }
+}
+
+export function valuesToArray(v: AccountingReportValues): number[] {
   return [
     v.meter,
     v.labor,

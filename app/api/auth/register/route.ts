@@ -3,16 +3,45 @@ import { prisma } from '@/lib/prisma'
 import { hashPassword, generateToken } from '@/lib/auth'
 import { Role } from '@/lib/role'
 import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
+import {
+  normalizeRegisterPhone,
+  verifyRegisterPhoneToken,
+} from '@/lib/register-phone-verification'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, password, name, organizationId } = await request.json()
+    const { email, password, name, organizationId, phone, phoneVerificationToken } =
+      await request.json()
 
-    if (!email || !password || !name) {
+    if (!email || !password || !name || !phone || !phoneVerificationToken) {
       return NextResponse.json(
-        { error: 'Имэйл, нууц үг, нэр оруулна уу' },
+        { error: 'Имэйл, нууц үг, нэр, утасны дугаар болон баталгаажуулалт шаардлагатай' },
+        { status: 400 }
+      )
+    }
+
+    const normalizedPhone = normalizeRegisterPhone(String(phone))
+    if (!normalizedPhone) {
+      return NextResponse.json({ error: 'Утасны дугаар буруу байна' }, { status: 400 })
+    }
+
+    const phoneToken = verifyRegisterPhoneToken(String(phoneVerificationToken))
+    if (!phoneToken || phoneToken.phone !== normalizedPhone) {
+      return NextResponse.json(
+        { error: 'Утасны дугаар баталгаажаагүй байна. Кодоо дахин баталгаажуулна уу' },
+        { status: 400 }
+      )
+    }
+
+    const existingPhoneUser = await prisma.user.findFirst({
+      where: { phone: normalizedPhone },
+      select: { id: true },
+    })
+    if (existingPhoneUser) {
+      return NextResponse.json(
+        { error: 'Энэ утасны дугаартай хэрэглэгч аль хэдийн бүртгэлтэй байна' },
         { status: 400 }
       )
     }
@@ -53,6 +82,7 @@ export async function POST(request: NextRequest) {
         email,
         password: hashedPassword,
         name,
+        phone: normalizedPhone,
         role: userRole,
         organizationId: orgId,
         year: currentYear,
