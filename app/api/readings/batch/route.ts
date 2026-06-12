@@ -6,7 +6,7 @@ import { getScopedOrganizationIds } from '@/lib/org-scope'
 import { type BillingMode, normalizeBillingMode } from '@/lib/meter-reading-calc'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
-import { recalculateOrgIdsForPeriod } from '@/lib/recalculate-readings-tariff'
+import { recalculateReadingIdsForPeriod } from '@/lib/recalculate-readings-tariff'
 
 function endReadingChanged(before: unknown, after: unknown): boolean {
   const a = Number(before)
@@ -94,13 +94,21 @@ type PropagateTask = {
   carriedEnd: number
 }
 
+const OBJECT_ID_RE = /^[a-f\d]{24}$/i
+
+function isValidObjectId(id: string): boolean {
+  return OBJECT_ID_RE.test(id)
+}
+
 async function claimCustomerOrgIfNeeded(office: string, customerOrgId: string): Promise<void> {
   if (customerOrgId === office) return
   const org = await prisma.organization.findUnique({
     where: { id: customerOrgId },
     select: { id: true, managedByOrganizationId: true },
   })
-  if (!org) throw new Error('Байгууллага олдсонгүй')
+  if (!org) {
+    throw new Error('ORG_NOT_FOUND')
+  }
   if (org.managedByOrganizationId == null) {
     await prisma.organization.update({
       where: { id: org.id },
@@ -134,6 +142,7 @@ export async function POST(request: NextRequest) {
       where: { id: { in: meterIds } },
       select: {
         id: true,
+        meterNumber: true,
         organizationId: true,
         billingMode: true,
         defaultHeatUsage: true,
@@ -161,46 +170,98 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Тоолуурын organization-ийг урьдчилаад зэрэгцүүлэн "claim" хийнэ.
-    if (roleStr === Role.ACCOUNTANT) {
-      const claimOrgIds = [
-        ...new Set(meters.map((m) => m.organizationId).filter((id) => id !== office)),
-      ]
-      await Promise.all(claimOrgIds.map((orgId) => claimCustomerOrgIfNeeded(office, orgId)))
+    const customerOrgIds = [
+      ...new Set(
+        meters
+          .map((m) => m.organizationId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0 && id !== office)
+      ),
+    ]
+    const invalidOrgMeters = meters.filter(
+      (m) => m.organizationId !== office && (!m.organizationId || !isValidObjectId(m.organizationId))
+    )
+    if (invalidOrgMeters.length > 0) {
+      const labels = invalidOrgMeters.map((m) => m.meterNumber || m.id).join(', ')
+      return NextResponse.json(
+        {
+          error: `Тоолуурын холбогдсон байгууллага буруу байна (${labels}). Тоолуурын бүртгэлээ шалгана уу.`,
+        },
+        { status: 400 }
+      )
     }
-
     const tripleKey = (meterId: string, y: number, m: number) => `${meterId}\t${y}\t${m}`
 
     const readingIds = [...new Set(items.map((i) => i.id).filter(Boolean) as string[])]
-    const readingsById = new Map<string, Awaited<ReturnType<typeof prisma.meterReading.findUnique>> & object>()
-    if (readingIds.length > 0) {
-      const rows = await prisma.meterReading.findMany({ where: { id: { in: readingIds } } })
-      for (const r of rows) readingsById.set(r.id, r)
-      for (const id of readingIds) {
-        if (!readingsById.has(id)) {
-          return NextResponse.json({ error: 'Заалт олдсонгүй' }, { status: 404 })
-        }
-      }
-    }
-
     const uniqueTriples = new Map<string, { meterId: string; year: number; month: number }>()
     for (const it of items) {
       if (it.id) continue
       const k = tripleKey(it.meterId, it.year, it.month)
       if (!uniqueTriples.has(k)) uniqueTriples.set(k, { meterId: it.meterId, year: it.year, month: it.month })
     }
-    const compoundByKey = new Map<string, Awaited<ReturnType<typeof prisma.meterReading.findUnique>> & object>()
-    if (uniqueTriples.size > 0) {
-      const rows = await prisma.meterReading.findMany({
-        where: {
-          OR: [...uniqueTriples.values()].map((t) => ({
-            AND: [{ meterId: t.meterId }, { year: t.year }, { month: t.month }],
-          })),
-        },
-      })
-      for (const r of rows) {
-        if (r) compoundByKey.set(tripleKey(r.meterId, r.year, r.month), r)
+    const singlePeriod =
+      items.length > 0 && items.every((i) => i.year === items[0].year && i.month === items[0].month)
+
+    const [existingOrgs, byIdRows, byCompoundRows] = await Promise.all([
+      customerOrgIds.length > 0
+        ? prisma.organization.findMany({
+            where: { id: { in: customerOrgIds } },
+            select: { id: true },
+          })
+        : Promise.resolve([]),
+      readingIds.length > 0
+        ? prisma.meterReading.findMany({ where: { id: { in: readingIds } } })
+        : Promise.resolve([]),
+      uniqueTriples.size > 0
+        ? singlePeriod
+          ? prisma.meterReading.findMany({
+              where: {
+                year: items[0].year,
+                month: items[0].month,
+                meterId: { in: meterIds },
+              },
+            })
+          : prisma.meterReading.findMany({
+              where: {
+                OR: [...uniqueTriples.values()].map((t) => ({
+                  AND: [{ meterId: t.meterId }, { year: t.year }, { month: t.month }],
+                })),
+              },
+            })
+        : Promise.resolve([]),
+    ])
+
+    if (customerOrgIds.length > 0) {
+      const existingOrgSet = new Set(existingOrgs.map((o) => o.id))
+      const missingOrgMeters = meters.filter(
+        (m) => m.organizationId !== office && !existingOrgSet.has(m.organizationId)
+      )
+      if (missingOrgMeters.length > 0) {
+        const labels = missingOrgMeters.map((m) => m.meterNumber || m.id).join(', ')
+        return NextResponse.json(
+          {
+            error: `Тоолуурын холбогдсон байгууллага олдсонгүй (${labels}). Тоолуурын бүртгэлээ шалгана уу.`,
+          },
+          { status: 400 }
+        )
       }
+    }
+
+    // Тоолуурын organization-ийг урьдчилаад зэрэгцүүлэн "claim" хийнэ.
+    if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+      await Promise.all(customerOrgIds.map((orgId) => claimCustomerOrgIfNeeded(office, orgId)))
+    }
+
+    const readingsById = new Map<string, Awaited<ReturnType<typeof prisma.meterReading.findUnique>> & object>()
+    for (const r of byIdRows) readingsById.set(r.id, r)
+    for (const id of readingIds) {
+      if (!readingsById.has(id)) {
+        return NextResponse.json({ error: 'Заалт олдсонгүй' }, { status: 404 })
+      }
+    }
+
+    const compoundByKey = new Map<string, Awaited<ReturnType<typeof prisma.meterReading.findUnique>> & object>()
+    for (const r of byCompoundRows) {
+      if (r) compoundByKey.set(tripleKey(r.meterId, r.year, r.month), r)
     }
 
     const propagateAtEnd = new Map<string, PropagateTask>()
@@ -418,28 +479,34 @@ export async function POST(request: NextRequest) {
       for (const r of rows) savedRows.push(r)
     }
 
-    // Хадгалсны дараа тухайн сарын тарифаар (төрлийн тариф + зөрүү) дүнг тооцож DB-д бичнэ.
-    const periodBuckets = new Map<
-      string,
-      { year: number; month: number; orgIds: Set<string> }
-    >()
+    const savedIds = savedRows.map((r) => r.id).filter(Boolean) as string[]
+
+    // Хадгалсны дараа зөвхөн энэ хадгалалтын заалтуудыг тарифаар тооцно (бусад хуучин мөрөөс хамаарахгүй).
+    const periodBuckets = new Map<string, { year: number; month: number; readingIds: string[] }>()
     for (const r of savedRows) {
+      if (!r.id) continue
       const year = Number(r.year)
       const month = Number(r.month)
       const k = `${year}|${month}`
-      const bucket = periodBuckets.get(k) ?? { year, month, orgIds: new Set<string>() }
-      bucket.orgIds.add(r.organizationId)
+      const bucket = periodBuckets.get(k) ?? { year, month, readingIds: [] }
+      bucket.readingIds.push(r.id)
       periodBuckets.set(k, bucket)
     }
-    for (const bucket of periodBuckets.values()) {
-      await recalculateOrgIdsForPeriod([...bucket.orgIds], bucket.year, bucket.month)
-    }
-
-    const savedIds = savedRows.map((r) => r.id).filter(Boolean) as string[]
-    const savedRowsForResponse =
-      savedIds.length > 0
-        ? await prisma.meterReading.findMany({ where: { id: { in: savedIds } } })
-        : savedRows
+    const recalculatedById = new Map<string, Record<string, unknown>>()
+    await Promise.all(
+      [...periodBuckets.values()].map(async (bucket) => {
+        const rows = await recalculateReadingIdsForPeriod(
+          bucket.readingIds,
+          bucket.year,
+          bucket.month
+        )
+        for (const row of rows) {
+          if (row && typeof row === 'object' && 'id' in row && row.id) {
+            recalculatedById.set(String(row.id), row as Record<string, unknown>)
+          }
+        }
+      })
+    )
 
     // Дагуулах ажлууд: тоолуур бүрд хамгийн сүүлд бичигдсэн item-ын мэдээллийг ашиглана.
     for (const c of computed) {
@@ -464,51 +531,37 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Хадгалсан мөрүүдэд харагдах organization, meter relation-ыг хавсаргаж буцаана —
-    // ингэснээр client тал нь дахин fetchReadings хийлгүй гол хүснэгтэндээ шууд оруулна.
-    const savedOrgIds = [...new Set(savedRowsForResponse.map((r) => r.organizationId))]
-    const savedMeterIdsAll = [...new Set(savedRowsForResponse.map((r) => r.meterId))]
-    const [orgsForResp, metersForResp] = await Promise.all([
-      savedOrgIds.length
-        ? prisma.organization.findMany({
-            where: { id: { in: savedOrgIds } },
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              category: true,
-              phone: true,
-              users: { where: { phone: { not: null } }, select: { phone: true } },
-            },
-          })
-        : Promise.resolve([]),
-      savedMeterIdsAll.length
-        ? prisma.meter.findMany({
-            where: { id: { in: savedMeterIdsAll } },
-            select: {
-              id: true,
-              meterNumber: true,
-              billingMode: true,
-              waterChargeSplit: true,
-              pipeDiameterMm: true,
-              billingCategory: true,
-            },
-          })
-        : Promise.resolve([]),
-    ])
-    const orgRespMap = new Map(orgsForResp.map((o) => [o.id, o]))
-    const meterRespMap = new Map(metersForResp.map((m) => [m.id, m]))
-    const responseRows = savedRowsForResponse.map((r) => ({
-      ...r,
-      organization: orgRespMap.get(r.organizationId) ?? null,
-      meter: meterRespMap.get(r.meterId) ?? null,
-    }))
+    const responseRows = savedRows.map((r) => {
+      const recalculated = r.id ? recalculatedById.get(r.id) : undefined
+      if (recalculated) return recalculated
+      const meter = meterById.get(r.meterId)
+      return {
+        ...r,
+        meter: meter
+          ? {
+              id: meter.id,
+              meterNumber: meter.meterNumber,
+              billingMode: meter.billingMode,
+              waterChargeSplit: meter.waterChargeSplit,
+              pipeDiameterMm: meter.pipeDiameterMm,
+              billingCategory: meter.billingCategory,
+            }
+          : null,
+        organization: null,
+      }
+    })
 
     return NextResponse.json({ ok: true, saved: computed.length, rows: responseRows })
   } catch (error: any) {
     console.error('readings/batch POST error:', error)
     if (error.message === 'Unauthorized' || error.message === 'Forbidden') {
       return NextResponse.json({ error: error.message }, { status: 403 })
+    }
+    if (error.message === 'ORG_NOT_FOUND') {
+      return NextResponse.json(
+        { error: 'Тоолуурын холбогдсон байгууллага олдсонгүй. Тоолуурын бүртгэлээ шалгана уу.' },
+        { status: 400 }
+      )
     }
     return NextResponse.json({ error: error.message || 'Алдаа гарлаа' }, { status: 500 })
   }

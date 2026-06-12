@@ -34,10 +34,18 @@ export async function loadMonthlyAccountingMeterRows(
         { createdByUserId: user.userId },
       ],
     },
-    orderBy: [{ organization: { name: 'asc' } }, { meter: { meterNumber: 'asc' } }],
   })
 
-  const readings = await attachOrgsAndMetersToReadings(rawReadings)
+  const readings = (
+    await attachOrgsAndMetersToReadings(rawReadings)
+  ).sort((a, b) => {
+    const byOrg = String(a.organization?.name ?? '').localeCompare(
+      String(b.organization?.name ?? ''),
+      'mn'
+    )
+    if (byOrg !== 0) return byOrg
+    return String(a.meter?.meterNumber ?? '').localeCompare(String(b.meter?.meterNumber ?? ''), 'mn')
+  })
   const meterPeriods = readings.map((r) => ({
     meterId: r.meterId,
     year: r.year,

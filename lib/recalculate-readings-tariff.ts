@@ -1,3 +1,4 @@
+import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
 import { prisma } from '@/lib/prisma'
 import {
   applyWaterChargeSplitToWaterRates,
@@ -10,6 +11,23 @@ import {
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc'
 import { TariffPeriodCache } from '@/lib/tariff-period-cache'
+
+/** Заалт байгаа ч мөнгөн дүн тооцоогүй (0) мөр — автомат бодолт хэрэгтэй эсэх. */
+export function readingNeedsMoneyRecalc(r: {
+  usage?: unknown
+  heatUsage?: unknown
+  total?: unknown
+  subtotal?: unknown
+  startValue?: unknown
+  endValue?: unknown
+}): boolean {
+  const water = waterUsageFromReading(r)
+  const heat = Number(r.heatUsage ?? 0) || 0
+  if (water <= 0 && heat <= 0) return false
+  const total = Number(r.total ?? 0) || 0
+  const subtotal = Number(r.subtotal ?? 0) || 0
+  return total <= 0.005 && subtotal <= 0.005
+}
 
 export function waterUsageFromReading(r: {
   startValue?: unknown
@@ -118,24 +136,12 @@ export function recalculateReadingRowMoney<T extends ReadingForTariffRecalc>(
   }
 }
 
-const readingInclude = {
-  meter: {
-    select: {
-      billingMode: true,
-      pipeDiameterMm: true,
-      billingCategory: true,
-      waterChargeSplit: true,
-    },
-  },
-  organization: { select: { category: true } },
-} as const
-
 async function recalculateRawRows(
   raw: ReadingForTariffRecalc[],
   year: number,
   month: number
-): Promise<number> {
-  if (raw.length === 0) return 0
+) {
+  if (raw.length === 0) return []
 
   const tariffCache = await TariffPeriodCache.build(
     [...new Set(raw.map((r) => r.organizationId))],
@@ -151,7 +157,22 @@ async function recalculateRawRows(
   await persistReadingMoneyFields(
     withExtras as Parameters<typeof persistReadingMoneyFields>[0]
   )
-  return withExtras.length
+  return withExtras
+}
+
+/** Тодорхой заалтын ID-уудын дүнг тарифаар дахин тооцож DB-д хадгална. */
+export async function recalculateReadingIdsForPeriod(
+  readingIds: string[],
+  year: number,
+  month: number
+) {
+  const ids = [...new Set(readingIds.filter(Boolean))]
+  if (ids.length === 0) return []
+  const rows = await prisma.meterReading.findMany({
+    where: { id: { in: ids }, year, month },
+  })
+  const raw = await attachOrgsAndMetersToReadings(rows)
+  return recalculateRawRows(raw, year, month)
 }
 
 /** Олон байгууллагын нэг сарын заалтыг нэг удаа тарифаар дахин тооцно. */
@@ -162,11 +183,12 @@ export async function recalculateOrgIdsForPeriod(
 ): Promise<number> {
   const orgIds = [...new Set(organizationIds.filter(Boolean))]
   if (orgIds.length === 0) return 0
-  const raw = await prisma.meterReading.findMany({
+  const rows = await prisma.meterReading.findMany({
     where: { organizationId: { in: orgIds }, year, month },
-    include: readingInclude,
   })
-  return recalculateRawRows(raw, year, month)
+  const raw = await attachOrgsAndMetersToReadings(rows)
+  const withExtras = await recalculateRawRows(raw, year, month)
+  return withExtras.length
 }
 
 /** Байгууллагын тухайн сарын бүх заалтыг тарифаар дахин тооцож DB-д хадгална. */

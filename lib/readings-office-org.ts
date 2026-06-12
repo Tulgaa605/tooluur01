@@ -1,6 +1,15 @@
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 
+async function resolveExistingOrganizationId(orgId: string | null | undefined): Promise<string | null> {
+  if (!orgId || !/^[a-f\d]{24}$/i.test(orgId)) return null
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { id: true },
+  })
+  return org?.id ?? null
+}
+
 /** Нягтлан/захиралын token дээр албан organizationId хоосон бол үүсгээд холбоно. */
 export async function ensureOfficeOrganizationId(user: {
   userId: string
@@ -8,12 +17,14 @@ export async function ensureOfficeOrganizationId(user: {
   email?: string
   name?: string
 }): Promise<string | null> {
-  if (user.organizationId) return user.organizationId
+  const fromToken = await resolveExistingOrganizationId(user.organizationId)
+  if (fromToken) return fromToken
   const dbUser = await prisma.user.findUnique({
     where: { id: user.userId },
     select: { id: true, email: true, name: true, organizationId: true, role: true },
   })
-  if (dbUser?.organizationId) return dbUser.organizationId
+  const fromDb = await resolveExistingOrganizationId(dbUser?.organizationId)
+  if (fromDb) return fromDb
   const roleStr = String(dbUser?.role ?? '')
   if (roleStr !== Role.ACCOUNTANT && roleStr !== Role.MANAGER) return null
   const currentYear = new Date().getFullYear()

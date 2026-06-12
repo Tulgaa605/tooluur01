@@ -40,6 +40,7 @@ import {
 import { syncHeatMeterReadingsForPeriod } from '@/lib/ensure-heat-meter-reading'
 import { TariffPeriodCache } from '@/lib/tariff-period-cache'
 import {
+  readingNeedsMoneyRecalc,
   recalculateReadingRowMoney,
   type ReadingForTariffRecalc,
   waterUsageFromReading,
@@ -637,8 +638,16 @@ export async function GET(request: NextRequest) {
     const canPhantom =
       withCarry && filterYearNum != null && filterMonthNum != null
 
+    // Шинэ/тооцоогүй заалт ирсэн үед тухайн сарыг автоматаар бодож DB-д хадгална.
+    const autoRecalc =
+      !shouldRecalculate &&
+      filterYearNum != null &&
+      filterMonthNum != null &&
+      readings.some((r) => readingNeedsMoneyRecalc(r))
+    const runTariffRecalc = shouldRecalculate || autoRecalc
+
     // Хурдны үндсэн горим: тарифын мөр дүн + сонгосон нэмэлт төлбөр + НӨАТ.
-    if (!shouldRecalculate) {
+    if (!runTariffRecalc) {
       const withFees = await attachAdditionalFeesToReadings(readings)
       if (withCarry) {
       const carryData = await computeCarry(
@@ -666,7 +675,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(withFees)
     }
 
-    // Сонголтоор (recalculate=1) тарифаар дүнг дахин тооцоолж буцаана.
+    // Бодолт товч (recalculate=1) эсвэл тооцоогүй шинэ заалт — тарифаар дүнг тооцож DB-д хадгална.
     const periodYear = filterYearNum ?? readings[0]?.year ?? new Date().getFullYear()
     const periodMonth = filterMonthNum ?? readings[0]?.month ?? new Date().getMonth() + 1
     const tariffCache = await TariffPeriodCache.build(

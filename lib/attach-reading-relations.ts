@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import type { Prisma } from '@prisma/client'
 
 export type OrgForReading = {
   id: string
@@ -18,6 +19,18 @@ export type MeterForReading = {
   pipeDiameterMm?: number | null
   /** Тоолуур тус бүрийн тарифын ангилал (байгууллагын category-аас давхаргана) */
   billingCategory?: string | null
+}
+
+/** Prisma include ашиглахгүйгээр заалтыг уншиж meter/organization-ийг хавсаргана. */
+export async function findMeterReadingsWithRelations(
+  where: Prisma.MeterReadingWhereInput,
+  orderBy?: Prisma.MeterReadingOrderByWithRelationInput | Prisma.MeterReadingOrderByWithRelationInput[]
+) {
+  const rows = await prisma.meterReading.findMany({
+    where,
+    ...(orderBy ? { orderBy } : {}),
+  })
+  return attachOrgsAndMetersToReadings(rows)
 }
 
 /**

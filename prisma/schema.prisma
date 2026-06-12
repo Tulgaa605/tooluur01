@@ -127,9 +127,9 @@ model Meter {
 model MeterReading {
   id             String       @id @default(auto()) @map("_id") @db.ObjectId
   meterId        String       @db.ObjectId
-  meter          Meter        @relation(fields: [meterId], references: [id])
+  meter          Meter?       @relation(fields: [meterId], references: [id])
   organizationId String       @db.ObjectId
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  organization   Organization? @relation(fields: [organizationId], references: [id])
   month          Int
   year           Int
   startValue     Float

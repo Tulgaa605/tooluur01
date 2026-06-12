@@ -337,6 +337,8 @@ const ORG_CUSTOMER_CATEGORY_LABELS: Record<OrgCustomerCategory, string> = {
 
 type ModalCategoryFilter = 'ALL' | 'HOUSEHOLD' | OrgCustomerCategory
 
+const MISSING_ORG_LABEL = '(Байгууллага олдсонгүй)'
+
 const MODAL_CATEGORY_FILTER_BUTTONS: { key: ModalCategoryFilter; label: string }[] = [
   { key: 'ALL', label: 'Бүгд' },
   { key: 'HOUSEHOLD', label: 'Хувь хүн' },
@@ -358,6 +360,7 @@ function resolveModalOrgAndMeterLists(
   }
   for (const m of metersListRaw) {
     if (!m.organizationId || orgById.has(m.organizationId)) continue
+    if (m.organization?.name === MISSING_ORG_LABEL) continue
     orgById.set(m.organizationId, {
       id: m.organizationId,
       name: m.organization?.name ?? '(Харилцагч)',
@@ -827,7 +830,7 @@ export default function ReadingsContent() {
         params.append('ensureHeatReadings', '1')
       }
       if (opts?.recalculate) params.append('recalculate', '1')
-      setShowCalculated(opts?.recalculate === true)
+      if (opts?.recalculate) setShowCalculated(true)
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
       let data: unknown = null
       try {
@@ -871,6 +874,12 @@ export default function ReadingsContent() {
   useEffect(() => {
     fetchReadings()
   }, [fetchReadings])
+
+  useEffect(() => {
+    if (filterMonth.trim() && filterYear.trim()) {
+      setShowCalculated(true)
+    }
+  }, [filterMonth, filterYear])
 
   const handleRecalculate = useCallback(async () => {
     if (recalculating || readingsLoading) return
@@ -1727,6 +1736,23 @@ export default function ReadingsContent() {
       return
     }
 
+    const rowsWithMissingOrg = rowsToSave.filter((r) => {
+      const meter = allMeters.find((m) => m.id === r.meterId)
+      const orgName = meter?.organization?.name ?? r.organization?.name
+      return orgName === MISSING_ORG_LABEL
+    })
+    if (rowsWithMissingOrg.length > 0) {
+      const labels = rowsWithMissingOrg
+        .map((r) => r.meter?.meterNumber || r.organization?.name || r.meterId || '-')
+        .join(', ')
+      setMessage({
+        type: 'error',
+        text: `Тоолуурын холбогдсон байгууллага олдсонгүй (${labels}). Тоолуурын бүртгэлээ шалгана уу.`,
+      })
+      setTimeout(() => setMessage(null), 8000)
+      return
+    }
+
     const items = rowsToSave.map((reading) => {
       const bm = normalizeBillingMode(reading.billingMode ?? reading.meter?.billingMode)
       const row: Record<string, unknown> = {
@@ -1773,11 +1799,6 @@ export default function ReadingsContent() {
           return src ? enrichSavedReadingFromSource(saved, src) : saved
         })
 
-        // Modal-д харагдаж буй мөрүүдийг үндсэн grid state-д шууд нэгтгэнэ.
-        if (enriched.length > 0) {
-          setReadings((prev) => mergeReadingsForPeriod(prev, enriched, savedYear, savedMonth))
-        }
-
         const savedByKey = new Map<string, Reading>()
         for (const r of enriched) {
           if (!r.meterId) continue
@@ -1797,14 +1818,9 @@ export default function ReadingsContent() {
               heatUsage: saved.heatUsage ?? r.heatUsage,
               baseClean: saved.baseClean,
               baseDirty: saved.baseDirty,
-              cleanPerM3: saved.cleanPerM3 ?? r.cleanPerM3,
-              dirtyPerM3: saved.dirtyPerM3 ?? r.dirtyPerM3,
               cleanAmount: saved.cleanAmount,
               dirtyAmount: saved.dirtyAmount,
-              heatBase: saved.heatBase ?? r.heatBase,
-              heatPerM3: saved.heatPerM3 ?? r.heatPerM3,
-              heatPerM2: saved.heatPerM2 ?? r.heatPerM2,
-              heatAmount: saved.heatAmount ?? r.heatAmount,
+              heatAmount: saved.heatAmount,
               subtotal: saved.subtotal,
               vat: saved.vat,
               total: saved.total,
@@ -1813,6 +1829,9 @@ export default function ReadingsContent() {
           snapshotRows(next)
           return next
         })
+
+        // Сервер batch аль хэдийн хадгалсан мөрүүдийг бодсон тул доод хүснэгтэд шууд нэгтгэнэ.
+        setReadings((prev) => mergeReadingsForPeriod(prev, enriched, savedYear, savedMonth))
 
         if (saveSuccessToastTimeoutRef.current) {
           clearTimeout(saveSuccessToastTimeoutRef.current)
@@ -1824,6 +1843,14 @@ export default function ReadingsContent() {
             setSaveSuccessToast(null)
             saveSuccessToastTimeoutRef.current = null
           }, 2000)
+        })
+
+        // Үлдэгдэл/нийт мөрүүдийг дараа нь чимээгүй шинэчилнэ (бүх сарыг дахин бодохгүй).
+        void fetchReadings({
+          month: savedMonth,
+          year: savedYear,
+          silent: true,
+          mergePeriod: { year: savedYear, month: savedMonth },
         })
       } catch (err: any) {
         setMessage({ type: 'error', text: err?.message || 'Алдаа гарлаа' })
