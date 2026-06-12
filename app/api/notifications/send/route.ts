@@ -159,7 +159,23 @@ export async function POST(request: NextRequest) {
       select: { name: true, email: true, phone: true },
     })
 
-    const org = readings[0].organization
+    const org =
+      readings[0].organization ??
+      (await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          phone: true,
+          email: true,
+          category: true,
+        },
+      }))
+    if (!org) {
+      return NextResponse.json({ error: 'Байгууллага олдсонгүй' }, { status: 404 })
+    }
+
     const recipients: Array<{ type: string; name: string; phone: string | null; email: string | null }> = []
     if (org.phone) {
       recipients.push({
