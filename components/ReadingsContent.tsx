@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef, startTransition } from 'react'
 import { fetchWithAuth } from '@/lib/api'
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
@@ -17,6 +17,10 @@ import {
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import {
+  HEAT_OFF_SEASON_MONEY,
+  isHeatOnlyZeroBillingMonth,
+} from '@/lib/heat-billing-season'
 import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
 import {
   ADDITIONAL_FEE_BASIS_LABELS,
@@ -514,8 +518,6 @@ export default function ReadingsContent() {
   const [recalculating, setRecalculating] = useState(false)
   const [filterMonth, setFilterMonth] = useState(() => String(new Date().getMonth() + 1))
   const [filterYear, setFilterYear] = useState(() => String(new Date().getFullYear()))
-  const [debouncedMonth, setDebouncedMonth] = useState(() => String(new Date().getMonth() + 1))
-  const [debouncedYear, setDebouncedYear] = useState(() => String(new Date().getFullYear()))
   // “Бодолт” товч дарсан үед л тарифаар дахин тооцсон дүнг харуулна (recalculate=1).
   const [showCalculated, setShowCalculated] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -571,10 +573,13 @@ export default function ReadingsContent() {
       heatPerM3: reading.heatPerM3 || 0,
       heatPerM2: reading.heatPerM2 || 0,
     }
-    const m =
+    const mRaw =
       billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(usage, heatUsage, orgCategory, billingMode, water, heat)
         : computeReadingMoney(usage, orgCategory, billingMode, water, heat)
+    const m = isHeatOnlyZeroBillingMonth(billingMode, reading.month)
+      ? HEAT_OFF_SEASON_MONEY
+      : mRaw
     reading.baseClean = m.baseClean
     reading.baseDirty = m.baseDirty
     reading.cleanPerM3 = m.cleanPerM3
@@ -612,6 +617,8 @@ export default function ReadingsContent() {
   >(new Map())
   /** Modal-оос batch хадгалалт давхар илгээгдэхээс сэргийлнэ */
   const modalBatchSaveInFlightRef = useRef(false)
+  const readingsFetchAbortRef = useRef<AbortController | null>(null)
+  const readingsFetchSeqRef = useRef(0)
   const saveSuccessToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const numberColStyle = useMemo(
     () => ({
@@ -788,25 +795,23 @@ export default function ReadingsContent() {
       .catch(() => setAllMeters([]))
   }, [])
 
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      setDebouncedMonth(filterMonth)
-      setDebouncedYear(filterYear)
-    }, 300)
-    return () => window.clearTimeout(t)
-  }, [filterMonth, filterYear])
-
   const fetchReadings = useCallback(
     async (opts?: {
       silent?: boolean
       month?: string | number
       year?: string | number
       recalculate?: boolean
+      /** Дулаан sync алгасах (хадгалалтын дараах давхар fetch) */
+      skipHeatSync?: boolean
       /** Хадгалалтын дараа: серверийн жагсаалтыг тухайн сарт нэгтгэнэ (бүх state-ийг дарж бичихгүй). */
       mergePeriod?: { year: number; month: number }
     }): Promise<Reading[]> => {
     const showLoading = !opts?.silent
     if (showLoading) setReadingsLoading(true)
+    readingsFetchAbortRef.current?.abort()
+    const ac = new AbortController()
+    readingsFetchAbortRef.current = ac
+    const seq = ++readingsFetchSeqRef.current
     try {
       const params = new URLSearchParams()
       const monthOverride =
@@ -816,22 +821,32 @@ export default function ReadingsContent() {
 
       const monthToUse =
         monthOverride ||
-        (opts?.recalculate ? filterMonth : debouncedMonth).trim()
+        filterMonth.trim()
       const yearToUse =
-        yearOverride || (opts?.recalculate ? filterYear : debouncedYear).trim()
+        yearOverride ||
+        filterYear.trim()
       if (monthToUse) params.append('month', monthToUse)
       if (yearToUse) params.append('year', yearToUse)
 
       params.append('limit', '3000')
       const yNum = yearToUse ? parseInt(yearToUse, 10) : NaN
       const mNum = monthToUse ? parseInt(monthToUse, 10) : NaN
-      // «Зөвхөн дулаан» тоолуур: сонгосон (он, сар)-д мөр байхгүй бол автоматаар үүсгэнэ.
-      if (Number.isFinite(yNum) && Number.isFinite(mNum) && mNum >= 1 && mNum <= 12) {
+      if (
+        !opts?.skipHeatSync &&
+        Number.isFinite(yNum) &&
+        Number.isFinite(mNum) &&
+        mNum >= 1 &&
+        mNum <= 12
+      ) {
         params.append('ensureHeatReadings', '1')
       }
       if (opts?.recalculate) params.append('recalculate', '1')
       if (opts?.recalculate) setShowCalculated(true)
-      const res = await fetchWithAuth(`/api/readings?${params.toString()}`)
+      const res = await fetchWithAuth(`/api/readings?${params.toString()}`, {
+        signal: ac.signal,
+      })
+      if (seq !== readingsFetchSeqRef.current) return []
+
       let data: unknown = null
       try {
         data = await res.json()
@@ -841,16 +856,21 @@ export default function ReadingsContent() {
 
       if (res.ok && Array.isArray(data)) {
         const normalized = (data as Record<string, unknown>[]).map((r) => normalizeApiReadingRow(r))
+        const applyRows = (updater: (prev: Reading[]) => Reading[]) => {
+          startTransition(() => {
+            setReadings(updater)
+          })
+        }
         if (opts?.mergePeriod) {
           const { year, month } = opts.mergePeriod
-          setReadings((prev) => mergeReadingsForPeriod(prev, normalized, year, month))
+          applyRows((prev) => mergeReadingsForPeriod(prev, normalized, year, month))
         } else {
-          setReadings(normalized)
+          applyRows(() => normalized)
         }
         return normalized
       }
       if (res.ok) {
-        if (!opts?.mergePeriod) setReadings([])
+        if (!opts?.mergePeriod) startTransition(() => setReadings([]))
         return []
       }
       if (data && typeof data === 'object' && 'error' in data) {
@@ -858,22 +878,27 @@ export default function ReadingsContent() {
       } else {
         console.error('Error fetching readings: request failed', res.status)
       }
-      if (!opts?.mergePeriod) setReadings([])
+      if (!opts?.mergePeriod) startTransition(() => setReadings([]))
       return []
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return []
       console.error('Error fetching readings:', error)
-      if (!opts?.mergePeriod) setReadings([])
+      if (!opts?.mergePeriod) startTransition(() => setReadings([]))
       return []
     } finally {
-      if (showLoading) setReadingsLoading(false)
+      if (seq === readingsFetchSeqRef.current && showLoading) setReadingsLoading(false)
     }
   },
-    [debouncedMonth, debouncedYear, filterMonth, filterYear]
+    [filterMonth, filterYear]
   )
 
   useEffect(() => {
+    if (!filterMonth.trim() || !filterYear.trim()) return
     fetchReadings()
-  }, [fetchReadings])
+    return () => {
+      readingsFetchAbortRef.current?.abort()
+    }
+  }, [filterMonth, filterYear, fetchReadings])
 
   useEffect(() => {
     if (filterMonth.trim() && filterYear.trim()) {
@@ -888,18 +913,52 @@ export default function ReadingsContent() {
       setTimeout(() => setMessage(null), 4000)
       return
     }
+    const year = parseInt(filterYear, 10)
+    const month = parseInt(filterMonth, 10)
+    if (!Number.isFinite(year) || !Number.isFinite(month)) return
+
     setRecalculating(true)
     try {
-      await fetchReadings({
-        recalculate: true,
-        month: filterMonth,
-        year: filterYear,
-        silent: true,
+      const res = await fetchWithAuth('/api/readings/recalculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, month }),
       })
+      let data: unknown = null
+      try {
+        data = await res.json()
+      } catch {
+        data = null
+      }
+      if (!res.ok) {
+        const err =
+          data && typeof data === 'object' && 'error' in data
+            ? String((data as { error?: string }).error)
+            : 'Алдаа гарлаа'
+        throw new Error(err)
+      }
+
+      const respRows =
+        data && typeof data === 'object' && Array.isArray((data as { rows?: unknown }).rows)
+          ? ((data as { rows: Record<string, unknown>[] }).rows ?? [])
+          : []
+      const normalized = respRows.map((r) => normalizeApiReadingRow(r))
+      setShowCalculated(true)
+      startTransition(() => {
+        setReadings((prev) => mergeReadingsForPeriod(prev, normalized, year, month))
+      })
+      setMessage({ type: 'success', text: 'Бодолт амжилттай хадгалагдлаа' })
+      setTimeout(() => setMessage(null), 2500)
+    } catch (err: unknown) {
+      setMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Бодолт хийхэд алдаа гарлаа',
+      })
+      setTimeout(() => setMessage(null), 4000)
     } finally {
       setRecalculating(false)
     }
-  }, [recalculating, readingsLoading, filterMonth, filterYear, fetchReadings])
+  }, [recalculating, readingsLoading, filterMonth, filterYear])
 
   const exportReadingsGrid = useCallback(() => {
     const api = gridRef.current?.api as any
@@ -988,10 +1047,13 @@ export default function ReadingsContent() {
           heatPerM3: reading.heatPerM3 || 0,
           heatPerM2: reading.heatPerM2 || 0,
         }
-        const m =
+        const mRaw =
           billingMode === 'WATER_HEAT'
             ? computeReadingMoneySplit(Number(reading.usage ?? 0), u, orgCategory, billingMode, water, heat)
             : computeReadingMoney(u, orgCategory, billingMode, water, heat)
+        const m = isHeatOnlyZeroBillingMonth(billingMode, reading.month)
+          ? HEAT_OFF_SEASON_MONEY
+          : mRaw
         reading.baseClean = m.baseClean
         reading.baseDirty = m.baseDirty
         reading.cleanPerM3 = m.cleanPerM3
@@ -1677,18 +1739,20 @@ export default function ReadingsContent() {
     if (modalBatchSaveInFlightRef.current) return
 
     const currentVisibleRows = newReadings.filter((r) => r.year === addModalYear && r.month === addModalMonth)
-    const hasUserInput = (r: Reading) => {
+    const shouldSaveModalRow = (r: Reading) => {
       if (!r) return false
       const s = Number(r.startValue ?? 0) || 0
       const e = Number(r.endValue ?? 0) || 0
       const h = Number(r.heatUsage ?? 0) || 0
-      // Усны заалт: end өөрчлөгдсөн бол.
-      if (e !== s) return true
-      // Дулаан: heatUsage оруулсан бол.
+
       if (readingRowUsesHeat(r) && h !== 0) return true
-      // Хэрэглэгчийн нэрээр placeholder мөрийг алгасах (meterId байхгүй мөрүүд anyway save хийхгүй).
-      // start/end хоёулаа 0 байхад "хоосон" гэж үзнэ.
-      return s !== 0 || e !== 0
+
+      if (e < s) return false
+
+      // Эхний = эцсийн (зөрүү 0, хэрэглээ 0) байсан ч тухайн сарын заалт болгон хадгална.
+      if (e === s) return true
+
+      return e > s
     }
     const isDirty = (r: Reading) => {
       const snap = modalOriginalRowsRef.current.get(getRowSnapshotKey(r))
@@ -1707,7 +1771,11 @@ export default function ReadingsContent() {
     // Modal: зөвхөн харагдаж буй (сонгосон Он/Сар)-ын мөрүүдийг хадгална.
     // Хэрэглэгч утга оруулсан бүх мөрийг хадгална (dirty/snapshot-оос үл хамаарна).
     const rowsToSave = currentVisibleRows.filter(
-      (r) => r.meterId && (r._isNew || !!r.id) && hasUserInput(r)
+      (r) =>
+        r.meterId &&
+        (r._isNew || !!r.id) &&
+        shouldSaveModalRow(r) &&
+        (r._isNew || isDirty(r))
     )
 
     const rowsWithDataButNoMeter = currentVisibleRows.filter((r) => {
@@ -1731,7 +1799,10 @@ export default function ReadingsContent() {
     }
 
     if (rowsToSave.length === 0) {
-      setMessage({ type: 'error', text: 'Хадгалах мөр олдсонгүй. Эцсийн заалт (эсвэл дулааны хэрэглээ) оруулаад дахин оролдоно уу.' })
+      setMessage({
+        type: 'error',
+        text: 'Хадгалах мөр олдсонгүй. Эцсийн заалт эхний заалтаас бага байж болохгүй.',
+      })
       setTimeout(() => setMessage(null), 3000)
       return
     }
@@ -1785,8 +1856,8 @@ export default function ReadingsContent() {
         const data = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error((data as { error?: string }).error || 'Алдаа гарлаа')
 
-        setFilterYear(String(savedYear))
-        setFilterMonth(String(savedMonth))
+        if (String(savedYear) !== filterYear) setFilterYear(String(savedYear))
+        if (String(savedMonth) !== filterMonth) setFilterMonth(String(savedMonth))
         setShowCalculated(true)
 
         const respRows = Array.isArray((data as { rows?: unknown }).rows)
@@ -1831,7 +1902,9 @@ export default function ReadingsContent() {
         })
 
         // Сервер batch аль хэдийн хадгалсан мөрүүдийг бодсон тул доод хүснэгтэд шууд нэгтгэнэ.
-        setReadings((prev) => mergeReadingsForPeriod(prev, enriched, savedYear, savedMonth))
+        startTransition(() => {
+          setReadings((prev) => mergeReadingsForPeriod(prev, enriched, savedYear, savedMonth))
+        })
 
         if (saveSuccessToastTimeoutRef.current) {
           clearTimeout(saveSuccessToastTimeoutRef.current)
@@ -1843,14 +1916,6 @@ export default function ReadingsContent() {
             setSaveSuccessToast(null)
             saveSuccessToastTimeoutRef.current = null
           }, 2000)
-        })
-
-        // Үлдэгдэл/нийт мөрүүдийг дараа нь чимээгүй шинэчилнэ (бүх сарыг дахин бодохгүй).
-        void fetchReadings({
-          month: savedMonth,
-          year: savedYear,
-          silent: true,
-          mergePeriod: { year: savedYear, month: savedMonth },
         })
       } catch (err: any) {
         setMessage({ type: 'error', text: err?.message || 'Алдаа гарлаа' })

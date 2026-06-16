@@ -12,12 +12,16 @@ type OrganizationCategory =
   | 'ORGANIZATION'
   | 'BUSINESS'
   | 'WATER_POINT'
+  | 'TRANSPORT_DISPOSAL'
+  | 'TRANSPORT_RECEPTION'
 
 const CATEGORY_LABELS: Record<OrganizationCategory, string> = {
   HOUSEHOLD: 'Иргэн, Хувь хүн',
   ORGANIZATION: 'Төсөвт байгууллага',
   BUSINESS: 'Аж ахуйн нэгж',
   WATER_POINT: 'Ус түгээх байр',
+  TRANSPORT_DISPOSAL: 'Зөөврөөр татан зайлуулах',
+  TRANSPORT_RECEPTION: 'Зөөврүүд хүлээн авах',
 }
 
 interface Organization {

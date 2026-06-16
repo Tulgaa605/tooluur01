@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import { heatDefaultsForCategory, orgMonthlyHeatTariffIsEmpty } from '@/lib/heat-tariff-defaults'
 import {
   effectiveBillingCategory,
   type HeatTariffRates,
@@ -245,7 +245,7 @@ export class TariffPeriodCache {
 
     if (!meterCategoryOverride) {
       const orgTariff = this.orgTariffByOrgId.get(organizationId)
-      if (orgTariff) {
+      if (orgTariff && !orgMonthlyHeatTariffIsEmpty(orgTariff)) {
         return {
           heatBase: orgTariff.heatBaseFee,
           heatPerM3: orgTariff.heatPerM3,
@@ -255,7 +255,7 @@ export class TariffPeriodCache {
     }
 
     const catRow = this.categoryForOrg(organizationId, opts?.billingCategory)
-    if (catRow) {
+    if (catRow && !orgMonthlyHeatTariffIsEmpty(catRow)) {
       return {
         heatBase: catRow.heatBaseFee ?? 0,
         heatPerM3: catRow.heatPerM3 ?? 0,

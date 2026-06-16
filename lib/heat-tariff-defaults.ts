@@ -17,3 +17,16 @@ export function heatDefaultsForCategory(category: string): { heatPerM3: number; 
   const row = HEAT_CATEGORY_DEFAULT_RATES.find((r) => r.category === category)
   return row ? { heatPerM3: row.heatPerM3, heatPerM2: row.heatPerM2 } : { heatPerM3: 0, heatPerM2: 0 }
 }
+
+/** Байгууллагын сарын тарифын дулааны талбар бүгд 0 бол төрлийн тариф руу шилжинэ. */
+export function orgMonthlyHeatTariffIsEmpty(tariff: {
+  heatBaseFee?: number | null
+  heatPerM3?: number | null
+  heatPerM2?: number | null
+}): boolean {
+  return (
+    (tariff.heatBaseFee ?? 0) === 0 &&
+    (tariff.heatPerM3 ?? 0) === 0 &&
+    (tariff.heatPerM2 ?? 0) === 0
+  )
+}

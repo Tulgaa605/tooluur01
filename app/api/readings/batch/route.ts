@@ -157,12 +157,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
     }
     const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
+
+    const [meters, scopedOrgList] = await Promise.all([
+      metersPromise,
+      roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER
+        ? getScopedOrganizationIds(scopedUser as Parameters<typeof getScopedOrganizationIds>[0])
+        : Promise.resolve([] as string[]),
+    ])
     let scopedOrgIdSet: Set<string> | null = null
     if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-      scopedOrgIdSet = new Set(await getScopedOrganizationIds(scopedUser as any))
+      scopedOrgIdSet = new Set(scopedOrgList)
     }
-
-    const meters = await metersPromise
     const meterById = new Map(meters.map((m) => [m.id, m]))
     for (const id of meterIds) {
       if (!meterById.has(id)) {

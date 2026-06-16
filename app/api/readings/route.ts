@@ -38,9 +38,14 @@ import {
   recalculateAndPersistOrgPeriodAdditionalFees,
 } from '@/lib/readings-with-additional-fees'
 import { syncHeatMeterReadingsForPeriod } from '@/lib/ensure-heat-meter-reading'
+import {
+  HEAT_OFF_SEASON_MONEY,
+  isHeatOnlyZeroBillingMonth,
+} from '@/lib/heat-billing-season'
 import { TariffPeriodCache } from '@/lib/tariff-period-cache'
 import {
   readingNeedsMoneyRecalc,
+  recalculateReadingIdsForPeriod,
   recalculateReadingRowMoney,
   type ReadingForTariffRecalc,
   waterUsageFromReading,
@@ -161,8 +166,9 @@ export async function POST(request: NextRequest) {
       }),
     ])
     const waterTariff = waterTariffAdjustedForMeter(waterTariffRaw, billingMode, meter.waterChargeSplit)
-    const finalMoney =
-      billingMode === 'WATER_HEAT'
+    const finalMoney = isHeatOnlyZeroBillingMonth(billingMode, data.month)
+      ? HEAT_OFF_SEASON_MONEY
+      : billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
         : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
     const {
@@ -297,17 +303,23 @@ export async function GET(request: NextRequest) {
     // USER: өөрийн байгууллага. Нягтлан/захирал: өөрийн алба + бүртгэсэн харилцагч (аль алины заалт харагдана).
     let where: any = {}
     const roleStr = String(user.role)
+    let scopedOrgIds: string[] = []
+    let officeOrgIdForScope: string | null = null
     if (roleStr === Role.USER) {
       if (!user.organizationId) return NextResponse.json([])
       where.organizationId = user.organizationId
+      scopedOrgIds = [user.organizationId]
     } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
       // Зарим staff token дээр organizationId хоосон байж болно → GET дээр ч автоматаар сэргээнэ.
-      const officeOrgId = await ensureOfficeOrganizationId(user)
-      const scoped = await getScopedOrganizationIds({ ...user, organizationId: officeOrgId ?? user.organizationId })
-      if (scoped.length === 0) return NextResponse.json([])
+      officeOrgIdForScope = await ensureOfficeOrganizationId(user)
+      scopedOrgIds = await getScopedOrganizationIds({
+        ...user,
+        organizationId: officeOrgIdForScope ?? user.organizationId,
+      })
+      if (scopedOrgIds.length === 0) return NextResponse.json([])
       // Scope-д таарах байгууллагуудын заалт + өмнө нь энэ хэрэглэгч өөрөө нэмсэн заалтуудыг алдахгүй.
       where.OR = [
-        { organizationId: { in: scoped } },
+        { organizationId: { in: scopedOrgIds } },
         { createdByUserId: user.userId },
       ]
     }
@@ -341,7 +353,10 @@ export async function GET(request: NextRequest) {
     const withCarry = searchParams.get('withCarry') === '1'
 
     // «Зөвхөн дулаан» тоолуур: modal-аар оруулахгүйгээр үндсэн grid-д гарахын тулд заалт автоматаар үүсгэнэ.
-    if (searchParams.get('ensureHeatReadings') === '1') {
+    if (
+      searchParams.get('ensureHeatReadings') === '1' &&
+      searchParams.get('skipHeatSync') !== '1'
+    ) {
       const syncYear = year ? parseInt(year, 10) : new Date().getFullYear()
       const syncMonth = month ? parseInt(month, 10) : new Date().getMonth() + 1
       if (
@@ -351,7 +366,10 @@ export async function GET(request: NextRequest) {
         syncMonth <= 12
       ) {
         try {
-          await syncHeatMeterReadingsForPeriod(user, syncYear, syncMonth)
+          await syncHeatMeterReadingsForPeriod(user, syncYear, syncMonth, {
+            orgIds: scopedOrgIds,
+            officeOrgId: officeOrgIdForScope,
+          })
         } catch (e) {
           console.error('syncHeatMeterReadingsForPeriod:', e)
         }
@@ -678,23 +696,46 @@ export async function GET(request: NextRequest) {
     // Бодолт товч (recalculate=1) эсвэл тооцоогүй шинэ заалт — тарифаар дүнг тооцож DB-д хадгална.
     const periodYear = filterYearNum ?? readings[0]?.year ?? new Date().getFullYear()
     const periodMonth = filterMonthNum ?? readings[0]?.month ?? new Date().getMonth() + 1
-    const tariffCache = await TariffPeriodCache.build(
-      [...new Set(readings.map((r) => r.organizationId))],
-      periodYear,
-      periodMonth
-    )
-    const result = readings.map((r) =>
-      recalculateReadingRowMoney(r as ReadingForTariffRecalc, tariffCache)
-    )
 
-    const withExtras = await attachAdditionalFeesToReadings(result)
-    await persistReadingMoneyFields(withExtras)
+    let updatedReadings = readings
+
+    if (shouldRecalculate) {
+      const tariffCache = await TariffPeriodCache.build(
+        [...new Set(readings.map((r) => r.organizationId))],
+        periodYear,
+        periodMonth
+      )
+      updatedReadings = readings.map((r) =>
+        recalculateReadingRowMoney(r as ReadingForTariffRecalc, tariffCache)
+      ) as typeof readings
+      const withExtrasRecalc = await attachAdditionalFeesToReadings(updatedReadings)
+      await persistReadingMoneyFields(withExtrasRecalc)
+      updatedReadings = withExtrasRecalc as typeof readings
+    } else if (autoRecalc) {
+      const ids = readings
+        .filter((r) => readingNeedsMoneyRecalc(r))
+        .map((r) => r.id)
+        .filter(Boolean) as string[]
+      if (ids.length > 0) {
+        const recalculated = await recalculateReadingIdsForPeriod(ids, periodYear, periodMonth)
+        const byId = new Map(recalculated.map((r) => [String(r.id), r]))
+        updatedReadings = readings.map((r) => {
+          if (!r.id) return r
+          const u = byId.get(r.id)
+          return u ? ({ ...r, ...u } as typeof r) : r
+        })
+      }
+    }
+
+    const withExtras = shouldRecalculate
+      ? updatedReadings
+      : await attachAdditionalFeesToReadings(updatedReadings)
 
     if (withCarry) {
       const carryData = await computeCarry(
         filterYearNum,
         filterMonthNum,
-        readings.map((r) => r.organizationId)
+        updatedReadings.map((r) => r.organizationId)
       )
       const attached = attachCarry(withExtras, carryData.byKey)
       if (canPhantom) {
@@ -840,8 +881,9 @@ export async function PUT(request: NextRequest) {
       billingMode,
       meterForBilling?.waterChargeSplit
     )
-    const finalMoney =
-      billingMode === 'WATER_HEAT'
+    const finalMoney = isHeatOnlyZeroBillingMonth(billingMode, data.month)
+      ? HEAT_OFF_SEASON_MONEY
+      : billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
         : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
     const {

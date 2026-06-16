@@ -105,7 +105,7 @@ export async function persistReadingMoneyFields(
   const rows = readings.filter((r) => r.id && !r.isPhantom)
   if (rows.length === 0) return
 
-  const WAVE = 48
+  const WAVE = 64
   for (let i = 0; i < rows.length; i += WAVE) {
     const slice = rows.slice(i, i + WAVE)
     await Promise.all(

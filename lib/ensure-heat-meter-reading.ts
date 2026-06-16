@@ -12,6 +12,7 @@ import {
 } from '@/lib/meter-reading-calc'
 import { getCategoryTariffOwnerOrgIdForCustomer } from '@/lib/category-tariff-scope'
 import { ensureHeatCategoryTariffsInDb } from '@/lib/ensure-heat-category-tariffs'
+import { recalculateReadingIdsForPeriod } from '@/lib/recalculate-readings-tariff'
 
 /** Заалт оруулах modal-аас хадгалахтай ижил — дүнг «Бодолт» тооцоолно. */
 const ZERO_MONEY = {
@@ -49,16 +50,16 @@ export async function ensureHeatMeterReadingForPeriod(
   userId: string,
   period: { year: number; month: number },
   opts?: { skipCategorySeed?: boolean }
-): Promise<boolean> {
+): Promise<string | null> {
   const billingMode = normalizeBillingMode(meter.billingMode)
-  if (billingMode !== 'HEAT') return false
+  if (billingMode !== 'HEAT') return null
 
   const heatUsage = Math.round(Number(meter.defaultHeatUsage ?? 0) * 100) / 100
-  if (!Number.isFinite(heatUsage) || heatUsage <= 0) return false
+  if (!Number.isFinite(heatUsage) || heatUsage <= 0) return null
 
   const year = Math.trunc(period.year)
   const month = Math.trunc(period.month)
-  if (year < 2000 || year > 2100 || month < 1 || month > 12) return false
+  if (year < 2000 || year > 2100 || month < 1 || month > 12) return null
 
   const existing = await prisma.meterReading.findUnique({
     where: {
@@ -70,7 +71,7 @@ export async function ensureHeatMeterReadingForPeriod(
     },
     select: { id: true },
   })
-  if (existing) return false
+  if (existing) return null
 
   if (!opts?.skipCategorySeed) {
     const ownerOrgId = meter.organizationId
@@ -79,7 +80,7 @@ export async function ensureHeatMeterReadingForPeriod(
     if (ownerOrgId) await ensureHeatCategoryTariffsInDb(ownerOrgId)
   }
 
-  await prisma.meterReading.create({
+  const created = await prisma.meterReading.create({
     data: {
       meterId: meter.id,
       organizationId: meter.organizationId,
@@ -94,8 +95,9 @@ export async function ensureHeatMeterReadingForPeriod(
       createdByUserId: userId,
       updatedByUserId: userId,
     },
+    select: { id: true },
   })
-  return true
+  return created.id
 }
 
 /** Одоогийн календарийн сар */
@@ -104,10 +106,74 @@ export async function ensureHeatMeterReadingForCurrentPeriod(
   userId: string
 ): Promise<boolean> {
   const now = new Date()
-  return ensureHeatMeterReadingForPeriod(meter, userId, {
+  const id = await ensureHeatMeterReadingForPeriod(meter, userId, {
     year: now.getFullYear(),
     month: now.getMonth() + 1,
   })
+  return id != null
+}
+
+/** Тухайн оны 1–12 сард заалт байхгүй бол үүсгэнэ. */
+export async function ensureHeatMeterReadingsForYear(
+  meter: HeatMeterSnapshot,
+  userId: string,
+  year: number
+): Promise<number> {
+  const y = Math.trunc(year)
+  if (y < 2000 || y > 2100) return 0
+  const WAVE = 6
+  let created = 0
+  for (let start = 1; start <= 12; start += WAVE) {
+    const months = Array.from({ length: Math.min(WAVE, 12 - start + 1) }, (_, i) => start + i)
+    const results = await Promise.all(
+      months.map((month) =>
+        ensureHeatMeterReadingForPeriod(meter, userId, { year: y, month }, { skipCategorySeed: true })
+      )
+    )
+    created += results.filter((id): id is string => typeof id === 'string' && id.length > 0).length
+  }
+  return created
+}
+
+/** Тухайн тоолуурын тухайн оны бүх заалтыг тарифаар дахин тооцно. */
+export async function recalculateHeatMeterReadingsForYear(
+  meterId: string,
+  year: number
+): Promise<void> {
+  const readings = await prisma.meterReading.findMany({
+    where: { meterId, year: Math.trunc(year) },
+    select: { id: true, month: true },
+  })
+  if (readings.length === 0) return
+  const byMonth = new Map<number, string[]>()
+  for (const r of readings) {
+    const list = byMonth.get(r.month) ?? []
+    list.push(r.id)
+    byMonth.set(r.month, list)
+  }
+  await Promise.all(
+    [...byMonth.entries()].map(([month, ids]) =>
+      recalculateReadingIdsForPeriod(ids, Math.trunc(year), month)
+    )
+  )
+}
+
+/**
+ * «Зөвхөн дулаан» тоолуур бүртгэх/шинэчлэхэд тухайн оны 12 сарын заалт үүсгээд бодно.
+ */
+export async function provisionHeatMeterYear(
+  meter: HeatMeterSnapshot,
+  userId: string,
+  year: number,
+  officeOrgId?: string | null
+): Promise<void> {
+  if (officeOrgId) await ensureHeatCategoryTariffsInDb(officeOrgId)
+  const currentYear = new Date().getFullYear()
+  const years = new Set([Math.trunc(year), currentYear].filter((y) => y >= 2000 && y <= 2100))
+  for (const y of years) {
+    await ensureHeatMeterReadingsForYear(meter, userId, y)
+    await recalculateHeatMeterReadingsForYear(meter.id, y)
+  }
 }
 
 /**
@@ -117,23 +183,30 @@ export async function ensureHeatMeterReadingForCurrentPeriod(
 export async function syncHeatMeterReadingsForPeriod(
   user: TokenPayload,
   year: number,
-  month: number
+  month: number,
+  opts?: { orgIds?: string[]; officeOrgId?: string | null }
 ): Promise<number> {
   const roleStr = String(user.role ?? '')
-  let orgIds: string[] = []
-  if (roleStr === Role.USER) {
-    if (!user.organizationId) return 0
-    orgIds = [user.organizationId]
-  } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-    const officeOrgId = await ensureOfficeOrganizationId(user)
-    orgIds = await getScopedOrganizationIds({
-      ...user,
-      organizationId: officeOrgId ?? user.organizationId,
-    })
-  } else {
-    return 0
+  let orgIds = opts?.orgIds
+  if (!orgIds) {
+    if (roleStr === Role.USER) {
+      if (!user.organizationId) return 0
+      orgIds = [user.organizationId]
+    } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
+      const officeOrgId = await ensureOfficeOrganizationId(user)
+      orgIds = await getScopedOrganizationIds({
+        ...user,
+        organizationId: officeOrgId ?? user.organizationId,
+      })
+    } else {
+      return 0
+    }
   }
   if (orgIds.length === 0) return 0
+
+  const y = Math.trunc(year)
+  const m = Math.trunc(month)
+  if (y < 2000 || y > 2100 || m < 1 || m > 12) return 0
 
   const heatMeters = await prisma.meter.findMany({
     where: {
@@ -152,37 +225,61 @@ export async function syncHeatMeterReadingsForPeriod(
     },
   })
 
-  const officeOrgId = await ensureOfficeOrganizationId(user)
-  if (officeOrgId) await ensureHeatCategoryTariffsInDb(officeOrgId)
-
-  const candidates = heatMeters.filter((m) => {
-    const heat = Number(m.defaultHeatUsage ?? 0)
+  const candidates = heatMeters.filter((meter) => {
+    const heat = Number(meter.defaultHeatUsage ?? 0)
     return Number.isFinite(heat) && heat > 0
   })
+  if (candidates.length === 0) return 0
 
-  let created = 0
-  const WAVE = 24
-  for (let i = 0; i < candidates.length; i += WAVE) {
-    const slice = candidates.slice(i, i + WAVE)
-    const results = await Promise.all(
-      slice.map((m) =>
-        ensureHeatMeterReadingForPeriod(
-          {
-            id: m.id,
-            organizationId: m.organizationId,
-            billingMode: m.billingMode,
-            defaultHeatUsage: m.defaultHeatUsage,
-            waterChargeSplit: m.waterChargeSplit,
-            pipeDiameterMm: m.pipeDiameterMm,
-            billingCategory: m.billingCategory,
+  const officeOrgId =
+    opts?.officeOrgId !== undefined ? opts.officeOrgId : await ensureOfficeOrganizationId(user)
+  if (officeOrgId) await ensureHeatCategoryTariffsInDb(officeOrgId)
+
+  const candidateIds = candidates.map((c) => c.id)
+  const existing = await prisma.meterReading.findMany({
+    where: {
+      meterId: { in: candidateIds },
+      year: y,
+      month: m,
+    },
+    select: { meterId: true },
+  })
+  const haveReading = new Set(existing.map((r) => r.meterId))
+  const missing = candidates.filter((c) => !haveReading.has(c.id))
+  if (missing.length === 0) return 0
+
+  const createdReadingIds: string[] = []
+  const WAVE = 32
+  for (let i = 0; i < missing.length; i += WAVE) {
+    const slice = missing.slice(i, i + WAVE)
+    const rows = await Promise.all(
+      slice.map((meter) => {
+        const heatUsage = Math.round(Number(meter.defaultHeatUsage ?? 0) * 100) / 100
+        return prisma.meterReading.create({
+          data: {
+            meterId: meter.id,
+            organizationId: meter.organizationId,
+            month: m,
+            year: y,
+            startValue: 0,
+            endValue: 0,
+            heatUsage,
+            usage: heatUsage,
+            ...ZERO_MONEY,
+            createdBy: user.userId,
+            createdByUserId: user.userId,
+            updatedByUserId: user.userId,
           },
-          user.userId,
-          { year, month },
-          { skipCategorySeed: true }
-        )
-      )
+          select: { id: true },
+        })
+      })
     )
-    created += results.filter(Boolean).length
+    for (const row of rows) createdReadingIds.push(row.id)
   }
-  return created
+
+  if (createdReadingIds.length > 0) {
+    await recalculateReadingIdsForPeriod(createdReadingIds, y, m)
+  }
+
+  return createdReadingIds.length
 }

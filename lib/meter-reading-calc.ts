@@ -13,7 +13,7 @@ import {
   type WaterChargeSplit,
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc-core'
-import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
+import { heatDefaultsForCategory, orgMonthlyHeatTariffIsEmpty } from '@/lib/heat-tariff-defaults'
 import {
   findCategoryTariffForCustomer,
   type CategoryTariffLookup,
@@ -156,7 +156,7 @@ export async function getHeatTariffRatesForPeriod(
       where: { organizationId_year_month: { organizationId, year, month } },
       select: { heatBaseFee: true, heatPerM3: true, heatPerM2: true },
     })
-    if (orgTariff) {
+    if (orgTariff && !orgMonthlyHeatTariffIsEmpty(orgTariff)) {
       return {
         heatBase: orgTariff.heatBaseFee ?? 0,
         heatPerM3: orgTariff.heatPerM3 ?? 0,
@@ -166,7 +166,7 @@ export async function getHeatTariffRatesForPeriod(
   }
 
   const catRow = await findCategoryTariffForCustomer(organizationId, categoryForTariffs)
-  if (catRow) {
+  if (catRow && !orgMonthlyHeatTariffIsEmpty(catRow)) {
     return {
       heatBase: catRow.heatBaseFee ?? 0,
       heatPerM3: catRow.heatPerM3 ?? 0,

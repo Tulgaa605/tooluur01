@@ -1,5 +1,6 @@
 import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
 import { prisma } from '@/lib/prisma'
+import type { Prisma } from '@prisma/client'
 import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,
@@ -11,9 +12,16 @@ import {
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc'
 import { TariffPeriodCache } from '@/lib/tariff-period-cache'
+import {
+  HEAT_OFF_SEASON_MONEY,
+  isHeatOnlyZeroBillingMonth,
+} from '@/lib/heat-billing-season'
 
 /** Заалт байгаа ч мөнгөн дүн тооцоогүй (0) мөр — автомат бодолт хэрэгтэй эсэх. */
 export function readingNeedsMoneyRecalc(r: {
+  month?: unknown
+  billingMode?: string | null
+  meter?: { billingMode?: string | null } | null
   usage?: unknown
   heatUsage?: unknown
   total?: unknown
@@ -21,6 +29,14 @@ export function readingNeedsMoneyRecalc(r: {
   startValue?: unknown
   endValue?: unknown
 }): boolean {
+  const month = Number(r.month ?? 0)
+  const billingMode = r.billingMode ?? r.meter?.billingMode
+  if (isHeatOnlyZeroBillingMonth(billingMode, month)) {
+    const total = Number(r.total ?? 0) || 0
+    const subtotal = Number(r.subtotal ?? 0) || 0
+    return total > 0.005 || subtotal > 0.005
+  }
+
   const water = waterUsageFromReading(r)
   const heat = Number(r.heatUsage ?? 0) || 0
   if (water <= 0 && heat <= 0) return false
@@ -113,6 +129,14 @@ export function recalculateReadingRowMoney<T extends ReadingForTariffRecalc>(
   const waterUsage = waterUsageFromReading(r)
   const heatUsage = Number(r.heatUsage ?? 0) || 0
   const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
+
+  if (isHeatOnlyZeroBillingMonth(billingMode, r.month)) {
+    return {
+      ...r,
+      ...HEAT_OFF_SEASON_MONEY,
+    }
+  }
+
   const money =
     billingMode === 'WATER_HEAT'
       ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, water, heat)
@@ -158,6 +182,20 @@ async function recalculateRawRows(
     withExtras as Parameters<typeof persistReadingMoneyFields>[0]
   )
   return withExtras
+}
+
+/** Scope where + тухайн сарын бүх заалтыг тарифаар бодож DB-д хадгална. */
+export async function recalculateMeterReadingsWhere(
+  scopeWhere: Prisma.MeterReadingWhereInput,
+  year: number,
+  month: number
+) {
+  const rows = await prisma.meterReading.findMany({
+    where: { AND: [scopeWhere, { year, month }] },
+  })
+  if (rows.length === 0) return []
+  const raw = await attachOrgsAndMetersToReadings(rows)
+  return recalculateRawRows(raw, year, month)
 }
 
 /** Тодорхой заалтын ID-уудын дүнг тарифаар дахин тооцож DB-д хадгална. */

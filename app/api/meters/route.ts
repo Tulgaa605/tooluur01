@@ -13,7 +13,11 @@ import {
   getWaterTariffRatesForPeriod,
   normalizeBillingMode,
 } from '@/lib/meter-reading-calc'
-import { ensureHeatMeterReadingForCurrentPeriod } from '@/lib/ensure-heat-meter-reading'
+import { provisionHeatMeterYear } from '@/lib/ensure-heat-meter-reading'
+import {
+  HEAT_OFF_SEASON_MONEY,
+  isHeatOnlyZeroBillingMonth,
+} from '@/lib/heat-billing-season'
 
 type OrgMini = {
   id: string
@@ -144,8 +148,9 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
     )
     const waterUsage = waterUsageFromReading(row)
     const usage = billingMode === 'HEAT' ? nextHeat : waterUsage
-    const money =
-      billingMode === 'WATER_HEAT'
+    const money = isHeatOnlyZeroBillingMonth(billingMode, row.month)
+      ? HEAT_OFF_SEASON_MONEY
+      : billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, nextHeat, orgCategory, billingMode, waterTariff, heatTariff)
         : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
 
@@ -383,7 +388,7 @@ export async function POST(request: NextRequest) {
     })
 
     if (billingMode === 'HEAT') {
-      await ensureHeatMeterReadingForCurrentPeriod(
+      await provisionHeatMeterYear(
         {
           id: meter.id,
           organizationId: meter.organizationId,
@@ -393,7 +398,9 @@ export async function POST(request: NextRequest) {
           pipeDiameterMm: meter.pipeDiameterMm,
           billingCategory: meter.billingCategory,
         },
-        user.userId
+        user.userId,
+        year,
+        officeOrgId
       )
     }
 
@@ -596,7 +603,7 @@ export async function PUT(request: NextRequest) {
     const finalWaterChargeSplit =
       nextWaterChargeSplit !== undefined ? nextWaterChargeSplit : existing.waterChargeSplit
     if (nextBilling === 'HEAT') {
-      await ensureHeatMeterReadingForCurrentPeriod(
+      await provisionHeatMeterYear(
         {
           id: meter.id,
           organizationId: meter.organizationId,
@@ -606,7 +613,9 @@ export async function PUT(request: NextRequest) {
           pipeDiameterMm: meter.pipeDiameterMm,
           billingCategory: meter.billingCategory,
         },
-        user.userId
+        user.userId,
+        year,
+        officeOrgId
       )
     }
 
