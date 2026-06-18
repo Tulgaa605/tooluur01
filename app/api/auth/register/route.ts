@@ -6,6 +6,7 @@ import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
 import {
   normalizeRegisterPhone,
   verifyRegisterPhoneToken,
+  SKIP_REGISTER_PHONE_VERIFICATION,
 } from '@/lib/register-phone-verification'
 import { assertUserPhoneAvailable } from '@/lib/user-phone'
 
@@ -16,9 +17,9 @@ export async function POST(request: NextRequest) {
     const { email, password, name, organizationId, phone, phoneVerificationToken } =
       await request.json()
 
-    if (!email || !password || !name || !phone || !phoneVerificationToken) {
+    if (!email || !password || !name || !phone) {
       return NextResponse.json(
-        { error: 'Имэйл, нууц үг, нэр, утасны дугаар болон баталгаажуулалт шаардлагатай' },
+        { error: 'Имэйл, нууц үг, нэр, утасны дугаар шаардлагатай' },
         { status: 400 }
       )
     }
@@ -28,12 +29,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Утасны дугаар буруу байна' }, { status: 400 })
     }
 
-    const phoneToken = verifyRegisterPhoneToken(String(phoneVerificationToken))
-    if (!phoneToken || phoneToken.phone !== normalizedPhone) {
-      return NextResponse.json(
-        { error: 'Утасны дугаар баталгаажаагүй байна. Кодоо дахин баталгаажуулна уу' },
-        { status: 400 }
-      )
+    if (!SKIP_REGISTER_PHONE_VERIFICATION) {
+      if (!phoneVerificationToken) {
+        return NextResponse.json(
+          { error: 'Утасны дугаар баталгаажаагүй байна. Кодоо дахин баталгаажуулна уу' },
+          { status: 400 }
+        )
+      }
+      const phoneToken = verifyRegisterPhoneToken(String(phoneVerificationToken))
+      if (!phoneToken || phoneToken.phone !== normalizedPhone) {
+        return NextResponse.json(
+          { error: 'Утасны дугаар баталгаажаагүй байна. Кодоо дахин баталгаажуулна уу' },
+          { status: 400 }
+        )
+      }
     }
 
     await assertUserPhoneAvailable(normalizedPhone)

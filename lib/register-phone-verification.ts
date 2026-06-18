@@ -14,6 +14,9 @@ const VERIFICATION_TOKEN_TTL = '30m'
 export const REGISTER_PHONE_TOKEN_PURPOSE = 'register_phone_verified'
 const REGISTER_OTP_PURPOSE = 'register_otp'
 
+/** Түр зуур: бүртгэлд утасны SMS код шаардахгүй */
+export const SKIP_REGISTER_PHONE_VERIFICATION = true
+
 export interface RegisterPhoneTokenPayload {
   purpose: typeof REGISTER_PHONE_TOKEN_PURPOSE
   phone: string

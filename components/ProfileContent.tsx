@@ -10,7 +10,6 @@ type ProfileUser = {
   role: string
   phoneMasked: string
   hasPhone: boolean
-  birthDate: string | null
 }
 
 type VerifyStep = 'idle' | 'code_sent' | 'verified'
@@ -26,7 +25,6 @@ export default function ProfileContent() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [passwordConfirm, setPasswordConfirm] = useState('')
-  const [birthDate, setBirthDate] = useState('')
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(false)
@@ -40,7 +38,6 @@ export default function ProfileContent() {
       const u = data.user as ProfileUser
       setProfile(u)
       setEmail(u.email || '')
-      setBirthDate(u.birthDate || '')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Профайл ачаалахад алдаа гарлаа')
     } finally {
@@ -141,10 +138,9 @@ export default function ProfileContent() {
     setInfo('')
     setBusy(true)
     try {
-      const payload: Record<string, string | null> = {
+      const payload: Record<string, string> = {
         profileVerificationToken,
         email: email.trim(),
-        birthDate: birthDate.trim() || null,
       }
       if (password) payload.password = password
 
@@ -159,7 +155,6 @@ export default function ProfileContent() {
       if (data.user) {
         setProfile(data.user)
         setEmail(data.user.email || '')
-        setBirthDate(data.user.birthDate || '')
       }
       setPassword('')
       setPasswordConfirm('')
@@ -301,7 +296,7 @@ export default function ProfileContent() {
           ) : (
             <>
               <p className="text-sm text-gray-600 mb-4">
-                Имэйл, нууц үг, төрсөн өдөр өөрчлөхийн өмнө бүртгэлтэй утас{' '}
+                Имэйл, нууц үг өөрчлөхийн өмнө бүртгэлтэй утас{' '}
                 <span className="font-medium text-gray-900">{profile.phoneMasked}</span> руу{' '}
                 <span className="font-medium">159099</span> дугаараас илгээсэн кодоор баталгаажуулна.
               </p>
@@ -421,23 +416,6 @@ export default function ProfileContent() {
               onChange={(e) => setPasswordConfirm(e.target.value)}
               disabled={!canEdit}
               autoComplete="new-password"
-              className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm disabled:bg-gray-50 disabled:text-gray-500 focus:border-primary-500 focus:ring-primary-500"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="profile-birthdate"
-              className="block text-sm font-medium text-gray-700 mb-1"
-            >
-              Төрсөн өдөр
-            </label>
-            <input
-              id="profile-birthdate"
-              type="date"
-              value={birthDate}
-              onChange={(e) => setBirthDate(e.target.value)}
-              disabled={!canEdit}
               className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm disabled:bg-gray-50 disabled:text-gray-500 focus:border-primary-500 focus:ring-primary-500"
             />
           </div>

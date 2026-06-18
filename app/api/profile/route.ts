@@ -11,25 +11,6 @@ import { normalizeRegisterPhone } from '@/lib/register-phone-verification'
 
 export const dynamic = 'force-dynamic'
 
-function parseBirthDate(input: unknown): Date | null | undefined {
-  if (input === undefined) return undefined
-  if (input === null || input === '') return null
-  const s = String(input).trim()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    throw new Error('Төрсөн өдөр YYYY-MM-DD форматаар оруулна уу')
-  }
-  const d = new Date(`${s}T12:00:00.000Z`)
-  if (Number.isNaN(d.getTime())) {
-    throw new Error('Төрсөн өдөр буруу байна')
-  }
-  return d
-}
-
-function formatBirthDate(d: Date | null | undefined): string | null {
-  if (!d) return null
-  return d.toISOString().slice(0, 10)
-}
-
 export async function GET(request: NextRequest) {
   try {
     const auth = getAuthUser(request)
@@ -42,7 +23,6 @@ export async function GET(request: NextRequest) {
         email: true,
         name: true,
         phone: true,
-        birthDate: true,
         role: true,
         organizationId: true,
       },
@@ -58,7 +38,6 @@ export async function GET(request: NextRequest) {
         organizationId: user.organizationId,
         phoneMasked: maskPhoneForDisplay(user.phone),
         hasPhone: Boolean(user.phone?.trim()),
-        birthDate: formatBirthDate(user.birthDate),
       },
     })
   } catch (error: unknown) {
@@ -111,7 +90,6 @@ export async function PATCH(request: NextRequest) {
     const data: {
       email?: string
       password?: string
-      birthDate?: Date | null
     } = {}
 
     if ('email' in body) {
@@ -141,10 +119,6 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
-    if ('birthDate' in body) {
-      data.birthDate = parseBirthDate((body as { birthDate?: unknown }).birthDate)
-    }
-
     if (Object.keys(data).length === 0) {
       return NextResponse.json({ error: 'Засах мэдээлэл оруулна уу' }, { status: 400 })
     }
@@ -157,7 +131,6 @@ export async function PATCH(request: NextRequest) {
         email: true,
         name: true,
         phone: true,
-        birthDate: true,
         role: true,
         organizationId: true,
       },
@@ -173,7 +146,6 @@ export async function PATCH(request: NextRequest) {
         organizationId: updated.organizationId,
         phoneMasked: maskPhoneForDisplay(updated.phone),
         hasPhone: Boolean(updated.phone?.trim()),
-        birthDate: formatBirthDate(updated.birthDate),
       },
     })
 
