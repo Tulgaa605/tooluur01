@@ -1,8 +1,9 @@
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
-import { prisma } from '@/lib/prisma'
-import { normalizeToE164MN, sendTextSms } from '@/lib/sms'
+import { sendTextSms } from '@/lib/sms'
+import { normalizeToE164MN } from '@/lib/sms'
 import { getDefaultSmsSender } from '@/lib/sms-senders'
+import { assertUserPhoneAvailable } from '@/lib/user-phone'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'
 const RESEND_COOLDOWN_MS = 60 * 1000
@@ -88,13 +89,7 @@ export async function sendRegisterVerificationCode(
     throw new Error('Утасны дугаар буруу байна (8 оронтой Монгол дугаар оруулна уу)')
   }
 
-  const existingUser = await prisma.user.findFirst({
-    where: { phone },
-    select: { id: true },
-  })
-  if (existingUser) {
-    throw new Error('Энэ утасны дугаартай хэрэглэгч аль хэдийн бүртгэлтэй байна')
-  }
+  await assertUserPhoneAvailable(phone)
 
   if (previousOtpSessionToken) {
     const issuedAt = getTokenIssuedAtMs(previousOtpSessionToken)

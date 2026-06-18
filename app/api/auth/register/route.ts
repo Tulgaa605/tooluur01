@@ -7,6 +7,7 @@ import {
   normalizeRegisterPhone,
   verifyRegisterPhoneToken,
 } from '@/lib/register-phone-verification'
+import { assertUserPhoneAvailable } from '@/lib/user-phone'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,16 +36,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const existingPhoneUser = await prisma.user.findFirst({
-      where: { phone: normalizedPhone },
-      select: { id: true },
-    })
-    if (existingPhoneUser) {
-      return NextResponse.json(
-        { error: 'Энэ утасны дугаартай хэрэглэгч аль хэдийн бүртгэлтэй байна' },
-        { status: 400 }
-      )
-    }
+    await assertUserPhoneAvailable(normalizedPhone)
 
     const existingUser = await prisma.user.findUnique({
       where: { email },
@@ -137,6 +129,7 @@ export async function POST(request: NextRequest) {
         name: userOut.name,
         role: userOut.role,
         organizationId: userOut.organizationId,
+        phone: userOut.phone,
       },
     })
 

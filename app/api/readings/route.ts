@@ -39,8 +39,7 @@ import {
 } from '@/lib/readings-with-additional-fees'
 import { syncHeatMeterReadingsForPeriod } from '@/lib/ensure-heat-meter-reading'
 import {
-  HEAT_OFF_SEASON_MONEY,
-  isHeatOnlyZeroBillingMonth,
+  finalizeReadingMoneyForHeatRules,
 } from '@/lib/heat-billing-season'
 import { TariffPeriodCache } from '@/lib/tariff-period-cache'
 import {
@@ -166,11 +165,11 @@ export async function POST(request: NextRequest) {
       }),
     ])
     const waterTariff = waterTariffAdjustedForMeter(waterTariffRaw, billingMode, meter.waterChargeSplit)
-    const finalMoney = isHeatOnlyZeroBillingMonth(billingMode, data.month)
-      ? HEAT_OFF_SEASON_MONEY
-      : billingMode === 'WATER_HEAT'
+    const rawMoney =
+      billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
         : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
+    const finalMoney = finalizeReadingMoneyForHeatRules(billingMode, data.month, null, rawMoney)
     const {
       baseClean,
       baseDirty,
@@ -881,11 +880,17 @@ export async function PUT(request: NextRequest) {
       billingMode,
       meterForBilling?.waterChargeSplit
     )
-    const finalMoney = isHeatOnlyZeroBillingMonth(billingMode, data.month)
-      ? HEAT_OFF_SEASON_MONEY
-      : billingMode === 'WATER_HEAT'
+    const existingHeatClosed = (existingReading as { heatClosed?: boolean | null }).heatClosed
+    const heatClosedState =
+      existingHeatClosed === true ? true : existingHeatClosed === false ? false : null
+    const finalMoney = finalizeReadingMoneyForHeatRules(
+      billingMode,
+      data.month,
+      heatClosedState,
+      billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, waterTariff, heatTariff)
         : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
+    )
     const {
       baseClean,
       baseDirty,

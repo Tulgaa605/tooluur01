@@ -14,7 +14,8 @@ model User {
   password  String
   name      String
   code      String?
-  phone     String?
+  phone     String?  @unique
+  birthDate DateTime?
   role      String   @default("USER")
   organizationId String? @db.ObjectId
   organization Organization? @relation(fields: [organizationId], references: [id])
@@ -150,6 +151,8 @@ model MeterReading {
   vat            Float        @default(0)
   total          Float        @default(0)
   paidAmount     Float        @default(0)
+  /// null=анхдагч (5–9 сар автомат 0), true=гарын хаалт, false=гарын нээлт (үргэлж бодно)
+  heatClosed     Boolean?
   /// SMS/банкны гүйлгээний утгад оруулах төлбөрийн код (илгээх тутамд шинэчлэгдэнэ)
   paymentReference String?
   /// SMS амжилттай илгээгдсэн цаг — энэ заалт түгжигдэнэ (заалт/төлбөр засагдахгүй)

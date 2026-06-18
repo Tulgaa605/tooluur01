@@ -124,7 +124,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">{user.name}</span>
+              <a
+                href="/profile"
+                className={`text-sm font-medium hover:text-primary-600 ${
+                  pathname === '/profile' ? 'text-primary-600' : 'text-gray-700'
+                }`}
+                title="Профайл"
+              >
+                {user.name}
+              </a>
               <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
                 {user.role === 'ACCOUNTANT' ? 'Нягтлан' : 
                  user.role === 'MANAGER' ? 'Захирал' : 'Хэрэглэгч'}

@@ -15,8 +15,7 @@ import {
 } from '@/lib/meter-reading-calc'
 import { provisionHeatMeterYear } from '@/lib/ensure-heat-meter-reading'
 import {
-  HEAT_OFF_SEASON_MONEY,
-  isHeatOnlyZeroBillingMonth,
+  finalizeReadingMoneyForHeatRules,
 } from '@/lib/heat-billing-season'
 
 type OrgMini = {
@@ -148,11 +147,18 @@ async function syncMeterDefaultHeatUsageToReadings(params: {
     )
     const waterUsage = waterUsageFromReading(row)
     const usage = billingMode === 'HEAT' ? nextHeat : waterUsage
-    const money = isHeatOnlyZeroBillingMonth(billingMode, row.month)
-      ? HEAT_OFF_SEASON_MONEY
-      : billingMode === 'WATER_HEAT'
+    const rawMoney =
+      billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(waterUsage, nextHeat, orgCategory, billingMode, waterTariff, heatTariff)
         : computeReadingMoney(usage, orgCategory, billingMode, waterTariff, heatTariff)
+    const rowHeat = (row as { heatClosed?: boolean | null }).heatClosed
+    const heatClosedState = rowHeat === true ? true : rowHeat === false ? false : null
+    const money = finalizeReadingMoneyForHeatRules(
+      billingMode,
+      row.month,
+      heatClosedState,
+      rawMoney
+    )
 
     await prisma.meterReading.update({
       where: { id: row.id },

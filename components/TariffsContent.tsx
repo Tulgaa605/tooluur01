@@ -720,6 +720,10 @@ export default function TariffsContent() {
           </div>
 
           <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+            <div className="px-6 py-3 bg-amber-50 border-b border-amber-100 text-sm text-amber-900">
+              <strong>Дулааны тариф:</strong> 5–9-р сард (5, 6, 7, 8, 9-р сар) дулааны төлбөр автоматаар{' '}
+              <strong>тооцогдохгүй</strong> (0 ₮). Бусад саруудад энэ хүснэгтийн үнээр бодогдоно.
+            </div>
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>

@@ -18,8 +18,10 @@ import {
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory } from '@/lib/heat-tariff-defaults'
 import {
-  HEAT_OFF_SEASON_MONEY,
-  isHeatOnlyZeroBillingMonth,
+  finalizeReadingMoneyForHeatRules,
+  isHeatDefaultOffSeason,
+  isHeatManuallyClosed,
+  isHeatOffSeasonMonth,
 } from '@/lib/heat-billing-season'
 import { AG_GRID_LOCALE_MN } from '@/lib/ag-grid-locale-mn'
 import {
@@ -169,7 +171,20 @@ function normalizeApiReadingRow(r: Record<string, unknown>): Reading {
     vat: toNum(raw.vat),
     total: toNum(raw.total),
     additionalFeesAmount: toNum(raw.additionalFeesAmount ?? raw.additional_fees_amount),
+    heatClosed: parseHeatClosedFromApi(raw),
   } as unknown as Reading
+}
+
+function parseHeatClosedFromApi(raw: Record<string, unknown>): boolean | null | undefined {
+  if (raw.heatClosed === true || raw.heat_closed === true) return true
+  if (raw.heatClosed === false || raw.heat_closed === false) return false
+  return null
+}
+
+function heatClosedForCalc(heatClosed?: boolean | null): boolean | null {
+  if (heatClosed === true) return true
+  if (heatClosed === false) return false
+  return null
 }
 
 function filterReadingGridColumnsByBilling(
@@ -443,6 +458,8 @@ interface Reading {
   _modalStartLocked?: boolean
   /** SMS амжилттай илгээгдсэн → энэ заалт түгжигдэнэ */
   smsSentAt?: string | Date | null
+  /** null=анхдагч, true=хаасан, false=гарын нээлт */
+  heatClosed?: boolean | null
 }
 
 type ModalDataBundleResponse = {
@@ -577,9 +594,12 @@ export default function ReadingsContent() {
       billingMode === 'WATER_HEAT'
         ? computeReadingMoneySplit(usage, heatUsage, orgCategory, billingMode, water, heat)
         : computeReadingMoney(usage, orgCategory, billingMode, water, heat)
-    const m = isHeatOnlyZeroBillingMonth(billingMode, reading.month)
-      ? HEAT_OFF_SEASON_MONEY
-      : mRaw
+    const m = finalizeReadingMoneyForHeatRules(
+      billingMode,
+      reading.month,
+      heatClosedForCalc(reading.heatClosed),
+      mRaw
+    )
     reading.baseClean = m.baseClean
     reading.baseDirty = m.baseDirty
     reading.cleanPerM3 = m.cleanPerM3
@@ -597,6 +617,13 @@ export default function ReadingsContent() {
 
   const [excelExportMenu, setExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const excelExportMenuRef = useRef<HTMLDivElement | null>(null)
+  const [heatActionMenu, setHeatActionMenu] = useState<{
+    x: number
+    y: number
+    reading: Reading
+  } | null>(null)
+  const heatActionMenuRef = useRef<HTMLDivElement | null>(null)
+  const [heatToggleBusy, setHeatToggleBusy] = useState(false)
   const [modalExcelExportMenu, setModalExcelExportMenu] = useState<{ x: number; y: number } | null>(null)
   const modalExcelExportMenuRef = useRef<HTMLDivElement | null>(null)
   const modalGridRef = useRef<AgGridReact>(null)
@@ -647,6 +674,18 @@ export default function ReadingsContent() {
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [excelExportMenu])
+
+  useEffect(() => {
+    if (!heatActionMenu) return
+    const onMouseDown = (e: MouseEvent) => {
+      const el = heatActionMenuRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setHeatActionMenu(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [heatActionMenu])
 
   useEffect(() => {
     if (!modalExcelExportMenu) return
@@ -984,6 +1023,7 @@ export default function ReadingsContent() {
       // Browser-ийн default context menu-ийг унтраа.
       params?.event?.preventDefault?.()
       params?.event?.stopPropagation?.()
+      setHeatActionMenu(null)
       setExcelExportMenu({ x: params?.event?.clientX ?? 0, y: params?.event?.clientY ?? 0 })
     },
     [setExcelExportMenu]
@@ -1051,9 +1091,12 @@ export default function ReadingsContent() {
           billingMode === 'WATER_HEAT'
             ? computeReadingMoneySplit(Number(reading.usage ?? 0), u, orgCategory, billingMode, water, heat)
             : computeReadingMoney(u, orgCategory, billingMode, water, heat)
-        const m = isHeatOnlyZeroBillingMonth(billingMode, reading.month)
-          ? HEAT_OFF_SEASON_MONEY
-          : mRaw
+        const m = finalizeReadingMoneyForHeatRules(
+          billingMode,
+          reading.month,
+          heatClosedForCalc(reading.heatClosed),
+          mRaw
+        )
         reading.baseClean = m.baseClean
         reading.baseDirty = m.baseDirty
         reading.cleanPerM3 = m.cleanPerM3
@@ -2000,6 +2043,78 @@ export default function ReadingsContent() {
     [filterYear, filterMonth]
   )
 
+  const toggleHeatBilling = useCallback(
+    async (row: Reading): Promise<boolean> => {
+      if (!row.id || !readingRowUsesHeat(row)) return false
+      if (row.organization?.name === 'Нийт дүн') return false
+      if (row.smsSentAt) {
+        setMessage({ type: 'error', text: 'SMS илгээгдсэн заалтын дулааны тохиргоог өөрчлөх боломжгүй' })
+        setTimeout(() => setMessage(null), 4000)
+        return false
+      }
+      if (showAddModal) return false
+
+      try {
+        const res = await fetchWithAuth('/api/readings/heat-toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ readingId: row.id }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Алдаа гарлаа')
+
+        const updated = data.reading
+          ? normalizeApiReadingRow(data.reading as Record<string, unknown>)
+          : { ...row, heatClosed: data.heatClosed === true ? true : data.heatClosed === false ? false : null }
+
+        startTransition(() => {
+          setReadings((prev) =>
+            prev.map((r) =>
+              r.id === row.id
+                ? {
+                    ...r,
+                    ...updated,
+                    organization: updated.organization ?? r.organization,
+                    meter: updated.meter ?? r.meter,
+                    heatClosed:
+                      data.heatClosed === true
+                        ? true
+                        : data.heatClosed === false
+                          ? false
+                          : null,
+                  }
+                : r
+            )
+          )
+        })
+
+        const label = data.heatClosed === true ? 'Дулаан хаагдлаа' : 'Дулаан нээгдлээ'
+        setMessage({ type: 'success', text: `${label} — ${row.organization?.name ?? ''}` })
+        setTimeout(() => setMessage(null), 2500)
+        return true
+      } catch (e) {
+        setMessage({
+          type: 'error',
+          text: e instanceof Error ? e.message : 'Дулаан солиход алдаа гарлаа',
+        })
+        setTimeout(() => setMessage(null), 4000)
+        return false
+      }
+    },
+    [showAddModal]
+  )
+
+  const runHeatToggleFromMenu = useCallback(async () => {
+    if (!heatActionMenu || heatToggleBusy) return
+    setHeatToggleBusy(true)
+    try {
+      const ok = await toggleHeatBilling(heatActionMenu.reading)
+      if (ok) setHeatActionMenu(null)
+    } finally {
+      setHeatToggleBusy(false)
+    }
+  }, [heatActionMenu, heatToggleBusy, toggleHeatBilling])
+
   const saveMeterAdditionalFees = useCallback(async () => {
     if (!additionalFeesModal) return
     setAdditionalFeesSaving(true)
@@ -2176,11 +2291,49 @@ export default function ReadingsContent() {
       width: 180,
       minWidth: 140,
       editable: false,
-      valueGetter: (params: any) => params.data?.organization?.name || '-',
-      cellClass: (params: any) => {
-        return ''
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d || d.organization?.name === 'Нийт дүн') return d?.organization?.name || '-'
+        const name = d.organization?.name || '-'
+        if (!readingRowUsesHeat(d)) return name
+        if (isHeatManuallyClosed(d.heatClosed)) return `${name} (дулаан хаасан)`
+        if (isHeatDefaultOffSeason(d.billingMode ?? d.meter?.billingMode, Number(d.month), d.heatClosed)) {
+          return `${name} (5–9 сар)`
+        }
+        return name
       },
-      onCellClicked: undefined,
+      cellClass: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d || d.organization?.name === 'Нийт дүн' || showAddModal) return ''
+        if (!readingRowUsesHeat(d)) return ''
+        if (isHeatManuallyClosed(d.heatClosed)) return 'text-amber-800 font-medium cursor-pointer hover:underline'
+        if (isHeatDefaultOffSeason(d.billingMode ?? d.meter?.billingMode, Number(d.month), d.heatClosed)) {
+          return 'text-gray-500 cursor-pointer hover:underline'
+        }
+        return 'text-primary-700 cursor-pointer hover:underline'
+      },
+      tooltipValueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d || !readingRowUsesHeat(d) || showAddModal) return undefined
+        if (d.smsSentAt) return 'SMS илгээгдсэн — дулаан солих боломжгүй'
+        return 'Дарж дулаан хаах/нээх цэс нээх'
+      },
+      onCellClicked: (params: any) => {
+        if (showAddModal || !params.data) return
+        const d = params.data as Reading
+        if (!readingRowUsesHeat(d) || d.organization?.name === 'Нийт дүн') return
+
+        const ev = params.event as MouseEvent | undefined
+        let x = ev?.clientX ?? 0
+        let y = ev?.clientY ?? 0
+        if (ev?.target instanceof HTMLElement) {
+          const rect = ev.target.getBoundingClientRect()
+          x = rect.left
+          y = rect.bottom + 4
+        }
+        setExcelExportMenu(null)
+        setHeatActionMenu({ x, y, reading: d })
+      },
     },
     {
       headerName: 'Огноо',
@@ -2491,6 +2644,7 @@ export default function ReadingsContent() {
     getDisplaySubtotalVatTotal,
     heatQtyForDisplay,
     openMeterAdditionalFees,
+    toggleHeatBilling,
     showCalculated,
   ])
 
@@ -3068,6 +3222,58 @@ export default function ReadingsContent() {
                     : undefined
                 }
               />
+              {heatActionMenu && (
+                <div
+                  ref={heatActionMenuRef}
+                  style={{
+                    position: 'fixed',
+                    top: heatActionMenu.y,
+                    left: heatActionMenu.x,
+                    zIndex: 99999,
+                    background: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+                    padding: 8,
+                    minWidth: 200,
+                  }}
+                >
+                  <p className="px-2 py-1 text-xs text-gray-500 truncate max-w-[240px]">
+                    {heatActionMenu.reading.organization?.name ?? 'Хэрэглэгч'}
+                  </p>
+                  {heatActionMenu.reading.smsSentAt ? (
+                    <p className="px-2 py-2 text-sm text-gray-500">SMS илгээгдсэн — өөрчлөх боломжгүй</p>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={heatToggleBusy}
+                      onClick={() => void runHeatToggleFromMenu()}
+                      className="w-full px-3 py-2 text-left text-sm font-medium text-gray-900 hover:bg-amber-50 rounded-md disabled:opacity-50"
+                    >
+                      {heatToggleBusy
+                        ? 'Хадгалж байна...'
+                        : isHeatManuallyClosed(heatActionMenu.reading.heatClosed) ||
+                            isHeatDefaultOffSeason(
+                              heatActionMenu.reading.billingMode ??
+                                heatActionMenu.reading.meter?.billingMode,
+                              Number(heatActionMenu.reading.month),
+                              heatActionMenu.reading.heatClosed
+                            )
+                          ? 'Дулаан нээх'
+                          : 'Дулаан хаах'}
+                    </button>
+                  )}
+                  {isHeatDefaultOffSeason(
+                    heatActionMenu.reading.billingMode ?? heatActionMenu.reading.meter?.billingMode,
+                    Number(heatActionMenu.reading.month),
+                    heatActionMenu.reading.heatClosed
+                  ) && (
+                      <p className="px-2 pt-1 text-xs text-gray-400">
+                        5–9-р сард дулаан аль хэдийн 0 ₮
+                      </p>
+                    )}
+                </div>
+              )}
               {excelExportMenu && (
                 <div
                   ref={excelExportMenuRef}

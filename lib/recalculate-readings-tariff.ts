@@ -13,7 +13,8 @@ import {
 } from '@/lib/meter-reading-calc'
 import { TariffPeriodCache } from '@/lib/tariff-period-cache'
 import {
-  HEAT_OFF_SEASON_MONEY,
+  finalizeReadingMoneyForHeatRules,
+  isHeatBillingSuppressed,
   isHeatOnlyZeroBillingMonth,
 } from '@/lib/heat-billing-season'
 
@@ -28,13 +29,22 @@ export function readingNeedsMoneyRecalc(r: {
   subtotal?: unknown
   startValue?: unknown
   endValue?: unknown
+  heatClosed?: boolean | null
+  heatAmount?: unknown
 }): boolean {
   const month = Number(r.month ?? 0)
   const billingMode = r.billingMode ?? r.meter?.billingMode
-  if (isHeatOnlyZeroBillingMonth(billingMode, month)) {
+  const heatClosed = r.heatClosed === true ? true : r.heatClosed === false ? false : null
+  const heatAmt = Number(r.heatAmount ?? 0) || 0
+
+  if (isHeatBillingSuppressed(billingMode, month, heatClosed)) {
+    if (heatAmt > 0.005) return true
     const total = Number(r.total ?? 0) || 0
     const subtotal = Number(r.subtotal ?? 0) || 0
-    return total > 0.005 || subtotal > 0.005
+    if (isHeatOnlyZeroBillingMonth(billingMode, month, heatClosed)) {
+      return total > 0.005 || subtotal > 0.005
+    }
+    return false
   }
 
   const water = waterUsageFromReading(r)
@@ -79,6 +89,7 @@ export type ReadingForTariffRecalc = {
   endValue?: number
   usage?: number
   heatUsage?: number
+  heatClosed?: boolean | null
   meter?: {
     billingMode?: string | null
     pipeDiameterMm?: number | null
@@ -129,34 +140,30 @@ export function recalculateReadingRowMoney<T extends ReadingForTariffRecalc>(
   const waterUsage = waterUsageFromReading(r)
   const heatUsage = Number(r.heatUsage ?? 0) || 0
   const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
-
-  if (isHeatOnlyZeroBillingMonth(billingMode, r.month)) {
-    return {
-      ...r,
-      ...HEAT_OFF_SEASON_MONEY,
-    }
-  }
+  const heatClosed = r.heatClosed === true ? true : r.heatClosed === false ? false : null
 
   const money =
     billingMode === 'WATER_HEAT'
       ? computeReadingMoneySplit(waterUsage, heatUsage, orgCategory, billingMode, water, heat)
       : computeReadingMoney(usage, orgCategory, billingMode, water, heat)
 
+  const finalized = finalizeReadingMoneyForHeatRules(billingMode, r.month, heatClosed, money)
+
   return {
     ...r,
-    baseClean: money.baseClean,
-    baseDirty: money.baseDirty,
-    cleanPerM3: money.cleanPerM3,
-    dirtyPerM3: money.dirtyPerM3,
-    heatBase: money.heatBase,
-    heatPerM3: money.heatPerM3,
-    heatPerM2: money.heatPerM2,
-    cleanAmount: money.cleanAmount,
-    dirtyAmount: money.dirtyAmount,
-    heatAmount: money.heatAmount,
-    subtotal: money.subtotal,
-    vat: money.vat,
-    total: money.total,
+    baseClean: finalized.baseClean,
+    baseDirty: finalized.baseDirty,
+    cleanPerM3: finalized.cleanPerM3,
+    dirtyPerM3: finalized.dirtyPerM3,
+    heatBase: finalized.heatBase,
+    heatPerM3: finalized.heatPerM3,
+    heatPerM2: finalized.heatPerM2,
+    cleanAmount: finalized.cleanAmount,
+    dirtyAmount: finalized.dirtyAmount,
+    heatAmount: finalized.heatAmount,
+    subtotal: finalized.subtotal,
+    vat: finalized.vat,
+    total: finalized.total,
   }
 }
 

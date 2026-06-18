@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
+import { assertUserPhoneAvailable, normalizeUserPhone } from '@/lib/user-phone'
 
 export async function GET(request: NextRequest) {
   try {
@@ -77,10 +78,20 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       name: data.name.trim(),
       code: data.code?.trim() || null,
-      phone: data.phone?.trim() || null,
+    }
+
+    if (data.phone != null && String(data.phone).trim() !== '') {
+      const normalizedPhone = normalizeUserPhone(String(data.phone))
+      if (!normalizedPhone) {
+        return NextResponse.json({ error: 'Утасны дугаар буруу байна' }, { status: 400 })
+      }
+      await assertUserPhoneAvailable(normalizedPhone, data.id)
+      updateData.phone = normalizedPhone
+    } else if (data.phone === '' || data.phone === null) {
+      updateData.phone = null
     }
     if (data.organizationId != null && String(data.organizationId).trim() !== '') {
       const oid = String(data.organizationId).trim()
