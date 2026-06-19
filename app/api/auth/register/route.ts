@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { hashPassword, generateToken } from '@/lib/auth'
 import { Role } from '@/lib/role'
 import { applyCategoryTariffsToOrganization } from '@/lib/tariff'
+import { seedAccountantDefaults } from '@/lib/seed-accountant-defaults'
 import {
   normalizeRegisterPhone,
   verifyRegisterPhoneToken,
@@ -106,12 +107,15 @@ export async function POST(request: NextRequest) {
           updatedByUserId: user.id,
         },
       })
+      await seedAccountantDefaults(org.id, user.id)
       await applyCategoryTariffsToOrganization(org.id)
       await prisma.user.update({
         where: { id: user.id },
         data: { organizationId: org.id },
       })
       orgId = org.id
+    } else {
+      await seedAccountantDefaults(orgId, user.id)
     }
 
     const userOut = await prisma.user.findUnique({

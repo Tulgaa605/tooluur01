@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { findCategoryTariffForCustomer } from '@/lib/category-tariff-scope'
+import { findPipeFeeForOrganization } from '@/lib/pipe-fee-scope'
 
 type CategoryTariffDoc = {
   category?: string
@@ -20,13 +21,16 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
   })
   if (!org) return 0
 
-  const pipeFees = await prisma.pipeFee.findMany({ orderBy: { diameterMm: 'asc' } })
-  const getBaseFromPipe = (connectionNumber: string | null) => {
-    if (!connectionNumber) return null
-    const diam = parseInt(String(connectionNumber).trim(), 10)
-    if (Number.isNaN(diam)) return null
-    const pipe = pipeFees.find((p) => p.diameterMm === diam)
-    return pipe ? { baseCleanFee: pipe.baseCleanFee, baseDirtyFee: pipe.baseDirtyFee } : null
+  const pipeFees = org.connectionNumber
+    ? await (async () => {
+        const diam = parseInt(String(org.connectionNumber).trim(), 10)
+        if (Number.isNaN(diam)) return null
+        return findPipeFeeForOrganization(organizationId, diam)
+      })()
+    : null
+  const getBaseFromPipe = () => {
+    if (!pipeFees) return null
+    return { baseCleanFee: pipeFees.baseCleanFee, baseDirtyFee: pipeFees.baseDirtyFee }
   }
 
   const catRow = await findCategoryTariffForCustomer(organizationId, org.category)
@@ -93,7 +97,7 @@ export async function applyCategoryTariffsToOrganization(organizationId: string)
     }
   }
 
-  const pipeBase = getBaseFromPipe(org.connectionNumber)
+  const pipeBase = getBaseFromPipe()
   const baseCleanFee = pipeBase ? pipeBase.baseCleanFee : (d.baseCleanFee ?? 0)
   const baseDirtyFee = pipeBase ? pipeBase.baseDirtyFee : (d.baseDirtyFee ?? 0)
   const cleanPerM3 = d.cleanPerM3 ?? 0

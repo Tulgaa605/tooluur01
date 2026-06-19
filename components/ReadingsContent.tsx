@@ -1455,6 +1455,14 @@ export default function ReadingsContent() {
       heatBaseFee = tariffForPeriod.heatBaseFee ?? 0
       heatPerM3Rate = tariffForPeriod.heatPerM3 ?? 0
       heatPerM2Rate = tariffForPeriod.heatPerM2 ?? 0
+      const billingCat = effectiveBillingCategory(meter?.billingCategory, org.category)
+      const catFallback = billingCat ? latestCategoryTariffByCategory.get(billingCat) : undefined
+      if (cleanPerM3 <= 0 && (catFallback?.cleanPerM3 ?? 0) > 0) {
+        cleanPerM3 = catFallback!.cleanPerM3!
+      }
+      if (dirtyPerM3 <= 0 && (catFallback?.dirtyPerM3 ?? 0) > 0) {
+        dirtyPerM3 = catFallback!.dirtyPerM3!
+      }
     } else if (org && !pipeFee) {
       baseClean = org.baseCleanFee ?? 0
       baseDirty = org.baseDirtyFee ?? 0

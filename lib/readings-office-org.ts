@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
+import { seedAccountantDefaults } from '@/lib/seed-accountant-defaults'
 
 async function resolveExistingOrganizationId(orgId: string | null | undefined): Promise<string | null> {
   if (!orgId || !/^[a-f\d]{24}$/i.test(orgId)) return null
@@ -44,5 +45,6 @@ export async function ensureOfficeOrganizationId(user: {
     where: { id: user.userId },
     data: { organizationId: org.id },
   })
+  await seedAccountantDefaults(org.id, user.userId)
   return org.id
 }

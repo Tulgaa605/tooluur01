@@ -14,23 +14,32 @@ import {
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc-core'
 import { heatDefaultsForCategory, orgMonthlyHeatTariffIsEmpty } from '@/lib/heat-tariff-defaults'
+import { waterDefaultsForCategory } from '@/lib/water-tariff-defaults'
 import {
   findCategoryTariffForCustomer,
   type CategoryTariffLookup,
 } from '@/lib/category-tariff-scope'
+import { findPipeFeeForOrganization } from '@/lib/pipe-fee-scope'
 
 /** Байгууллагын сарын тариф дээр ₮/м³ 0 байвал төрлийн тарифаас нөхнө (зөрүү × тариф). */
 function applyCategoryPerM3Fallback(
   rates: WaterTariffRates,
-  catRow: CategoryTariffLookup | null
+  catRow: CategoryTariffLookup | null,
+  category?: string
 ): WaterTariffRates {
-  if (!catRow) return rates
   let cleanPerM3 = Number(rates.cleanPerM3) || 0
   let dirtyPerM3 = Number(rates.dirtyPerM3) || 0
-  const catClean = Number(catRow.cleanPerM3) || 0
-  const catDirty = Number(catRow.dirtyPerM3) || 0
-  if (cleanPerM3 <= 0 && catClean > 0) cleanPerM3 = catClean
-  if (dirtyPerM3 <= 0 && catDirty > 0) dirtyPerM3 = catDirty
+  if (catRow) {
+    const catClean = Number(catRow.cleanPerM3) || 0
+    const catDirty = Number(catRow.dirtyPerM3) || 0
+    if (cleanPerM3 <= 0 && catClean > 0) cleanPerM3 = catClean
+    if (dirtyPerM3 <= 0 && catDirty > 0) dirtyPerM3 = catDirty
+  }
+  if (category) {
+    const defs = waterDefaultsForCategory(category)
+    if (cleanPerM3 <= 0 && defs.cleanPerM3 > 0) cleanPerM3 = defs.cleanPerM3
+    if (dirtyPerM3 <= 0 && defs.dirtyPerM3 > 0) dirtyPerM3 = defs.dirtyPerM3
+  }
   return { ...rates, cleanPerM3, dirtyPerM3 }
 }
 
@@ -81,10 +90,7 @@ export async function getWaterTariffRatesForPeriod(
     pipeDiam = parseInt(String(org.connectionNumber).trim(), 10)
   }
   if (!Number.isNaN(pipeDiam)) {
-    const pipeFee = await prisma.pipeFee.findUnique({
-      where: { diameterMm: pipeDiam },
-      select: { baseCleanFee: true, baseDirtyFee: true },
-    })
+    const pipeFee = await findPipeFeeForOrganization(organizationId, pipeDiam)
     if (pipeFee) {
       baseClean = pipeFee.baseCleanFee ?? 0
       baseDirty = pipeFee.baseDirtyFee ?? 0
@@ -105,7 +111,8 @@ export async function getWaterTariffRatesForPeriod(
       dirtyPerM3 = orgTariff.dirtyPerM3 ?? 0
       return applyCategoryPerM3Fallback(
         { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
-        catRow
+        catRow,
+        categoryForTariffs
       )
     }
   }
@@ -119,7 +126,8 @@ export async function getWaterTariffRatesForPeriod(
     dirtyPerM3 = catRow.dirtyPerM3 ?? 0
     return applyCategoryPerM3Fallback(
       { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
-      catRow
+      catRow,
+      categoryForTariffs
     )
   }
 
@@ -129,7 +137,8 @@ export async function getWaterTariffRatesForPeriod(
   }
   return applyCategoryPerM3Fallback(
     { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
-    catRow
+    catRow,
+    categoryForTariffs
   )
 }
 

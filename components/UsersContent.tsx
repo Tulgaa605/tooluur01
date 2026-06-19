@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownTrayIcon, DocumentArrowUpIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { ArrowDownTrayIcon, DocumentArrowUpIcon, MagnifyingGlassIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 import ConfirmModal from './ConfirmModal'
 import { fetchWithAuth } from '@/lib/api'
 import {
@@ -57,6 +57,24 @@ const nameCollator = new Intl.Collator(['mn', 'ru', 'en'], {
   ignorePunctuation: true,
 })
 
+function organizationMatchesSearch(org: Organization, q: string): boolean {
+  if (!q) return true
+  const haystack = [
+    org.ovog,
+    org.name,
+    householdGivenName(org.name, org.ovog),
+    org.code,
+    org.register,
+    org.address,
+    org.phone,
+    org.email,
+    org.year != null ? String(org.year) : '',
+  ]
+    .map((v) => String(v ?? '').toLowerCase())
+    .join(' ')
+  return haystack.includes(q)
+}
+
 export default function UsersContent() {
   const [activeTab, setActiveTab] = useState<'users' | 'organizations'>('users')
   
@@ -99,6 +117,7 @@ export default function UsersContent() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'org' | 'household'; id: string } | null>(null)
   const [importingExcel, setImportingExcel] = useState(false)
   const [importingOrgExcel, setImportingOrgExcel] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const excelInputRef = useRef<HTMLInputElement>(null)
   const orgExcelInputRef = useRef<HTMLInputElement>(null)
 
@@ -496,20 +515,22 @@ export default function UsersContent() {
   }
 
   const householdsSorted = useMemo(() => {
-    const arr = [...households]
+    const q = searchQuery.trim().toLowerCase()
+    const arr = households.filter((h) => organizationMatchesSearch(h, q))
     arr.sort((a, b) => {
       const aName = householdGivenName(a.name, a.ovog)
       const bName = householdGivenName(b.name, b.ovog)
       return nameCollator.compare(aName, bName)
     })
     return arr
-  }, [households])
+  }, [households, searchQuery])
 
   const orgsSorted = useMemo(() => {
-    const arr = [...orgs]
+    const q = searchQuery.trim().toLowerCase()
+    const arr = orgs.filter((o) => organizationMatchesSearch(o, q))
     arr.sort((a, b) => nameCollator.compare(String(a.name ?? ''), String(b.name ?? '')))
     return arr
-  }, [orgs])
+  }, [orgs, searchQuery])
 
   return (
     <div className="px-4 sm:px-0">
@@ -606,6 +627,22 @@ export default function UsersContent() {
             <p className="text-gray-500">Ачааллаж байна...</p>
           ) : (
             <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50/80">
+                <div className="relative max-w-lg">
+                  <MagnifyingGlassIcon
+                    className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400"
+                    aria-hidden
+                  />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Овог, нэр, код, регистр, хаяг, утас, имэйлээр хайх…"
+                    className="w-full rounded-md border border-gray-300 py-2 pl-10 pr-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    aria-label="Хайлт"
+                  />
+                </div>
+              </div>
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
@@ -655,6 +692,9 @@ export default function UsersContent() {
               </table>
               {households.length === 0 && (
                 <div className="text-center py-12 text-gray-500">Бүртгэгдсэн хувь хүн байхгүй. Шинэ хэрэглэгч нэмнэ үү.</div>
+              )}
+              {households.length > 0 && householdsSorted.length === 0 && (
+                <div className="text-center py-12 text-gray-500">Хайлтын үр дүн олдсонгүй</div>
               )}
             </div>
           )}
@@ -975,6 +1015,22 @@ export default function UsersContent() {
             <div className="text-gray-600">Ачааллаж байна...</div>
           ) : (
             <div className="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50/80">
+                <div className="relative max-w-lg">
+                  <MagnifyingGlassIcon
+                    className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400"
+                    aria-hidden
+                  />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Нэр, код, регистр, хаяг, утас, имэйлээр хайх…"
+                    className="w-full rounded-md border border-gray-300 py-2 pl-10 pr-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    aria-label="Хайлт"
+                  />
+                </div>
+              </div>
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
@@ -1052,6 +1108,9 @@ export default function UsersContent() {
                 <div className="text-center py-12 text-gray-500">
                   Байгууллага олдсонгүй
                 </div>
+              )}
+              {orgs.length > 0 && orgsSorted.length === 0 && (
+                <div className="text-center py-12 text-gray-500">Хайлтын үр дүн олдсонгүй</div>
               )}
             </div>
           )}

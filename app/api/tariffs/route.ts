@@ -5,7 +5,9 @@ import { Role } from '@/lib/role'
 import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 import { getAccountantOwnerOrganizationId } from '@/lib/category-tariff-scope'
 import { ensureHeatCategoryTariffsInDb } from '@/lib/ensure-heat-category-tariffs'
+import { ensureDefaultOfficePipeFeesInDb } from '@/lib/seed-accountant-defaults'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
+import { listOfficePipeFees } from '@/lib/pipe-fee-scope'
 
 function parseNumberOrDefault(value: any, defaultValue: number) {
   if (typeof value === 'number') return value
@@ -170,8 +172,9 @@ export async function GET(request: NextRequest) {
     })
     if (!ownerOrganizationId) return NextResponse.json(tariffs)
 
-    // Төсөвт / ААН / Айл өрхийн дулааны үнэ DB-д 0 байвал албан жагсаалтаар автоматаар бөглөнө.
+    // Төрлийн тариф + оролтын шугамын суурь хураамжийн анхдагч утгууд
     await ensureHeatCategoryTariffsInDb(ownerOrganizationId)
+    await ensureDefaultOfficePipeFeesInDb(ownerOrganizationId, user.userId)
 
     // createdAt/updatedAt нь string байж болзошгүй тул DateTime талбаруудыг буцаахгүй.
     // Эрэмбэлэх шаардлагатай бол өгөгдлөө Compass/mongosh дээр Date болгоод дараа нь orderBy-г буцааж нэмж болно.
@@ -272,12 +275,27 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const pipeFees = await prisma.pipeFee.findMany({ orderBy: { diameterMm: 'asc' } })
+    const officeOrgId = await ensureOfficeOrganizationId(user)
+    const ownerOrganizationId = await getAccountantOwnerOrganizationId({
+      ...user,
+      organizationId: officeOrgId ?? user.organizationId,
+    })
+    const officePipeByDiam = new Map<number, { baseCleanFee: number; baseDirtyFee: number }>()
+    if (ownerOrganizationId) {
+      await ensureDefaultOfficePipeFeesInDb(ownerOrganizationId, user.userId)
+      const officePipes = await listOfficePipeFees(ownerOrganizationId)
+      for (const p of officePipes) {
+        officePipeByDiam.set(p.diameterMm, {
+          baseCleanFee: p.baseCleanFee,
+          baseDirtyFee: p.baseDirtyFee,
+        })
+      }
+    }
     const getBaseFromPipe = (connectionNumber: string | null) => {
       if (!connectionNumber) return null
       const diam = parseInt(String(connectionNumber).trim(), 10)
       if (Number.isNaN(diam)) return null
-      const pipe = pipeFees.find((p) => p.diameterMm === diam)
+      const pipe = officePipeByDiam.get(diam)
       return pipe ? { baseCleanFee: pipe.baseCleanFee, baseDirtyFee: pipe.baseDirtyFee } : null
     }
 
@@ -353,11 +371,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const officeOrgId = await ensureOfficeOrganizationId(user)
-    const ownerOrganizationId = await getAccountantOwnerOrganizationId({
-      ...user,
-      organizationId: officeOrgId ?? user.organizationId,
-    })
     if (!ownerOrganizationId) {
       return NextResponse.json(
         { error: 'Албан байгууллага тохируулаагүй байна. Дахин нэвтэрнэ үү.' },

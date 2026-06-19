@@ -1,5 +1,6 @@
 import type { TokenPayload } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { Role } from '@/lib/role'
 
 /** Нягтлан бүрийн албан байгууллагын ID (төрлийн тарифын эзэн). */
 export async function getAccountantOwnerOrganizationId(
@@ -13,15 +14,48 @@ export async function getAccountantOwnerOrganizationId(
   return dbUser?.organizationId ?? null
 }
 
-/** Харилцагчийн заалт/тариф тооцоололд аль нягтлангийн төрлийн тариф ашиглах вэ. */
-export async function getCategoryTariffOwnerOrgIdForCustomer(
+/**
+ * Харилцагчийн заалт/тариф тооцоололд аль нягтлангийн төрлийн тариф ашиглах вэ.
+ * managedByOrganizationId → үүсгэсэн нягтлан/захирал → өөрөө албан байгууллага.
+ */
+export async function resolveCategoryTariffOwnerOrganizationId(
   organizationId: string
 ): Promise<string | null> {
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { managedByOrganizationId: true },
+    select: { managedByOrganizationId: true, createdByUserId: true },
   })
-  return org?.managedByOrganizationId ?? null
+  if (!org) return null
+  if (org.managedByOrganizationId) return org.managedByOrganizationId
+
+  if (org.createdByUserId) {
+    const creator = await prisma.user.findUnique({
+      where: { id: org.createdByUserId },
+      select: { organizationId: true, role: true },
+    })
+    if (
+      creator?.organizationId &&
+      (creator.role === Role.ACCOUNTANT || creator.role === Role.MANAGER)
+    ) {
+      return creator.organizationId
+    }
+  }
+
+  const staff = await prisma.user.findFirst({
+    where: {
+      organizationId,
+      role: { in: [Role.ACCOUNTANT, Role.MANAGER] },
+    },
+    select: { organizationId: true },
+  })
+  return staff?.organizationId ?? null
+}
+
+/** @deprecated resolveCategoryTariffOwnerOrganizationId ашиглана */
+export async function getCategoryTariffOwnerOrgIdForCustomer(
+  organizationId: string
+): Promise<string | null> {
+  return resolveCategoryTariffOwnerOrganizationId(organizationId)
 }
 
 export type CategoryTariffLookup = {
@@ -38,7 +72,7 @@ export async function findCategoryTariffForCustomer(
   organizationId: string,
   category: string
 ): Promise<CategoryTariffLookup | null> {
-  const ownerOrganizationId = await getCategoryTariffOwnerOrgIdForCustomer(organizationId)
+  const ownerOrganizationId = await resolveCategoryTariffOwnerOrganizationId(organizationId)
   if (!ownerOrganizationId) return null
   return prisma.categoryTariff.findUnique({
     where: {

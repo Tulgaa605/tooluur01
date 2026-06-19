@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { heatDefaultsForCategory, orgMonthlyHeatTariffIsEmpty } from '@/lib/heat-tariff-defaults'
+import { waterDefaultsForCategory } from '@/lib/water-tariff-defaults'
 import {
   effectiveBillingCategory,
   type HeatTariffRates,
@@ -14,6 +15,7 @@ type OrgRow = {
   baseCleanFee: number | null
   baseDirtyFee: number | null
   managedByOrganizationId: string | null
+  createdByUserId: string | null
 }
 
 type OrgTariffRow = {
@@ -29,15 +31,22 @@ type OrgTariffRow = {
 
 function applyCategoryPerM3Fallback(
   rates: WaterTariffRates,
-  catRow: CategoryTariffLookup | null
+  catRow: CategoryTariffLookup | null,
+  category?: string
 ): WaterTariffRates {
-  if (!catRow) return rates
   let cleanPerM3 = Number(rates.cleanPerM3) || 0
   let dirtyPerM3 = Number(rates.dirtyPerM3) || 0
-  const catClean = Number(catRow.cleanPerM3) || 0
-  const catDirty = Number(catRow.dirtyPerM3) || 0
-  if (cleanPerM3 <= 0 && catClean > 0) cleanPerM3 = catClean
-  if (dirtyPerM3 <= 0 && catDirty > 0) dirtyPerM3 = catDirty
+  if (catRow) {
+    const catClean = Number(catRow.cleanPerM3) || 0
+    const catDirty = Number(catRow.dirtyPerM3) || 0
+    if (cleanPerM3 <= 0 && catClean > 0) cleanPerM3 = catClean
+    if (dirtyPerM3 <= 0 && catDirty > 0) dirtyPerM3 = catDirty
+  }
+  if (category) {
+    const defs = waterDefaultsForCategory(category)
+    if (cleanPerM3 <= 0 && defs.cleanPerM3 > 0) cleanPerM3 = defs.cleanPerM3
+    if (dirtyPerM3 <= 0 && defs.dirtyPerM3 > 0) dirtyPerM3 = defs.dirtyPerM3
+  }
   return { ...rates, cleanPerM3, dirtyPerM3 }
 }
 
@@ -67,7 +76,12 @@ export class TariffPeriodCache {
   private readonly orgById = new Map<string, OrgRow>()
   private readonly orgTariffByOrgId = new Map<string, OrgTariffRow>()
   private readonly categoryByOwnerCat = new Map<string, CategoryTariffLookup>()
-  private readonly pipeByDiam = new Map<number, { baseCleanFee: number; baseDirtyFee: number }>()
+  private readonly tariffOwnerByOrgId = new Map<string, string>()
+  private readonly pipeOwnerByOrgId = new Map<string, string>()
+  private readonly pipeByOwnerDiam = new Map<
+    string,
+    { baseCleanFee: number; baseDirtyFee: number }
+  >()
 
   private constructor() {}
 
@@ -80,7 +94,7 @@ export class TariffPeriodCache {
     const orgIds = [...new Set(organizationIds.filter(Boolean))]
     if (orgIds.length === 0) return cache
 
-    const [orgs, orgTariffs, pipeFees] = await Promise.all([
+    const [orgs, orgTariffs, accountants] = await Promise.all([
       prisma.organization.findMany({
         where: { id: { in: orgIds } },
         select: {
@@ -90,6 +104,7 @@ export class TariffPeriodCache {
           baseCleanFee: true,
           baseDirtyFee: true,
           managedByOrganizationId: true,
+          createdByUserId: true,
         },
       }),
       prisma.organizationTariff.findMany({
@@ -105,12 +120,50 @@ export class TariffPeriodCache {
           heatPerM2: true,
         },
       }),
-      prisma.pipeFee.findMany({
-        select: { diameterMm: true, baseCleanFee: true, baseDirtyFee: true },
+      prisma.user.findMany({
+        where: { organizationId: { in: orgIds }, role: 'ACCOUNTANT' },
+        select: { organizationId: true },
       }),
     ])
 
-    for (const o of orgs) cache.orgById.set(o.id, o)
+    const creatorIds = [
+      ...new Set(orgs.map((o) => o.createdByUserId).filter((id): id is string => !!id)),
+    ]
+    const creators =
+      creatorIds.length > 0
+        ? await prisma.user.findMany({
+            where: { id: { in: creatorIds } },
+            select: { id: true, organizationId: true, role: true },
+          })
+        : []
+    const creatorOfficeByUserId = new Map<string, string>()
+    for (const c of creators) {
+      if (
+        c.organizationId &&
+        (c.role === 'ACCOUNTANT' || c.role === 'MANAGER')
+      ) {
+        creatorOfficeByUserId.set(c.id, c.organizationId)
+      }
+    }
+
+    const accountantOfficeByOrgId = new Map(
+      accountants
+        .filter((a) => a.organizationId)
+        .map((a) => [a.organizationId as string, a.organizationId as string])
+    )
+
+    for (const o of orgs) {
+      cache.orgById.set(o.id, o)
+      const tariffOwner =
+        o.managedByOrganizationId ??
+        (o.createdByUserId ? creatorOfficeByUserId.get(o.createdByUserId) : undefined) ??
+        accountantOfficeByOrgId.get(o.id) ??
+        null
+      if (tariffOwner) cache.tariffOwnerByOrgId.set(o.id, tariffOwner)
+      const pipeOwner = tariffOwner
+      if (pipeOwner) cache.pipeOwnerByOrgId.set(o.id, pipeOwner)
+    }
+
     for (const t of orgTariffs) {
       cache.orgTariffByOrgId.set(t.organizationId, {
         organizationId: t.organizationId,
@@ -123,18 +176,27 @@ export class TariffPeriodCache {
         heatPerM2: t.heatPerM2 ?? 0,
       })
     }
-    for (const p of pipeFees) {
-      cache.pipeByDiam.set(p.diameterMm, {
-        baseCleanFee: p.baseCleanFee ?? 0,
-        baseDirtyFee: p.baseDirtyFee ?? 0,
+
+    const pipeOwnerIds = [...new Set(cache.pipeOwnerByOrgId.values())]
+    if (pipeOwnerIds.length > 0) {
+      const pipeFees = await prisma.officePipeFee.findMany({
+        where: { officeOrganizationId: { in: pipeOwnerIds } },
+        select: {
+          officeOrganizationId: true,
+          diameterMm: true,
+          baseCleanFee: true,
+          baseDirtyFee: true,
+        },
       })
+      for (const p of pipeFees) {
+        cache.pipeByOwnerDiam.set(`${p.officeOrganizationId}|${p.diameterMm}`, {
+          baseCleanFee: p.baseCleanFee ?? 0,
+          baseDirtyFee: p.baseDirtyFee ?? 0,
+        })
+      }
     }
 
-    const ownerIds = [
-      ...new Set(
-        orgs.map((o) => o.managedByOrganizationId).filter((id): id is string => !!id)
-      ),
-    ]
+    const ownerIds = [...new Set(cache.tariffOwnerByOrgId.values())]
     if (ownerIds.length > 0) {
       const catRows = await prisma.categoryTariff.findMany({
         where: { ownerOrganizationId: { in: ownerIds } },
@@ -163,9 +225,10 @@ export class TariffPeriodCache {
     billingCategory?: string | null
   ): CategoryTariffLookup | null {
     const org = this.orgById.get(organizationId)
-    if (!org?.managedByOrganizationId) return null
+    const ownerId = this.tariffOwnerByOrgId.get(organizationId)
+    if (!org || !ownerId) return null
     const cat = effectiveBillingCategory(billingCategory, org.category)
-    return this.categoryByOwnerCat.get(`${org.managedByOrganizationId}|${cat}`) ?? null
+    return this.categoryByOwnerCat.get(`${ownerId}|${cat}`) ?? null
   }
 
   getWaterTariffRates(
@@ -175,6 +238,7 @@ export class TariffPeriodCache {
     const org = this.orgById.get(organizationId)
     if (!org) return { baseClean: 0, baseDirty: 0, cleanPerM3: 0, dirtyPerM3: 0 }
 
+    const categoryForTariffs = effectiveBillingCategory(opts?.billingCategory, org.category)
     const catRow = this.categoryForOrg(organizationId, opts?.billingCategory)
     const meterCategoryOverride =
       opts?.billingCategory != null && String(opts.billingCategory).trim().length > 0
@@ -186,7 +250,10 @@ export class TariffPeriodCache {
 
     const pipeDiam = resolvePipeDiameter(org, opts?.pipeDiameterMm)
     if (!Number.isNaN(pipeDiam)) {
-      const pipeFee = this.pipeByDiam.get(pipeDiam)
+      const pipeOwner = this.pipeOwnerByOrgId.get(organizationId)
+      const pipeFee = pipeOwner
+        ? this.pipeByOwnerDiam.get(`${pipeOwner}|${pipeDiam}`)
+        : undefined
       if (pipeFee) {
         baseClean = pipeFee.baseCleanFee
         baseDirty = pipeFee.baseDirtyFee
@@ -204,7 +271,8 @@ export class TariffPeriodCache {
         dirtyPerM3 = orgTariff.dirtyPerM3
         return applyCategoryPerM3Fallback(
           { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
-          catRow
+          catRow,
+          categoryForTariffs
         )
       }
     }
@@ -218,7 +286,8 @@ export class TariffPeriodCache {
       dirtyPerM3 = catRow.dirtyPerM3 ?? 0
       return applyCategoryPerM3Fallback(
         { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
-        catRow
+        catRow,
+        categoryForTariffs
       )
     }
 
@@ -228,7 +297,8 @@ export class TariffPeriodCache {
     }
     return applyCategoryPerM3Fallback(
       { baseClean, baseDirty, cleanPerM3, dirtyPerM3 },
-      catRow
+      catRow,
+      categoryForTariffs
     )
   }
 
