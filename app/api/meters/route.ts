@@ -676,8 +676,10 @@ export async function DELETE(request: NextRequest) {
 
     const meter = await prisma.meter.findUnique({
       where: { id },
-      include: {
-        readings: { take: 1 },
+      select: {
+        id: true,
+        organizationId: true,
+        createdByUserId: true,
       },
     })
 
@@ -693,16 +695,40 @@ export async function DELETE(request: NextRequest) {
     if (!scoped.includes(meter.organizationId) && !createdByMe) {
       return NextResponse.json({ error: 'Энэ тоолуурыг устгах эрхгүй' }, { status: 403 })
     }
-    if (meter.readings.length > 0) {
+
+    const readings = await prisma.meterReading.findMany({
+      where: { meterId: id },
+      select: {
+        id: true,
+        year: true,
+        month: true,
+        smsSentAt: true,
+        paidAmount: true,
+        ebarimtStatus: true,
+      },
+    })
+
+    const lockedReading = readings.find(
+      (r) =>
+        r.smsSentAt != null ||
+        (Number(r.paidAmount) > 0.005) ||
+        String(r.ebarimtStatus ?? '').toUpperCase() === 'SENT'
+    )
+    if (lockedReading) {
       return NextResponse.json(
-        { error: 'Энэ тоолууртай холбоотой заалт байна. Эхлээд заалтуудыг устгана уу' },
+        {
+          error:
+            'Энэ тоолуурт SMS илгээсэн эсвэл төлбөртэй заалт байна. Эхлээд заалтуудыг шалгана уу',
+        },
         { status: 400 }
       )
     }
 
-    await prisma.meter.delete({
-      where: { id },
-    })
+    await prisma.$transaction([
+      prisma.meterAdditionalFeeSelection.deleteMany({ where: { meterId: id } }),
+      prisma.meterReading.deleteMany({ where: { meterId: id } }),
+      prisma.meter.delete({ where: { id } }),
+    ])
 
     return NextResponse.json({ success: true })
   } catch (error: any) {
