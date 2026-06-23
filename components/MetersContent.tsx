@@ -107,16 +107,14 @@ type CustomerCategoryOptionsConfig = {
 
 function customerCategorySelectOptions(config: CustomerCategoryOptionsConfig) {
   const opts: { value: string; label: string }[] = []
-  if (config.householdStandardPlaceholder) {
-    opts.push({ value: '', label: `${HOUSEHOLD_CATEGORY_LABEL} (стандарт тариф)` })
-  } else {
-    opts.push({ value: '', label: config.placeholder ?? 'Сонгох...' })
+  opts.push({ value: '', label: config.placeholder ?? 'Сонгох...' })
+  if (config.includeHouseholdOverride) {
+    opts.push({ value: 'HOUSEHOLD', label: HOUSEHOLD_CATEGORY_LABEL })
+  } else if (config.householdStandardPlaceholder) {
+    opts.push({ value: 'HOUSEHOLD', label: HOUSEHOLD_CATEGORY_LABEL })
   }
   for (const k of ORG_CUSTOMER_CATEGORY_KEYS) {
     opts.push({ value: k, label: ORG_CUSTOMER_CATEGORY_LABELS[k] })
-  }
-  if (config.includeHouseholdOverride) {
-    opts.push({ value: 'HOUSEHOLD', label: HOUSEHOLD_CATEGORY_LABEL })
   }
   return opts
 }
@@ -317,7 +315,7 @@ export default function MetersContent() {
       })
       return
     }
-    if (form.ownerType === 'organization' && !form.orgCustomerCategory) {
+    if (form.organizationId && !form.orgCustomerCategory) {
       setMessage({ type: 'error', text: 'Хэрэглэгчийн төрөл сонгоно уу.' })
       return
     }
@@ -424,7 +422,11 @@ export default function MetersContent() {
     const ownerType: OwnerType = inHousehold ? 'household' : 'organization'
     let orgCustomerCategory: '' | MeterBillingCategory
     if (ownerType === 'household') {
-      orgCustomerCategory = ''
+      if (isMeterBillingCategory(eff) && eff !== 'HOUSEHOLD') {
+        orgCustomerCategory = eff
+      } else {
+        orgCustomerCategory = 'HOUSEHOLD'
+      }
     } else if (isMeterBillingCategory(eff)) {
       orgCustomerCategory = eff
     } else {
@@ -661,7 +663,7 @@ export default function MetersContent() {
                                 setForm((prev) => ({
                                   ...prev,
                                   organizationId: e.target.value,
-                                  orgCustomerCategory: '',
+                                  orgCustomerCategory: e.target.value ? 'HOUSEHOLD' : ('' as const),
                                 }))
                               }
                               className="w-full px-3 py-2 border border-gray-300 rounded-md mb-2"
@@ -687,6 +689,7 @@ export default function MetersContent() {
                                 }))
                               }
                               className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                              required={Boolean(form.organizationId)}
                             >
                               {!form.organizationId
                                 ? customerCategorySelectOptions({
@@ -697,9 +700,10 @@ export default function MetersContent() {
                                     </option>
                                   ))
                                 : customerCategorySelectOptions({
-                                    householdStandardPlaceholder: true,
+                                    placeholder: 'Сонгох...',
+                                    includeHouseholdOverride: true,
                                   }).map((o) => (
-                                    <option key={o.value || 'household'} value={o.value}>
+                                    <option key={o.value || 'pick'} value={o.value}>
                                       {o.label}
                                     </option>
                                   ))}
