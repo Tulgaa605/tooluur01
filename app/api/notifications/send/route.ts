@@ -12,6 +12,7 @@ import {
 } from '@/lib/public-billing-breakdown'
 import { normalizeBillingMode } from '@/lib/meter-reading-calc-core'
 import { buildSmsMessage } from '@/lib/sms-message'
+import { computeOrgCarryBeforePeriod } from '@/lib/carry-forward'
 
 export const runtime = 'nodejs'
 
@@ -235,22 +236,8 @@ export async function POST(request: NextRequest) {
       multi,
     })
 
-    // Өмнөх үлдэгдэл: Σ(total − paidAmount) where (y, m) < (year, month) for this org
-    const priorReadings = await prisma.meterReading.findMany({
-      where: {
-        organizationId: orgId,
-        OR: [
-          { year: { lt: year } },
-          { year, month: { lt: month } },
-        ],
-      },
-      select: { total: true, paidAmount: true },
-    })
-    const previousRemainingRaw = priorReadings.reduce(
-      (acc, r) => acc + (Number(r.total) || 0) - (Number(r.paidAmount) || 0),
-      0
-    )
-    const previousRemaining = Math.round(previousRemainingRaw * 100) / 100
+    // Өмнөх үлдэгдэл: carry-forward (нээлтийн үлдэгдэл орно).
+    const previousRemaining = await computeOrgCarryBeforePeriod(orgId, year, month)
 
     const messageText = buildSmsMessage({
       organizationName: org.name,
@@ -335,22 +322,8 @@ async function handlePhantomSend(ctx: PhantomCtx): Promise<NextResponse> {
     return NextResponse.json({ error: 'Эрхгүй' }, { status: 403 })
   }
 
-  // Өмнөх үлдэгдлийг тооцоолно: Σ(total − paidAmount) where (y, m) < (year, month)
-  const prior = await prisma.meterReading.findMany({
-    where: {
-      organizationId,
-      OR: [
-        { year: { lt: year } },
-        { year, month: { lt: month } },
-      ],
-    },
-    select: { total: true, paidAmount: true },
-  })
-  const carry = prior.reduce(
-    (acc, r) => acc + (Number(r.total) || 0) - (Number(r.paidAmount) || 0),
-    0
-  )
-  const roundedCarry = Math.round(carry * 100) / 100
+  // Өмнөх үлдэгдлийг тооцоолно (нээлтийн үлдэгдэл орно).
+  const roundedCarry = await computeOrgCarryBeforePeriod(organizationId, year, month)
   if (roundedCarry <= 0.005) {
     return NextResponse.json(
       { error: 'Өмнөх үлдэгдэл алга байна — илгээх мэдээлэл алга.' },

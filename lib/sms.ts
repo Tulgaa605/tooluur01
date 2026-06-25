@@ -28,6 +28,101 @@ function toUnitelPhoneParam(e164: string): string {
   return d
 }
 
+/** Unitel JSON хариунаас хэрэглэгчид ойлгомжтой алдаа гаргана. */
+function parseUnitelErrorMessage(raw: string, httpStatus: number): string {
+  const t = raw.trim()
+  if (!t.startsWith('{')) {
+    return `Unitel SMS алдаа (HTTP ${httpStatus})`
+  }
+  try {
+    const j = JSON.parse(t) as {
+      success?: boolean
+      status?: string
+      error?: string
+      message?: string
+      code?: number | string
+      desc?: string
+      data?: {
+        error?: { errorCode?: string | number; errorMessage?: string }
+        reason?: {
+          message?: string
+          premiumNumber?: string
+          status?: string
+          suspendedAt?: string
+        }
+      }
+    }
+
+    const nested = j.data?.error
+    const reason = j.data?.reason
+    const errorCode = nested?.errorCode != null ? String(nested.errorCode) : ''
+    const errorMessage = nested?.errorMessage || j.error || j.desc || j.message || ''
+    const premium = reason?.premiumNumber?.trim()
+
+    if (
+      errorCode === '3007' ||
+      /license is suspended/i.test(errorMessage) ||
+      reason?.status === 'SUSPENDED'
+    ) {
+      const num = premium ? ` (${premium})` : ''
+      return (
+        `Unitel SMS үйлчилгээ түр хаагдсан байна${num}. ` +
+        `Ихэвчлэн төлбөр төлөөгүйтэй холбоотой — Unitel-д төлбөрөө төлж, дугаараа сэргээлгэнэ үү.`
+      )
+    }
+
+    if (httpStatus === 402 || /unpaid/i.test(reason?.message ?? '')) {
+      return (
+        `Unitel SMS төлбөр төлөгдөөгүй (HTTP 402). ` +
+        `Тусгай дугаар${premium ? ` ${premium}` : ''}-ийн нэхэмжлэлийг төлнө үү.`
+      )
+    }
+
+    if (errorMessage) {
+      return `Unitel SMS: ${errorMessage}${errorCode ? ` (код ${errorCode})` : ''}`
+    }
+
+    const statusStr = String(j.status ?? '').toLowerCase()
+    if (j.success === false || statusStr === 'failed' || statusStr === 'error') {
+      return `Unitel SMS амжилтгүй (HTTP ${httpStatus})`
+    }
+  } catch {
+    /* fallback */
+  }
+  return `Unitel SMS алдаа (HTTP ${httpStatus}): ${t.slice(0, 120)}`
+}
+
+function unitelResponseFailed(j: {
+  success?: boolean
+  status?: string
+  error?: string
+  message?: string
+  code?: number | string
+  desc?: string
+  result?: string
+  data?: {
+    error?: { errorCode?: string | number; errorMessage?: string }
+    reason?: { status?: string }
+  }
+}): boolean {
+  const statusStr = String(j.status ?? j.result ?? '').toLowerCase()
+  const nestedCode = j.data?.error?.errorCode
+  const nestedMsg = j.data?.error?.errorMessage ?? ''
+  if (
+    j.success === false ||
+    statusStr === 'error' ||
+    statusStr === 'fail' ||
+    statusStr === 'failed' ||
+    j.data?.reason?.status === 'SUSPENDED' ||
+    nestedCode === '3007' ||
+    nestedCode === 3007 ||
+    /license is suspended/i.test(nestedMsg)
+  ) {
+    return true
+  }
+  return j.code != null && String(j.code) !== '0' && String(j.code) !== '200'
+}
+
 async function sendUnitel(toE164: string, message: string): Promise<void> {
   const enc = process.env.UNITEL_SMS_ENC!.trim()
   const to = toUnitelPhoneParam(toE164)
@@ -55,7 +150,7 @@ async function sendUnitel(toE164: string, message: string): Promise<void> {
     bodyPreview: raw.slice(0, 300),
   })
   if (!res.ok) {
-    throw new Error(`Unitel SMS ${res.status}: ${raw.slice(0, 300) || 'хариу хоосон'}`)
+    throw new Error(parseUnitelErrorMessage(raw, res.status))
   }
   const t = raw.trim()
   if (!t.startsWith('{') && !t.startsWith('[')) return
@@ -68,18 +163,13 @@ async function sendUnitel(toE164: string, message: string): Promise<void> {
       code?: number | string
       desc?: string
       result?: string
+      data?: {
+        error?: { errorCode?: string | number; errorMessage?: string }
+        reason?: { status?: string; premiumNumber?: string }
+      }
     }
-    const statusStr = String(j.status ?? j.result ?? '').toLowerCase()
-    const isFailure =
-      j.success === false ||
-      statusStr === 'error' ||
-      statusStr === 'fail' ||
-      statusStr === 'failed' ||
-      (j.code != null && String(j.code) !== '0' && String(j.code) !== '200')
-    if (isFailure) {
-      const errMsg =
-        j.error || j.desc || j.message || `Unitel: ${statusStr || 'амжилтгүй'} (code ${j.code ?? '-'})`
-      throw new Error(errMsg)
+    if (unitelResponseFailed(j)) {
+      throw new Error(parseUnitelErrorMessage(raw, res.status))
     }
   } catch (e) {
     if (e instanceof SyntaxError) return

@@ -8,6 +8,7 @@ import {
   paymentStatusLabel,
   type ReadingBreakdownLine,
 } from '@/lib/public-billing-breakdown'
+import { computeOrgCarryBeforePeriod } from '@/lib/carry-forward'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,22 +55,7 @@ export default async function PublicOrgBillingBreakdownPage(props: {
     orderBy: { meter: { meterNumber: 'asc' } },
   })
 
-  // Өмнөх үлдэгдэл: Σ(total − paidAmount) where (year, month) < (this year, month)
-  const priorReadings = await prisma.meterReading.findMany({
-    where: {
-      organizationId,
-      OR: [
-        { year: { lt: year } },
-        { year, month: { lt: month } },
-      ],
-    },
-    select: { total: true, paidAmount: true },
-  })
-  const previousRemainingRaw = priorReadings.reduce(
-    (acc, r) => acc + (Number(r.total) || 0) - (Number(r.paidAmount) || 0),
-    0
-  )
-  const previousRemaining = Math.round(previousRemainingRaw * 100) / 100
+  const previousRemaining = await computeOrgCarryBeforePeriod(organizationId, year, month)
 
   // Заалт байхгүй ч өмнөх үлдэгдэлтэй бол phantom хуудас үзүүлнэ;
   // тэр ч үгүй бол хуудас байхгүй.

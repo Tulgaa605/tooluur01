@@ -2,16 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { Role } from '@/lib/role'
 import { prisma } from '@/lib/prisma'
-import { organizationIdInScope } from '@/lib/org-scope'
+import { normalizeAprilCarrySaveAmount } from '@/lib/carry-forward'
 
 export const runtime = 'nodejs'
 
-function roundMoney(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
 /**
- * Жилийн нээлтийн үлдэгдэл (4-р сараас үйлчилнэ).
+ * Жилийн 4-р сарын «Өмнөх үлдэгдэл» (grid дээрх дүн шууд хадгалагдана).
  * Body: { organizationId: string, year: number, amount: number }
  * Upsert: (organizationId, year) → amount.
  */
@@ -34,7 +30,8 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(amountRaw)) {
       return NextResponse.json({ error: 'amount буруу' }, { status: 400 })
     }
-    const amount = roundMoney(Math.max(0, amountRaw))
+    // Grid дээр оруулсан «Өмнөх үлдэгдэл» дүнг шууд хадгална.
+    const amount = normalizeAprilCarrySaveAmount(amountRaw)
 
     // Эрхийн scope шалгахгүй.
 

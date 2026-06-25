@@ -13,6 +13,7 @@ import {
   type WaterTariffRates,
 } from '@/lib/meter-reading-calc'
 import { formatMoney, loadOrgAdditionalFeesBreakdown, paymentStatusLabel } from '@/lib/public-billing-breakdown'
+import { computeOrgCarryBeforePeriod } from '@/lib/carry-forward'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -150,21 +151,11 @@ export default async function PublicBillingBreakdownPage(props: {
   const multiMeter = periodReadings.length > 1
 
   // Өмнөх үлдэгдэл: Σ(total − paidAmount) where (year, month) < (this year, month)
-  const priorReadings = await prisma.meterReading.findMany({
-    where: {
-      organizationId: reading.organizationId,
-      OR: [
-        { year: { lt: reading.year } },
-        { year: reading.year, month: { lt: reading.month } },
-      ],
-    },
-    select: { total: true, paidAmount: true },
-  })
-  const previousRemainingRaw = priorReadings.reduce(
-    (acc, r) => acc + (Number(r.total) || 0) - (Number(r.paidAmount) || 0),
-    0
+  const previousRemaining = await computeOrgCarryBeforePeriod(
+    reading.organizationId,
+    reading.year,
+    reading.month
   )
-  const previousRemaining = Math.round(previousRemainingRaw * 100) / 100
 
   // Carry-forward: өмнөх үлдэгдэл + тухайн сарын төлбөр − энэ сард төлсөн
   const remaining = Math.max(
