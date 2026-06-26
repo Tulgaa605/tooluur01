@@ -18,6 +18,28 @@ export type OpeningBalanceRow = {
   amount: number
 }
 
+/** Сар бүрийн гараар зассан өмнөх үлдэгдэл (billing period). */
+export type PeriodCarryOverrideRow = {
+  organizationId: string
+  year: number
+  month: number
+  amount: number
+}
+
+/** Заалтгүй сард billing period дээр бүртгэсэн төлбөр. */
+export type BillingPeriodPaidRow = {
+  organizationId: string
+  year: number
+  month: number
+  paidAmount: number
+}
+
+export type MultiOrgCarryOptions = {
+  openings?: OpeningBalanceRow[]
+  periodOverrides?: PeriodCarryOverrideRow[]
+  billingPeriodPayments?: BillingPeriodPaidRow[]
+}
+
 export type MultiOrgCarryResult = {
   /** `${orgId}|${year}|${month}` → тухайн сарын заалтын өмнөх үлдэгдэл */
   byKey: Map<string, number>
@@ -36,26 +58,35 @@ type ReadingEvent = {
 
 /**
  * Олон байгууллагын carry-forward тооцоолол.
- * `OrganizationOpeningBalance.amount` = 4-р сарын grid дээрх «Өмнөх үлдэгдэл» (шууд хадгалсан утга).
+ * `OrganizationOpeningBalance.amount` = 4-р сарын grid дээрх «Өмнөх үлдэгдэл» (сөрөг = илүү төлөлт).
  */
 export function computeMultiOrgCarry(
   readings: CarryReadingRow[],
-  openings: OpeningBalanceRow[],
   filterYear: number | null,
-  filterMonth: number | null
+  filterMonth: number | null,
+  options: MultiOrgCarryOptions = {}
 ): MultiOrgCarryResult {
+  const openings = options.openings ?? []
+  const periodOverrides = options.periodOverrides ?? []
+  const billingPeriodPayments = options.billingPeriodPayments ?? []
   const byKey = new Map<string, number>()
   const atFilter = new Map<string, number>()
   const openingByOrgYear = new Map<string, number>()
 
   const aprilOverrideByOrg = new Map<string, Map<number, number>>()
   for (const o of openings) {
-    const amount = roundMoney(Math.max(0, Number(o.amount) || 0))
-    if (amount <= 0) continue
+    const amount = roundMoney(Number(o.amount) || 0)
+    if (Math.abs(amount) < 0.005) continue
     const map = aprilOverrideByOrg.get(o.organizationId) ?? new Map<number, number>()
     map.set(o.year, amount)
     aprilOverrideByOrg.set(o.organizationId, map)
     openingByOrgYear.set(`${o.organizationId}|${o.year}`, amount)
+  }
+
+  const periodOverrideByKey = new Map<string, number>()
+  for (const o of periodOverrides) {
+    const amount = roundMoney(Number(o.amount) || 0)
+    periodOverrideByKey.set(`${o.organizationId}|${o.year}|${o.month}`, amount)
   }
 
   const byOrg = new Map<string, ReadingEvent[]>()
@@ -70,8 +101,23 @@ export function computeMultiOrgCarry(
     byOrg.set(r.organizationId, list)
   }
 
+  // Заалтгүй сарын billing period төлбөр carry-д оруулна.
+  for (const p of billingPeriodPayments) {
+    const paid = roundMoney(Number(p.paidAmount) || 0)
+    if (paid <= 0) continue
+    const orgId = p.organizationId
+    const list = byOrg.get(orgId) ?? []
+    const hasReading = list.some((e) => e.year === p.year && e.month === p.month)
+    if (hasReading) continue
+    list.push({ year: p.year, month: p.month, total: 0, paid })
+    byOrg.set(orgId, list)
+  }
+
   for (const orgId of aprilOverrideByOrg.keys()) {
     if (!byOrg.has(orgId)) byOrg.set(orgId, [])
+  }
+  for (const o of periodOverrides) {
+    if (!byOrg.has(o.organizationId)) byOrg.set(o.organizationId, [])
   }
 
   const filterSet = filterYear != null && filterMonth != null
@@ -101,7 +147,10 @@ export function computeMultiOrgCarry(
 
       const k = `${ev.year}|${ev.month}`
       if (k !== prevKey) {
-        if (ev.month === 4 && overrides.has(ev.year)) {
+        const periodKey = `${orgId}|${k}`
+        if (periodOverrideByKey.has(periodKey)) {
+          cumulative = periodOverrideByKey.get(periodKey)!
+        } else if (ev.month === 4 && overrides.has(ev.year)) {
           cumulative = overrides.get(ev.year)!
         }
         byKey.set(`${orgId}|${k}`, roundMoney(cumulative))
@@ -122,6 +171,10 @@ export function computeMultiOrgCarry(
         !events.some((e) => e.year === filterYear && e.month === 4)
       ) {
         carryBeforeFilter = overrides.get(filterYear as number)!
+      }
+      const filterPeriodKey = `${orgId}|${filterYear}|${filterMonth}`
+      if (periodOverrideByKey.has(filterPeriodKey) && !filterCaptured) {
+        carryBeforeFilter = periodOverrideByKey.get(filterPeriodKey)!
       }
       atFilter.set(orgId, carryBeforeFilter)
     }
@@ -149,11 +202,7 @@ export async function computeOrgCarryBeforePeriod(
     }),
   ])
 
-  const openings: OpeningBalanceRow[] = []
-  const overrideAmount = roundMoney(Math.max(0, Number(openingRow?.amount) || 0))
-  if (overrideAmount > 0) {
-    openings.push({ organizationId, year, amount: overrideAmount })
-  }
+  const overrideAmount = roundMoney(Number(openingRow?.amount) || 0)
 
   const { byKey } = computeMultiOrgCarry(
     readings.map((r) => ({
@@ -163,16 +212,21 @@ export async function computeOrgCarryBeforePeriod(
       total: Number(r.total) || 0,
       paidAmount: Number(r.paidAmount) || 0,
     })),
-    openings,
     null,
-    null
+    null,
+    {
+      openings:
+        Math.abs(overrideAmount) >= 0.005
+          ? [{ organizationId, year, amount: overrideAmount }]
+          : [],
+    }
   )
 
   return byKey.get(`${organizationId}|${year}|${month}`) ?? 0
 }
 
-/** 4-р сарын grid-ээс ирсэн дүнг шууд хадгална. */
+/** 4-р сарын grid-ээс ирсэн дүнг шууд хадгална (сөрөг = илүү төлөлт/хасалт). */
 export function normalizeAprilCarrySaveAmount(amountRaw: number): number {
   if (!Number.isFinite(amountRaw)) return 0
-  return roundMoney(Math.max(0, amountRaw))
+  return roundMoney(amountRaw)
 }

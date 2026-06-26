@@ -3,14 +3,16 @@ import { requireAuth } from '@/lib/middleware'
 import { Role } from '@/lib/role'
 import { prisma } from '@/lib/prisma'
 import { normalizeAprilCarrySaveAmount } from '@/lib/carry-forward'
+import { ensureOrganizationBillingPeriod } from '@/lib/billing-period'
+import {
+  computeBillingPaymentStatus,
+  computeBillingRemaining,
+} from '@/lib/billing-snapshot'
+import { withPrismaWriteRetry } from '@/lib/prisma-write-retry'
 
 export const runtime = 'nodejs'
 
-/**
- * Жилийн 4-р сарын «Өмнөх үлдэгдэл» (grid дээрх дүн шууд хадгалагдана).
- * Body: { organizationId: string, year: number, amount: number }
- * Upsert: (organizationId, year) → amount.
- */
+
 export async function POST(request: NextRequest) {
   try {
     // Billing дээрх нээлтийн үлдэгдэл оруулах: нэвтэрсэн хэн ч оруулж болно.
@@ -33,7 +35,24 @@ export async function POST(request: NextRequest) {
     // Grid дээр оруулсан «Өмнөх үлдэгдэл» дүнг шууд хадгална.
     const amount = normalizeAprilCarrySaveAmount(amountRaw)
 
-    // Эрхийн scope шалгахгүй.
+    const bp = await ensureOrganizationBillingPeriod(
+      { organizationId, year, month: 4 },
+      user.userId
+    )
+    const totalForCalc = Number(bp.total ?? 0)
+    const paidForCalc = Number(bp.paidAmount ?? 0)
+    await withPrismaWriteRetry(() =>
+      prisma.organizationBillingPeriod.update({
+        where: { id: bp.id },
+        data: {
+          previousRemainingOverride: amount,
+          previousRemainingManual: true,
+          remaining: computeBillingRemaining(amount, totalForCalc, paidForCalc),
+          paymentStatus: computeBillingPaymentStatus(amount, totalForCalc, paidForCalc),
+          updatedByUserId: user.userId,
+        },
+      })
+    )
 
     const saved = await prisma.organizationOpeningBalance.upsert({
       where: { organizationId_year: { organizationId, year } },
@@ -51,7 +70,11 @@ export async function POST(request: NextRequest) {
       select: { id: true, organizationId: true, year: true, amount: true },
     })
 
-    return NextResponse.json({ success: true, openingBalance: saved })
+    return NextResponse.json({
+      success: true,
+      openingBalance: saved,
+      billingPeriodId: bp.id,
+    })
   } catch (error: unknown) {
     if (error instanceof Error && (error.message === 'Unauthorized' || error.message === 'Forbidden')) {
       return NextResponse.json({ error: error.message }, { status: 403 })

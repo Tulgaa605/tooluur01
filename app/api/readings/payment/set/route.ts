@@ -3,6 +3,12 @@ import { requireAuth } from '@/lib/middleware'
 import { Role } from '@/lib/role'
 import { prisma } from '@/lib/prisma'
 import { organizationIdInScope } from '@/lib/org-scope'
+import { ensureOrganizationBillingPeriod } from '@/lib/billing-period'
+import {
+  computeBillingPaymentStatus,
+  computeBillingRemaining,
+} from '@/lib/billing-snapshot'
+import { withPrismaWriteRetry } from '@/lib/prisma-write-retry'
 
 export const runtime = 'nodejs'
 
@@ -18,7 +24,7 @@ function roundMoney(n: number): number {
  */
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const data = await request.json()
@@ -38,6 +44,8 @@ export async function POST(request: NextRequest) {
       select: {
         id: true,
         organizationId: true,
+        year: true,
+        month: true,
         total: true,
       },
     })
@@ -98,6 +106,31 @@ export async function POST(request: NextRequest) {
         })
       )
     )
+
+    const first = readings[0]
+    if (first) {
+      const bp = await ensureOrganizationBillingPeriod(
+        {
+          organizationId: first.organizationId,
+          year: first.year,
+          month: first.month,
+        },
+        user.userId
+      )
+      const prevForCalc = Number(bp.previousRemainingOverride ?? 0)
+      const totalForCalc = Number(bp.total ?? 0)
+      await withPrismaWriteRetry(() =>
+        prisma.organizationBillingPeriod.update({
+          where: { id: bp.id },
+          data: {
+            paidAmount,
+            remaining: computeBillingRemaining(prevForCalc, totalForCalc, paidAmount),
+            paymentStatus: computeBillingPaymentStatus(prevForCalc, totalForCalc, paidAmount),
+            updatedByUserId: user.userId,
+          },
+        })
+      )
+    }
 
     return NextResponse.json({ success: true, updated: updates.length })
   } catch (error: unknown) {

@@ -1,8 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
 import { computeMultiOrgCarry } from '@/lib/carry-forward'
+import { attachBillingPeriodsToRows, billingPeriodDbSetupHint, scheduleBillingPeriodSnapshots } from '@/lib/billing-period'
+import { buildBillingPeriodSnapshot } from '@/lib/billing-snapshot'
+import { METER_READING_LIST_SELECT } from '@/lib/meter-reading-list-select'
 import { getScopedOrganizationIds, organizationIdInScope } from '@/lib/org-scope'
 import {
   type BillingMode,
@@ -351,6 +354,9 @@ export async function GET(request: NextRequest) {
 
     const shouldRecalculate = searchParams.get('recalculate') === '1'
     const withCarry = searchParams.get('withCarry') === '1'
+    const isBillingPage = searchParams.get('billing') === '1'
+    const filterYearNum = year ? parseInt(year, 10) : null
+    const filterMonthNum = month ? parseInt(month, 10) : null
 
     // «Зөвхөн дулаан» тоолуур: modal-аар оруулахгүйгээр үндсэн grid-д гарахын тулд заалт автоматаар үүсгэнэ.
     if (
@@ -376,64 +382,54 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const rawReadings = await prisma.meterReading.findMany({
-      where,
-      orderBy: [
-        { year: 'desc' },
-        { month: 'desc' },
-      ],
-      ...(take ? { take } : {}),
-    })
-    const readings = await attachOrgsAndMetersToReadings(rawReadings)
-
-    /**
-     * Өмнөх саруудын үлдэгдлийг тухайн (байгууллага, он, сар)-д carryIn болгож хавсаргана.
-     * carryIn(org, period) = period-аас өмнөх бүх заалтын (total − paidAmount) нийлбэр.
-     * Эрх (scope)-ын байгууллагуудын БҮХ заалтыг авч, тоолуурын заалт байхгүй ч өмнөх
-     * үлдэгдэлтэй харилцагч болгонд өнөөгийн (он, сар)-д "сүүдэр" мөр (phantom) үүсгэнэ.
-     */
     type CarryData = {
       byKey: Map<string, number>
       atFilter: Map<string, number>
       openingByOrgYear: Map<string, number>
       orgIds: string[]
+      billingPeriods: Array<{
+        id: string
+        organizationId: string
+        year: number
+        month: number
+        paidAmount: number | null
+        previousRemainingOverride: number | null
+        previousRemainingManual: boolean | null
+      }>
     }
 
     async function computeCarry(
       filterYear: number | null,
-      filterMonth: number | null,
-      extraOrgIds?: string[]
+      filterMonth: number | null
     ): Promise<CarryData> {
-      let scopeOrgIds: string[] = []
-      if (roleStr === Role.USER && user.organizationId) {
-        scopeOrgIds = [user.organizationId]
-      } else if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-        const officeOrgId = await ensureOfficeOrganizationId(user)
-        scopeOrgIds = await getScopedOrganizationIds({
-          ...user,
-          organizationId: officeOrgId ?? user.organizationId,
-        })
-      }
-      if (extraOrgIds && extraOrgIds.length > 0) {
-        const merged = new Set<string>(scopeOrgIds)
-        for (const id of extraOrgIds) {
-          const s = String(id ?? '').trim()
-          if (s) merged.add(s)
-        }
-        scopeOrgIds = [...merged]
-      }
-      if (scopeOrgIds.length === 0) {
+      let carryScopeOrgIds = [...scopedOrgIds]
+      if (carryScopeOrgIds.length === 0) {
         return {
           byKey: new Map(),
           atFilter: new Map(),
           openingByOrgYear: new Map(),
           orgIds: [],
+          billingPeriods: [],
         }
       }
 
-      const [allReadings, allOpenings] = await Promise.all([
+      const carryReadingWhere: {
+        organizationId: { in: string[] }
+        OR?: Array<
+          | { year: { lt: number } }
+          | { year: number; month: { lte: number } }
+        >
+      } = { organizationId: { in: carryScopeOrgIds } }
+      if (filterYear != null && filterMonth != null) {
+        carryReadingWhere.OR = [
+          { year: { lt: filterYear } },
+          { year: filterYear, month: { lte: filterMonth } },
+        ]
+      }
+
+      const [allReadings, allOpenings, allBillingPeriods] = await Promise.all([
         prisma.meterReading.findMany({
-          where: { organizationId: { in: scopeOrgIds } },
+          where: carryReadingWhere,
           select: {
             organizationId: true,
             year: true,
@@ -443,10 +439,40 @@ export async function GET(request: NextRequest) {
           },
         }),
         prisma.organizationOpeningBalance.findMany({
-          where: { organizationId: { in: scopeOrgIds } },
+          where: { organizationId: { in: carryScopeOrgIds } },
           select: { organizationId: true, year: true, amount: true },
         }),
+        prisma.organizationBillingPeriod.findMany({
+          where: { organizationId: { in: carryScopeOrgIds } },
+          select: {
+            id: true,
+            organizationId: true,
+            year: true,
+            month: true,
+            previousRemainingOverride: true,
+            previousRemainingManual: true,
+            paidAmount: true,
+          },
+        }),
       ])
+
+      const periodOverrides = allBillingPeriods
+        .filter((bp) => bp.previousRemainingOverride != null && bp.month === 4)
+        .map((bp) => ({
+          organizationId: bp.organizationId,
+          year: bp.year,
+          month: bp.month,
+          amount: Number(bp.previousRemainingOverride) || 0,
+        }))
+
+      const billingPeriodPayments = allBillingPeriods
+        .filter((bp) => Number(bp.paidAmount) > 0)
+        .map((bp) => ({
+          organizationId: bp.organizationId,
+          year: bp.year,
+          month: bp.month,
+          paidAmount: Number(bp.paidAmount) || 0,
+        }))
 
       const carry = computeMultiOrgCarry(
         allReadings.map((r) => ({
@@ -456,17 +482,37 @@ export async function GET(request: NextRequest) {
           total: Number(r.total) || 0,
           paidAmount: Number(r.paidAmount) || 0,
         })),
-        allOpenings.map((o) => ({
-          organizationId: o.organizationId,
-          year: o.year,
-          amount: Number(o.amount) || 0,
-        })),
         filterYear,
-        filterMonth
+        filterMonth,
+        {
+          openings: allOpenings.map((o) => ({
+            organizationId: o.organizationId,
+            year: o.year,
+            amount: Number(o.amount) || 0,
+          })),
+          periodOverrides,
+          billingPeriodPayments,
+        }
       )
 
-      return { ...carry, orgIds: scopeOrgIds }
+      return { ...carry, orgIds: carryScopeOrgIds, billingPeriods: allBillingPeriods }
     }
+
+    const carryPromise =
+      withCarry && filterYearNum != null && filterMonthNum != null
+        ? computeCarry(filterYearNum, filterMonthNum)
+        : null
+
+    const [rawReadings, carryDataPre] = await Promise.all([
+      prisma.meterReading.findMany({
+        where,
+        select: METER_READING_LIST_SELECT,
+        orderBy: [{ year: 'desc' }, { month: 'desc' }],
+        ...(take ? { take } : {}),
+      }),
+      carryPromise ?? Promise.resolve(null),
+    ])
+    const readings = await attachOrgsAndMetersToReadings(rawReadings)
 
     function attachCarry<T extends { organizationId: string; year: number; month: number }>(
       rows: T[],
@@ -476,6 +522,71 @@ export async function GET(request: NextRequest) {
         ...r,
         previousRemaining: map.get(`${r.organizationId}|${r.year}|${r.month}`) ?? 0,
       }))
+    }
+
+    async function withBillingPeriodIds<T extends Record<string, unknown>>(
+      rows: T[],
+      billingPeriods?: CarryData['billingPeriods']
+    ) {
+      try {
+        const attached = await attachBillingPeriodsToRows(
+          rows.map((r) => ({
+            ...r,
+            organizationId: String(r.organizationId ?? ''),
+            year: Number(r.year),
+            month: Number(r.month),
+            id: r.id != null ? String(r.id) : undefined,
+            paidAmount: r.paidAmount as number | null | undefined,
+            previousRemaining: r.previousRemaining as number | null | undefined,
+            readingIds: Array.isArray(r.readingIds) ? (r.readingIds as string[]) : undefined,
+            isPhantom:
+              Boolean(r.isPhantom) || String(r.id ?? '').startsWith('phantom-'),
+          })),
+          user.userId,
+          billingPeriods
+        )
+        if (isBillingPage) {
+          scheduleBillingPeriodSnapshots(
+            attached
+              .map((r) => buildBillingPeriodSnapshot(r))
+              .filter((s): s is NonNullable<typeof s> => s != null),
+            user.userId,
+            after
+          )
+        }
+        return attached
+      } catch (err: unknown) {
+        const hint = billingPeriodDbSetupHint(err)
+        if (hint) {
+          throw new Error(hint)
+        }
+        throw err
+      }
+    }
+
+    async function finalizeBillingRows<
+      T extends { organizationId: string; year: number; month: number },
+    >(
+      rows: T[],
+      carryData: CarryData,
+      filterYear: number,
+      filterMonth: number,
+      existingKeys: Set<string>
+    ) {
+      const attached = attachCarry(rows, carryData.byKey)
+      if (!canPhantom) {
+        return withBillingPeriodIds(attached, carryData.billingPeriods)
+      }
+      const phantoms = await buildPhantomRows(
+        carryData,
+        filterYear,
+        filterMonth,
+        existingKeys
+      )
+      return withBillingPeriodIds(
+        [...attached, ...phantoms.map((p) => ({ ...p, isPhantom: true }))],
+        carryData.billingPeriods
+      )
     }
 
     /**
@@ -501,7 +612,7 @@ export async function GET(request: NextRequest) {
         for (const [k, amount] of data.openingByOrgYear) {
           const [orgId, yStr] = k.split('|')
           if (!orgId || Number(yStr) !== filterYear) continue
-          if (amount <= 0.005) continue
+          if (Math.abs(amount) < 0.005) continue
           const key = `${orgId}|${filterYear}|${filterMonth}`
           if (existingKeys.has(key)) continue
           phantomOrgIds.add(orgId)
@@ -527,7 +638,7 @@ export async function GET(request: NextRequest) {
         const prior = data.atFilter.get(orgId) ?? 0
         const savedApril = data.openingByOrgYear.get(`${orgId}|${filterYear}`) ?? 0
         const carry =
-          filterMonth === 4 && savedApril > 0
+          filterMonth === 4 && Math.abs(savedApril) >= 0.005
             ? Math.round(savedApril * 100) / 100
             : Math.round(prior * 100) / 100
         out.push({
@@ -583,8 +694,6 @@ export async function GET(request: NextRequest) {
       return out
     }
 
-    const filterYearNum = year ? parseInt(year) : null
-    const filterMonthNum = month ? parseInt(month) : null
     const canPhantom =
       withCarry && filterYearNum != null && filterMonthNum != null
 
@@ -598,31 +707,31 @@ export async function GET(request: NextRequest) {
 
     // Хурдны үндсэн горим: тарифын мөр дүн + сонгосон нэмэлт төлбөр + НӨАТ.
     if (!runTariffRecalc) {
-      const withFees = await attachAdditionalFeesToReadings(readings)
-      if (withCarry) {
-      const carryData = await computeCarry(
-        filterYearNum,
-        filterMonthNum,
-        readings.map((r) => r.organizationId)
-      )
-        const attached = attachCarry(withFees, carryData.byKey)
+      const baseReadings = isBillingPage ? readings : await attachAdditionalFeesToReadings(readings)
+      if (withCarry && carryDataPre) {
+        const carryData = carryDataPre
         if (canPhantom) {
           const existingKeys = new Set(
             rawReadings
               .filter((r) => r.year === filterYearNum && r.month === filterMonthNum)
               .map((r) => `${r.organizationId}|${filterYearNum}|${filterMonthNum}`)
           )
-          const phantoms = await buildPhantomRows(
+          const withIds = await finalizeBillingRows(
+            baseReadings,
             carryData,
             filterYearNum as number,
             filterMonthNum as number,
             existingKeys
           )
-          return NextResponse.json([...attached, ...phantoms])
+          return NextResponse.json(withIds)
         }
-        return NextResponse.json(attached)
+        const withIds = await withBillingPeriodIds(
+          attachCarry(baseReadings, carryData.byKey),
+          carryData.billingPeriods
+        )
+        return NextResponse.json(withIds)
       }
-      return NextResponse.json(withFees)
+      return NextResponse.json(baseReadings)
     }
 
     // Бодолт товч (recalculate=1) эсвэл тооцоогүй шинэ заалт — тарифаар дүнг тооцож DB-д хадгална.
@@ -661,30 +770,32 @@ export async function GET(request: NextRequest) {
 
     const withExtras = shouldRecalculate
       ? updatedReadings
-      : await attachAdditionalFeesToReadings(updatedReadings)
+      : isBillingPage
+        ? updatedReadings
+        : await attachAdditionalFeesToReadings(updatedReadings)
 
-    if (withCarry) {
-      const carryData = await computeCarry(
-        filterYearNum,
-        filterMonthNum,
-        updatedReadings.map((r) => r.organizationId)
-      )
-      const attached = attachCarry(withExtras, carryData.byKey)
+    if (withCarry && carryDataPre) {
+      const carryData = carryDataPre
       if (canPhantom) {
         const existingKeys = new Set(
           rawReadings
             .filter((r) => r.year === filterYearNum && r.month === filterMonthNum)
             .map((r) => `${r.organizationId}|${filterYearNum}|${filterMonthNum}`)
         )
-        const phantoms = await buildPhantomRows(
+        const withIds = await finalizeBillingRows(
+          withExtras,
           carryData,
           filterYearNum as number,
           filterMonthNum as number,
           existingKeys
         )
-        return NextResponse.json([...attached, ...phantoms])
+        return NextResponse.json(withIds)
       }
-      return NextResponse.json(attached)
+      const withIds = await withBillingPeriodIds(
+        attachCarry(withExtras, carryData.byKey),
+        carryData.billingPeriods
+      )
+      return NextResponse.json(withIds)
     }
     return NextResponse.json(withExtras)
   } catch (error: any) {

@@ -840,8 +840,8 @@ export default function ReadingsContent() {
       month?: string | number
       year?: string | number
       recalculate?: boolean
-      /** Дулаан sync алгасах (хадгалалтын дараах давхар fetch) */
-      skipHeatSync?: boolean
+      /** Дулаан sync зөвхөн шаардлагатай үед (анхны ачаалал гэх мэт) */
+      ensureHeatSync?: boolean
       /** Хадгалалтын дараа: серверийн жагсаалтыг тухайн сарт нэгтгэнэ (бүх state-ийг дарж бичихгүй). */
       mergePeriod?: { year: number; month: number }
     }): Promise<Reading[]> => {
@@ -868,10 +868,11 @@ export default function ReadingsContent() {
       if (yearToUse) params.append('year', yearToUse)
 
       params.append('limit', '3000')
+      params.append('skipHeatSync', '1')
       const yNum = yearToUse ? parseInt(yearToUse, 10) : NaN
       const mNum = monthToUse ? parseInt(monthToUse, 10) : NaN
       if (
-        !opts?.skipHeatSync &&
+        opts?.ensureHeatSync &&
         Number.isFinite(yNum) &&
         Number.isFinite(mNum) &&
         mNum >= 1 &&

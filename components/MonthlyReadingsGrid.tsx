@@ -66,6 +66,10 @@ export interface MonthlyReadingRow {
   heatReadingSum?: number
   /** Төлбөрийн хуудас */
   paidAmount?: number | null
+  /** Төлбөрийн хуудасны тогтвортой мөрийн ID (DB) */
+  billingPeriodId?: string
+  /** Холбогдох заалтын ID-ууд */
+  readingIds?: string[]
   paymentReference?: string | null
   /** Өмнөх саруудын үлдэгдэл (carry-forward) — сервер тооцоолж буцаана */
   previousRemaining?: number | null
@@ -82,9 +86,32 @@ export interface MonthlyReadingRow {
 }
 
 const PAY_EPS = 0.009
+const OPENING_BALANCE_EDIT_MONTH = 4
+
+function canEditOpeningBalanceRow(
+  row: MonthlyReadingRow | undefined,
+  hasHandler: boolean
+): boolean {
+  return (
+    hasHandler &&
+    row?.organization?.name !== 'Нийт дүн' &&
+    Number(row?.month) === OPENING_BALANCE_EDIT_MONTH &&
+    /^[a-f\d]{24}$/i.test(String(row?.billingPeriodId ?? row?.id ?? ''))
+  )
+}
 
 function roundMoneyLocal(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+/** Сөрөг тоо зөвшөөрнө (илүү төлөлт / хасалт). */
+function parseSignedMoneyInput(raw: unknown): number {
+  if (raw == null || raw === '') return 0
+  const n =
+    typeof raw === 'number'
+      ? raw
+      : parseFloat(String(raw).replace(/,/g, '').replace(/₮/g, '').trim())
+  return Number.isFinite(n) ? roundMoneyLocal(n) : 0
 }
 
 function effectivePaidAmount(row: MonthlyReadingRow | undefined): number {
@@ -102,7 +129,7 @@ function previousRemainingForRow(row: MonthlyReadingRow | undefined): number {
   if (row.organization?.name === 'Нийт дүн') {
     return Number((row as { prevRemainingSum?: number }).prevRemainingSum ?? 0) || 0
   }
-  return roundMoneyLocal(Number(row.previousRemaining ?? 0) || 0)
+  return roundMoneyLocal(Number(row.previousRemaining ?? 0))
 }
 
 function remainingForRow(row: MonthlyReadingRow | undefined, getTotal: (r: MonthlyReadingRow | undefined) => number): number {
@@ -224,6 +251,19 @@ export function normalizeApiReadings(data: unknown[]): MonthlyReadingRow[] {
       subtotal: toNum(r.subtotal),
       vat: toNum(r.vat),
       total: toNum(r.total),
+      paidAmount: toNum(r.paidAmount),
+      previousRemaining:
+        r.previousRemaining == null || r.previousRemaining === ''
+          ? undefined
+          : toNum(r.previousRemaining),
+      id: r.id != null ? String(r.id) : undefined,
+      billingPeriodId: r.billingPeriodId != null ? String(r.billingPeriodId) : undefined,
+      readingIds: Array.isArray(r.readingIds)
+        ? (r.readingIds as unknown[]).map((x) => String(x))
+        : undefined,
+      aggregatedReadingIds: Array.isArray(r.aggregatedReadingIds)
+        ? (r.aggregatedReadingIds as unknown[]).map((x) => String(x))
+        : undefined,
     } as MonthlyReadingRow
   })
 }
@@ -253,7 +293,6 @@ export default function MonthlyReadingsGrid({
   onGridContextMenu,
 }: MonthlyReadingsGridProps) {
   const gridRef = useRef<AgGridReact>(null)
-  const [organizations, setOrganizations] = useState<Organization[]>([])
   const [allMeters, setAllMeters] = useState<Meter[]>([])
 
   const numberColStyle = useMemo(
@@ -265,20 +304,19 @@ export default function MonthlyReadingsGrid({
   )
 
   useEffect(() => {
-    fetchWithAuth('/api/organizations?customersOnly=1')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) =>
-        setOrganizations(Array.isArray(data) ? (data as Organization[]) : [])
-      )
-      .catch(() => setOrganizations([]))
-  }, [])
-
-  useEffect(() => {
+    if (variant === 'billing') return
+    const needsMeterLookup = rowData.some(
+      (r) => Boolean(r.meterId) && !String(r.meter?.meterNumber ?? '').trim()
+    )
+    if (!needsMeterLookup) {
+      setAllMeters([])
+      return
+    }
     fetchWithAuth('/api/meters')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setAllMeters(Array.isArray(data) ? (data as Meter[]) : []))
       .catch(() => setAllMeters([]))
-  }, [])
+  }, [variant, rowData])
 
   const heatQtyForDisplay = useCallback((r: MonthlyReadingRow | undefined): number | null => {
     if (!r || !readingRowUsesHeat(r)) return null
@@ -619,40 +657,30 @@ export default function MonthlyReadingsGrid({
         width: 140,
         colId: 'previousRemaining',
         ...numberColStyle,
-        // Зөвхөн 4-р сарын мөр + billing variant + handler байгаа үед засаж болно.
+        // Зөвхөн 4-р сарын нээлтийн үлдэгдэл гараар засна.
         editable: (params) =>
-          Boolean(billingActions?.onOpeningBalanceChange) &&
-          params.data?.organization?.name !== 'Нийт дүн' &&
-          Number(params.data?.month) === 4,
+          canEditOpeningBalanceRow(params.data, Boolean(billingActions?.onOpeningBalanceChange)),
         valueGetter: (params) => {
           if (params.data?.organization?.name === 'Нийт дүн') {
             return rowData.reduce((acc, r) => acc + previousRemainingForRow(r), 0)
           }
           return previousRemainingForRow(params.data)
         },
-        valueParser: (params) => {
-          const raw = params.newValue
-          if (raw == null || raw === '') return 0
-          const n =
-            typeof raw === 'number'
-              ? raw
-              : parseFloat(String(raw).replace(/,/g, '').replace(/₮/g, '').trim())
-          return Number.isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100
-        },
+        valueParser: (params) => parseSignedMoneyInput(params.newValue),
         valueSetter: (params) => {
           if (!params.data) return false
-          const n = Number(params.newValue ?? 0)
-          ;(params.data as MonthlyReadingRow).previousRemaining = Number.isFinite(n) ? n : 0
+          const n = parseSignedMoneyInput(params.newValue)
+          ;(params.data as MonthlyReadingRow).previousRemaining = n
           return true
         },
         valueFormatter: (params) => formatMoney(params.value ?? 0),
         cellStyle: (params) => {
           const base = { textAlign: 'right' as const }
-          if (
-            billingActions?.onOpeningBalanceChange &&
-            params.data?.organization?.name !== 'Нийт дүн' &&
-            Number(params.data?.month) === 4
-          ) {
+          const prev = previousRemainingForRow(params.data)
+          if (prev < -PAY_EPS) {
+            return { ...base, backgroundColor: '#ecfdf5', color: '#047857' }
+          }
+          if (canEditOpeningBalanceRow(params.data, Boolean(billingActions?.onOpeningBalanceChange))) {
             return { ...base, backgroundColor: '#fff7ed' }
           }
           return base
@@ -668,7 +696,8 @@ export default function MonthlyReadingsGrid({
         editable: (params) =>
           Boolean(billingActions?.onPaidAmountChange) &&
           params.data?.organization?.name !== 'Нийт дүн' &&
-          !String(params.data?.id ?? '').startsWith('phantom-'),
+          (/^[a-f\d]{24}$/i.test(String(params.data?.billingPeriodId ?? params.data?.id ?? '')) ||
+            (Array.isArray(params.data?.readingIds) && params.data.readingIds.length > 0)),
         valueGetter: (params) => {
           if (params.data?.organization?.name === 'Нийт дүн') return Number(params.data?.paidSum ?? 0)
           return effectivePaidAmount(params.data)
@@ -969,7 +998,7 @@ export default function MonthlyReadingsGrid({
                 : undefined
             }
             getRowId={(params) =>
-              params.data?.id ??
+              String(params.data?.billingPeriodId ?? params.data?.id ?? '') ||
               `m-${params.data?.meterId ?? 'x'}-${params.data?.year ?? 0}-${params.data?.month ?? 0}`
             }
             rowBuffer={20}
@@ -1003,12 +1032,10 @@ export default function MonthlyReadingsGrid({
               }
               if (
                 e.colDef.colId === 'previousRemaining' &&
-                billingActions?.onOpeningBalanceChange &&
-                e.data &&
-                Number(e.data.month) === 4
+                canEditOpeningBalanceRow(e.data, Boolean(billingActions?.onOpeningBalanceChange))
               ) {
-                const newAmount = parseMoneyInput(e.newValue)
-                if (Number.isFinite(newAmount) && newAmount >= 0) {
+                const newAmount = parseSignedMoneyInput(e.newValue)
+                if (Number.isFinite(newAmount) && billingActions?.onOpeningBalanceChange) {
                   void billingActions.onOpeningBalanceChange(e.data, newAmount)
                 }
               }

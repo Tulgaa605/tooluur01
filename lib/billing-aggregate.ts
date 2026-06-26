@@ -77,10 +77,22 @@ function mergeEbarimtStatus(rows: BillingAggregatableReading[]): {
 
 function mergeOrgBillingGroup<T extends BillingAggregatableReading>(group: T[]): T & {
   aggregatedReadingIds: string[]
+  readingIds: string[]
+  billingPeriodId?: string
 } {
   const first = group[0]
   const orgId = first.organization?.id || first.organizationId || 'x'
-  const ids = group.map((r) => r.id).filter((id): id is string => !!id)
+  const ids = [
+    ...new Set(
+      group.flatMap((r) => {
+        const row = r as { readingIds?: string[]; aggregatedReadingIds?: string[] }
+        if (row.readingIds?.length) return row.readingIds
+        if (row.aggregatedReadingIds?.length) return row.aggregatedReadingIds
+        return []
+      })
+    ),
+  ].filter((id) => /^[a-f\d]{24}$/i.test(id))
+  const billingPeriodId = (first as { billingPeriodId?: string }).billingPeriodId ?? first.id
   const meterNumbers = [
     ...new Set(group.map((r) => r.meter?.meterNumber?.trim()).filter(Boolean) as string[]),
   ].sort((a, b) => a.localeCompare(b, 'mn'))
@@ -89,8 +101,10 @@ function mergeOrgBillingGroup<T extends BillingAggregatableReading>(group: T[]):
 
   return {
     ...first,
-    id: `agg-${orgId}-${first.year}-${first.month}`,
+    id: billingPeriodId ?? `agg-${orgId}-${first.year}-${first.month}`,
+    billingPeriodId,
     aggregatedReadingIds: ids,
+    readingIds: ids,
     usage: sumNum(group, (r) => r.usage),
     total: sumNum(group, (r) => r.total),
     subtotal: sumNum(group, (r) => Number(r.subtotal ?? 0)),
@@ -100,7 +114,7 @@ function mergeOrgBillingGroup<T extends BillingAggregatableReading>(group: T[]):
     heatAmount: sumNum(group, (r) => Number(r.heatAmount ?? 0)),
     paidAmount: sumNum(group, (r) => Number(r.paidAmount ?? 0)),
     approved: group.every((r) => !!r.approved),
-    previousRemaining: Number(group[0]?.previousRemaining ?? 0) || 0,
+    previousRemaining: Number(group[0]?.previousRemaining ?? 0),
     smsSentAt: group.find((r) => !!r.smsSentAt)?.smsSentAt ?? null,
     ...ebarimt,
     meter: {
@@ -110,7 +124,7 @@ function mergeOrgBillingGroup<T extends BillingAggregatableReading>(group: T[]):
           ? meterNumbers.join(', ')
           : `${meterNumbers.slice(0, 2).join(', ')} (+${meterNumbers.length - 2})`,
     },
-  } as T & { aggregatedReadingIds: string[] }
+  } as T & { aggregatedReadingIds: string[]; readingIds: string[]; billingPeriodId?: string }
 }
 
 /**
@@ -152,13 +166,16 @@ export function aggregateBillingReadingsByOrganization<T extends BillingAggregat
 
 export function readingIdsForBillingRow(row: {
   id?: string
+  billingPeriodId?: string
+  readingIds?: string[]
   aggregatedReadingIds?: string[]
 }): string[] {
+  if (row.readingIds?.length) return row.readingIds
   if (row.aggregatedReadingIds?.length) return row.aggregatedReadingIds
-  if (row.id) {
-    const s = String(row.id)
-    // 'agg-...' нэгтгэсэн мөр, 'phantom-...' заалтгүй (carry only) мөр — DB-д заалтын ID биш.
-    if (!s.startsWith('agg-') && !s.startsWith('phantom-')) return [row.id]
+  const rawId = String(row.id ?? '')
+  if (/^[a-f\d]{24}$/i.test(rawId) && rawId !== String(row.billingPeriodId ?? '')) {
+    // Хуучин: id нь заалтын ID байсан
+    return [rawId]
   }
   return []
 }

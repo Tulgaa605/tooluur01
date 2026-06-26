@@ -13,7 +13,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Check if Prisma client is properly initialized
     if (!prisma) {
       throw new Error('Prisma client not initialized')
     }
@@ -48,84 +47,65 @@ export async function GET(request: NextRequest) {
       return emptyDashboard()
     }
 
-    // Get current month usage
-    const currentMonthReadings = await prisma.meterReading.findMany({
+    const chartMonths: Array<{ year: number; month: number; label: string }> = []
+    for (let i = 11; i >= 0; i--) {
+      const date = new Date(currentYear, currentMonth - 1 - i, 1)
+      const month = date.getMonth() + 1
+      const year = date.getFullYear()
+      chartMonths.push({
+        year,
+        month,
+        label: `${year}-${String(month).padStart(2, '0')}`,
+      })
+    }
+
+    const usageByPeriod = await prisma.meterReading.groupBy({
+      by: ['year', 'month'],
       where: {
         ...whereClause,
-        month: currentMonth,
-        year: currentYear,
+        OR: chartMonths.map(({ year, month }) => ({ year, month })),
       },
+      _sum: { usage: true },
     })
 
-    // Get previous month usage
-    const previousMonthReadings = await prisma.meterReading.findMany({
-      where: {
-        ...whereClause,
-        month: previousMonth,
-        year: previousYear,
-      },
-    })
-
-    const currentMonthUsage = currentMonthReadings.reduce(
-      (sum, r) => sum + r.usage,
-      0
-    )
-    const previousMonthUsage = previousMonthReadings.reduce(
-      (sum, r) => sum + r.usage,
-      0
+    const usageMap = new Map(
+      usageByPeriod.map((row) => [
+        `${row.year}|${row.month}`,
+        Number(row._sum.usage ?? 0) || 0,
+      ])
     )
 
+    const currentMonthUsage = usageMap.get(`${currentYear}|${currentMonth}`) ?? 0
+    const previousMonthUsage = usageMap.get(`${previousYear}|${previousMonth}`) ?? 0
     const usageChange =
       previousMonthUsage > 0
         ? ((currentMonthUsage - previousMonthUsage) / previousMonthUsage) * 100
         : 0
 
-    // Monthly data for chart (last 12 months)
-    const monthlyData = []
-    // "Нийт зарцуулсан ус" гэдгийг графиктай уялдуулахын тулд сүүлийн 12 сарын нийлбэрээр бодно.
     let totalUsage = 0
-    for (let i = 11; i >= 0; i--) {
-      const date = new Date(currentYear, currentMonth - 1 - i, 1)
-      const month = date.getMonth() + 1
-      const year = date.getFullYear()
-      const monthName = `${year}-${String(month).padStart(2, '0')}`
-
-      const monthReadings = await prisma.meterReading.findMany({
-        where: {
-          ...whereClause,
-          month,
-          year,
-        },
-      })
-
-      const usage = monthReadings.reduce((sum, r) => sum + r.usage, 0)
-      monthlyData.push({ month: monthName, usage })
+    const monthlyData = chartMonths.map(({ year, month, label }) => {
+      const usage = usageMap.get(`${year}|${month}`) ?? 0
       totalUsage += usage
-    }
+      return { month: label, usage }
+    })
 
     let topOrganizations: Array<{ name: string; usage: number }> = []
     if (user.role === Role.MANAGER) {
       try {
-        const topWhere: any = {
-          month: currentMonth,
-          year: currentYear,
-          ...whereClause,
-        }
         const orgUsage = await prisma.meterReading.groupBy({
           by: ['organizationId'],
-          where: topWhere,
-          _sum: {
-            usage: true,
+          where: {
+            month: currentMonth,
+            year: currentYear,
+            ...whereClause,
           },
+          _sum: { usage: true },
         })
 
         if (orgUsage.length > 0) {
           const orgs = await prisma.organization.findMany({
-            where: {
-              id: {
-                in: orgUsage.map((o) => o.organizationId),
-              },
-            },
+            where: { id: { in: orgUsage.map((o) => o.organizationId) } },
+            select: { id: true, name: true },
           })
 
           topOrganizations = orgUsage
@@ -139,9 +119,8 @@ export async function GET(request: NextRequest) {
             .sort((a, b) => b.usage - a.usage)
             .slice(0, 10)
         }
-      } catch (orgError: any) {
+      } catch (orgError: unknown) {
         console.error('Error fetching top organizations:', orgError)
-        // Continue without top organizations if there's an error
         topOrganizations = []
       }
     }
@@ -154,12 +133,10 @@ export async function GET(request: NextRequest) {
       monthlyData,
       topOrganizations,
     })
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Алдаа гарлаа'
+    const stack = error instanceof Error ? error.stack : undefined
     console.error('Dashboard API error:', error)
-    return NextResponse.json(
-      { error: error.message || 'Алдаа гарлаа', details: error.stack },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: msg, details: stack }, { status: 500 })
   }
 }
-

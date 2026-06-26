@@ -184,7 +184,7 @@ export default function BillingContent() {
         usage: Number(r.usage ?? 0) || 0,
         total: Number(r.total ?? 0) || 0,
         paidStored: Number(r.paidAmount ?? 0) || 0,
-        previousRemaining: Number((r as { previousRemaining?: number }).previousRemaining ?? 0) || 0,
+        previousRemaining: Number((r as { previousRemaining?: number }).previousRemaining ?? 0),
         approved: !!r.approved,
         ebarimtStatus: r.ebarimtStatus ?? 'PENDING',
         ebarimtBillId: r.ebarimtBillId ?? null,
@@ -244,6 +244,8 @@ export default function BillingContent() {
       if (debouncedMonth) params.append('month', debouncedMonth)
       params.append('limit', '3000')
       params.append('withCarry', '1')
+      params.append('billing', '1')
+      params.append('skipHeatSync', '1')
       const res = await fetchWithAuth(`/api/readings?${params.toString()}`, {
         signal: controller.signal,
       })
@@ -256,8 +258,10 @@ export default function BillingContent() {
       else if (data && Array.isArray(data)) setReadings(normalizeApiReadings(data) as BillingReading[])
       else setReadings([])
     } catch (e: unknown) {
-      // Abort бол дараагийн fetch ажиллаж байгаа гэсэн үг — алдаа гэж үзэхгүй.
       if (e instanceof DOMException && e.name === 'AbortError') return
+      const msg = e instanceof Error ? e.message : 'Төлбөрийн мэдээлэл ачаалахад алдаа гарлаа'
+      setMessage({ type: 'error', text: msg })
+      setTimeout(() => setMessage(null), 6000)
       if (!opts?.silent) setReadings([])
     } finally {
       if (showLoading) setLoading(false)
@@ -310,7 +314,10 @@ export default function BillingContent() {
       const lines =
         ids.length > 1
           ? readings
-              .filter((r) => r.id && ids.includes(r.id))
+              .filter((r) => {
+                const rowIds = readingIdsForBillingRow(r)
+                return rowIds.some((id) => ids.includes(id))
+              })
               .map(
                 (r) =>
                   `  • Тоолуур ${r.meter?.meterNumber ?? '-'}: хэрэглээ ${(Number(r.usage ?? 0) || 0).toFixed(2)} м³, төлбөр ${formatMoney(r.total ?? 0)} ₮, төлсөн ${formatMoney(r.paidAmount ?? 0)} ₮`
@@ -346,9 +353,9 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
   const handleSendNotification = useCallback(
     async (row: MonthlyReadingRow) => {
       const ids = readingIdsForBillingRow(row)
-      const isPhantom = String(row.id ?? '').startsWith('phantom-')
+      const isPhantom = ids.length === 0
       if (ids.length === 0 && !isPhantom) return
-      setSending(row.id ?? ids[0] ?? `phantom-${row.organizationId}`)
+      setSending(String((row as { billingPeriodId?: string }).billingPeriodId ?? row.id ?? ids[0] ?? ''))
       try {
         const body: Record<string, unknown> = {
           fromPhone: senderPhone.trim(),
@@ -475,21 +482,39 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
   const handleInlinePaidChange = useCallback(
     async (row: MonthlyReadingRow, newPaid: number) => {
       const ids = readingIdsForBillingRow(row)
-      if (ids.length === 0) return
+      const billingPeriodId = String(
+        (row as { billingPeriodId?: string }).billingPeriodId ?? row.id ?? ''
+      ).trim()
       try {
-        const res = await fetchWithAuth('/api/readings/payment/set', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            readingIds: ids,
-            paidAmount: newPaid,
-          }),
-        })
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}))
-          throw new Error(data.error || 'Алдаа гарлаа')
+        if (ids.length > 0) {
+          const res = await fetchWithAuth('/api/readings/payment/set', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              readingIds: ids,
+              paidAmount: newPaid,
+            }),
+          })
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            throw new Error(data.error || 'Алдаа гарлаа')
+          }
+        } else if (/^[a-f\d]{24}$/i.test(billingPeriodId)) {
+          const res = await fetchWithAuth('/api/billing-periods', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              billingPeriodId,
+              paidAmount: newPaid,
+            }),
+          })
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            throw new Error(data.error || 'Алдаа гарлаа')
+          }
+        } else {
+          return
         }
-        // Мессеж/refresh харагдуулахгүйгээр чимээгүй шинэчилнэ.
         await reloadReadings({ silent: true })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Хадгалахад алдаа гарлаа'
@@ -502,29 +527,54 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
 
   const handleOpeningBalanceChange = useCallback(
     async (row: MonthlyReadingRow, newAmount: number) => {
+      let billingPeriodId = String(
+        (row as { billingPeriodId?: string }).billingPeriodId ?? row.id ?? ''
+      ).trim()
       const orgId = String(row.organization?.id ?? row.organizationId ?? '').trim()
       const year = Number(row.year)
-      if (!orgId || !Number.isInteger(year) || Number(row.month) !== 4) return
+      const month = Number(row.month)
+
       try {
-        const res = await fetchWithAuth('/api/readings/opening-balance', {
-          method: 'POST',
+        if (month !== 4) {
+          setMessage({ type: 'error', text: 'Өмнөх үлдэгдлийг зөвхөн 4-р сард засна' })
+          setTimeout(() => setMessage(null), 4000)
+          return
+        }
+
+        if (!/^[a-f\d]{24}$/i.test(billingPeriodId)) {
+          if (!orgId || !Number.isInteger(year) || !Number.isInteger(month)) return
+          const created = await fetchWithAuth('/api/billing-periods', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ organizationId: orgId, year, month }),
+          })
+          const createdData = await created.json().catch(() => ({}))
+          if (!created.ok) {
+            throw new Error(createdData.error || 'Төлбөрийн мөр үүсгэхэд алдаа гарлаа')
+          }
+          billingPeriodId = String(createdData?.billingPeriod?.id ?? '').trim()
+        }
+        if (!/^[a-f\d]{24}$/i.test(billingPeriodId)) return
+
+        const res = await fetchWithAuth('/api/billing-periods', {
+          method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            organizationId: orgId,
-            year,
-            amount: Math.max(0, Number(newAmount) || 0),
+            billingPeriodId,
+            previousRemaining: Math.round(Number(newAmount) * 100) / 100,
           }),
         })
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
           throw new Error(data.error || 'Алдаа гарлаа')
         }
-        // Серверээс дахин тооцоолж бүх сарын carry-г зөв харуулна.
+        setMessage({ type: 'success', text: 'Өмнөх үлдэгдэл хадгалагдлаа' })
+        setTimeout(() => setMessage(null), 2500)
         await reloadReadings({ silent: true })
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Нээлтийн үлдэгдэл хадгалахад алдаа гарлаа'
+        const msg = err instanceof Error ? err.message : 'Өмнөх үлдэгдэл хадгалахад алдаа гарлаа'
         setMessage({ type: 'error', text: msg })
-        setTimeout(() => setMessage(null), 4000)
+        setTimeout(() => setMessage(null), 6000)
       }
     },
     [reloadReadings]
@@ -562,7 +612,7 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
     try {
       let okCount = 0
       for (const row of filteredBillingRows) {
-        const isPhantom = String(row.id ?? '').startsWith('phantom-')
+        const isPhantom = !row.readingIds || row.readingIds.length === 0
         const body: Record<string, unknown> = {
           fromPhone: senderPhone.trim(),
         }

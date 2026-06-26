@@ -53,6 +53,26 @@ export async function GET(request: NextRequest) {
     const organizations = await prisma.organization.findMany({
       where,
       orderBy: categoryFilter === 'HOUSEHOLD' ? { createdAt: 'desc' } : { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        ovog: true,
+        code: true,
+        register: true,
+        address: true,
+        phone: true,
+        email: true,
+        connectionNumber: true,
+        category: true,
+        baseCleanFee: true,
+        baseDirtyFee: true,
+        year: true,
+        managedByOrganizationId: true,
+        createdByUserId: true,
+        updatedByUserId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     })
 
     return NextResponse.json(organizations)

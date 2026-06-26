@@ -172,9 +172,14 @@ export async function GET(request: NextRequest) {
     })
     if (!ownerOrganizationId) return NextResponse.json(tariffs)
 
-    // Төрлийн тариф + оролтын шугамын суурь хураамжийн анхдагч утгууд
-    await ensureHeatCategoryTariffsInDb(ownerOrganizationId)
-    await ensureDefaultOfficePipeFeesInDb(ownerOrganizationId, user.userId)
+    // Анхдагч тариф зөвхөн хоосон үед үүсгэнэ (GET бүрт DB бичихгүй).
+    const existingCategoryCount = await prisma.categoryTariff.count({
+      where: { ownerOrganizationId },
+    })
+    if (existingCategoryCount === 0) {
+      await ensureHeatCategoryTariffsInDb(ownerOrganizationId)
+      await ensureDefaultOfficePipeFeesInDb(ownerOrganizationId, user.userId)
+    }
 
     // createdAt/updatedAt нь string байж болзошгүй тул DateTime талбаруудыг буцаахгүй.
     // Эрэмбэлэх шаардлагатай бол өгөгдлөө Compass/mongosh дээр Date болгоод дараа нь orderBy-г буцааж нэмж болно.

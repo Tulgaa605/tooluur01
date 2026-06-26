@@ -47,7 +47,9 @@ export function buildSmsMessage(input: {
   const prevRem = Number(input.previousRemaining ?? 0)
   const prevLine =
     Number.isFinite(prevRem) && Math.abs(prevRem) >= 1
-      ? `Өмнөх үлдэгдэл: ${Math.round(prevRem).toLocaleString('en-US')}₮`
+      ? prevRem < 0
+        ? `Илүү төлөлт: ${Math.round(Math.abs(prevRem)).toLocaleString('en-US')}₮`
+        : `Өмнөх үлдэгдэл: ${Math.round(prevRem).toLocaleString('en-US')}₮`
       : ''
 
   const grandTotal =
@@ -56,7 +58,9 @@ export function buildSmsMessage(input: {
   const totalLine =
     Number.isFinite(grandTotal) && grandTotal > 0
       ? `Төлбөр: ${Math.round(grandTotal).toLocaleString('en-US')}₮`
-      : ''
+      : Number.isFinite(grandTotal) && grandTotal <= 0 && prevRem < 0
+        ? 'Төлбөр: 0₮ (илүү төлөлт хасагдсан)'
+        : ''
 
   const feeLines = (input.additionalFeeLines ?? [])
     .filter((f) => String(f.name ?? '').trim() && Number(f.amount) > 0)
