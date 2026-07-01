@@ -234,7 +234,6 @@ model OrganizationOpeningBalance {
   @@map("organization_opening_balances")
 }
 
-/// Төлбөрийн хуудасны мөр — харилцагч + он/сар бүрт тогтвортой ID.
 model OrganizationBillingPeriod {
   id                      String       @id @default(auto()) @map("_id") @db.ObjectId
   organizationId          String       @db.ObjectId

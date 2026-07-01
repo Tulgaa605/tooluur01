@@ -1,6 +1,6 @@
 /**
- * Production build-ийн өмнө .next-build доторх types + dev stub-уудыг цэвэрлэнэ.
- * `dev/types` нь `route.js` stub-тай үлдэж TypeScript build унадаг тул dev-ийг бүхэлд нь устгана.
+ * Production build-ийн өмнө .next-build доторх types stub-уудыг цэвэрлэнэ.
+ * Зөвхөн types хавтсыг устгана — бүтэн dev/ устгавал ажиллаж буй `next dev` webpack cache эвдэрнэ.
  */
 const fs = require('fs')
 const path = require('path')
@@ -18,7 +18,7 @@ function rmWithRetry(dir) {
 const root = process.cwd()
 try {
   rmWithRetry(path.join(root, '.next-build', 'types'))
-  rmWithRetry(path.join(root, '.next-build', 'dev'))
+  rmWithRetry(path.join(root, '.next-build', 'dev', 'types'))
 } catch (e) {
   console.warn('[clean-next-build-types]', e.message)
 }

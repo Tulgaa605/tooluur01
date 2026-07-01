@@ -6,6 +6,10 @@ import { getManagedCustomerOrganizationIds } from '@/lib/org-scope'
 
 export const dynamic = 'force-dynamic'
 
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = getAuthUser(request)
@@ -26,12 +30,21 @@ export async function GET(request: NextRequest) {
     const emptyDashboard = () =>
       NextResponse.json({
         currentMonthUsage: 0,
+        currentMonthHeat: 0,
         previousMonthUsage: 0,
         usageChange: 0,
         totalUsage: 0,
-        monthlyData: [],
-        topOrganizations: [],
-        organizationData: [],
+        totalHeat: 0,
+        currentMonthTotal: 0,
+        currentMonthPaid: 0,
+        currentMonthRemaining: 0,
+        paymentRate: 0,
+        totalBilled: 0,
+        totalPaid: 0,
+        monthlyWater: [],
+        monthlyHeat: [],
+        monthlyBilled: [],
+        monthlyPaid: [],
       })
 
     const roleStr = String(user.role)
@@ -59,79 +72,96 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const usageByPeriod = await prisma.meterReading.groupBy({
+    const periodAgg = await prisma.meterReading.groupBy({
       by: ['year', 'month'],
       where: {
         ...whereClause,
         OR: chartMonths.map(({ year, month }) => ({ year, month })),
       },
-      _sum: { usage: true },
+      _sum: {
+        usage: true,
+        heatUsage: true,
+        total: true,
+        paidAmount: true,
+      },
     })
 
-    const usageMap = new Map(
-      usageByPeriod.map((row) => [
-        `${row.year}|${row.month}`,
-        Number(row._sum.usage ?? 0) || 0,
-      ])
+    const periodMap = new Map(
+      periodAgg.map((row) => {
+        const usage = Number(row._sum.usage ?? 0) || 0
+        const heat = Number(row._sum.heatUsage ?? 0) || 0
+        const total = roundMoney(Number(row._sum.total ?? 0) || 0)
+        const paid = roundMoney(Number(row._sum.paidAmount ?? 0) || 0)
+        return [`${row.year}|${row.month}`, { usage, heat, total, paid }]
+      })
     )
 
-    const currentMonthUsage = usageMap.get(`${currentYear}|${currentMonth}`) ?? 0
-    const previousMonthUsage = usageMap.get(`${previousYear}|${previousMonth}`) ?? 0
+    const currentPeriod = periodMap.get(`${currentYear}|${currentMonth}`) ?? {
+      usage: 0,
+      heat: 0,
+      total: 0,
+      paid: 0,
+    }
+    const previousPeriod = periodMap.get(`${previousYear}|${previousMonth}`) ?? {
+      usage: 0,
+      heat: 0,
+      total: 0,
+      paid: 0,
+    }
+
+    const currentMonthUsage = currentPeriod.usage
+    const currentMonthHeat = currentPeriod.heat
+    const previousMonthUsage = previousPeriod.usage
     const usageChange =
       previousMonthUsage > 0
         ? ((currentMonthUsage - previousMonthUsage) / previousMonthUsage) * 100
         : 0
 
+    const currentMonthTotal = currentPeriod.total
+    const currentMonthPaid = currentPeriod.paid
+    const currentMonthRemaining = Math.max(0, roundMoney(currentMonthTotal - currentMonthPaid))
+    const paymentRate =
+      currentMonthTotal > 0 ? (currentMonthPaid / currentMonthTotal) * 100 : 0
+
     let totalUsage = 0
-    const monthlyData = chartMonths.map(({ year, month, label }) => {
-      const usage = usageMap.get(`${year}|${month}`) ?? 0
-      totalUsage += usage
-      return { month: label, usage }
-    })
+    let totalHeat = 0
+    let totalBilled = 0
+    let totalPaid = 0
 
-    let topOrganizations: Array<{ name: string; usage: number }> = []
-    if (user.role === Role.MANAGER) {
-      try {
-        const orgUsage = await prisma.meterReading.groupBy({
-          by: ['organizationId'],
-          where: {
-            month: currentMonth,
-            year: currentYear,
-            ...whereClause,
-          },
-          _sum: { usage: true },
-        })
+    const monthlyWater: Array<{ month: string; value: number }> = []
+    const monthlyHeat: Array<{ month: string; value: number }> = []
+    const monthlyBilled: Array<{ month: string; value: number }> = []
+    const monthlyPaid: Array<{ month: string; value: number }> = []
 
-        if (orgUsage.length > 0) {
-          const orgs = await prisma.organization.findMany({
-            where: { id: { in: orgUsage.map((o) => o.organizationId) } },
-            select: { id: true, name: true },
-          })
-
-          topOrganizations = orgUsage
-            .map((o) => {
-              const org = orgs.find((org) => org.id === o.organizationId)
-              return {
-                name: org?.name || 'Unknown',
-                usage: o._sum.usage || 0,
-              }
-            })
-            .sort((a, b) => b.usage - a.usage)
-            .slice(0, 10)
-        }
-      } catch (orgError: unknown) {
-        console.error('Error fetching top organizations:', orgError)
-        topOrganizations = []
-      }
+    for (const { year, month, label } of chartMonths) {
+      const row = periodMap.get(`${year}|${month}`) ?? { usage: 0, heat: 0, total: 0, paid: 0 }
+      totalUsage += row.usage
+      totalHeat += row.heat
+      totalBilled = roundMoney(totalBilled + row.total)
+      totalPaid = roundMoney(totalPaid + row.paid)
+      monthlyWater.push({ month: label, value: row.usage })
+      monthlyHeat.push({ month: label, value: row.heat })
+      monthlyBilled.push({ month: label, value: row.total })
+      monthlyPaid.push({ month: label, value: row.paid })
     }
 
     return NextResponse.json({
       totalUsage,
+      totalHeat,
       currentMonthUsage,
+      currentMonthHeat,
       previousMonthUsage,
       usageChange,
-      monthlyData,
-      topOrganizations,
+      currentMonthTotal,
+      currentMonthPaid,
+      currentMonthRemaining,
+      paymentRate,
+      totalBilled,
+      totalPaid,
+      monthlyWater,
+      monthlyHeat,
+      monthlyBilled,
+      monthlyPaid,
     })
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Алдаа гарлаа'

@@ -147,7 +147,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </nav>
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+      <main
+        className={`max-w-7xl mx-auto sm:px-6 lg:px-8 ${
+          pathname === '/dashboard' ? 'overflow-hidden py-3' : 'py-6'
+        }`}
+      >
         {children}
       </main>
     </div>
