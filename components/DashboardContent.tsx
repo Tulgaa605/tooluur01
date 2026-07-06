@@ -142,11 +142,13 @@ function MiniStat({
 
 function StatGroup({
   title,
+  periodLabel,
   icon: Icon,
   iconClass,
   children,
 }: {
   title: string
+  periodLabel?: string
   icon: React.ComponentType<{ className?: string }>
   iconClass: string
   children: React.ReactNode
@@ -159,6 +161,11 @@ function StatGroup({
         </div>
         <h3 className="truncate text-base font-semibold uppercase tracking-wide text-gray-600">
           {title}
+          {periodLabel ? (
+            <span className="ml-1.5 text-xs font-normal normal-case text-gray-400">
+              ({periodLabel})
+            </span>
+          ) : null}
         </h3>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-1.5">{children}</div>
@@ -248,6 +255,8 @@ export default function DashboardContent() {
 
   const usageChange = data.usageChange ?? 0
   const usageUp = usageChange >= 0
+  const now = new Date()
+  const currentBillingMonth = `${now.getMonth() + 1}-р сарын`
   const axisTick = { fontSize: 12, fill: '#9ca3af' }
   const usageChartMargin = { top: 4, right: 12, left: 0, bottom: 0 }
   const moneyChartMargin = { top: 4, right: 12, left: 0, bottom: 0 }
@@ -290,7 +299,12 @@ export default function DashboardContent() {
           />
         </StatGroup>
 
-        <StatGroup title="Төлбөр" icon={BanknotesIcon} iconClass="bg-emerald-100 text-emerald-600">
+        <StatGroup
+          title="Төлбөр"
+          periodLabel={currentBillingMonth}
+          icon={BanknotesIcon}
+          iconClass="bg-emerald-100 text-emerald-600"
+        >
           <MiniStat
             label="Нэхэмжлэл"
             value={`${formatMoney(data.currentMonthTotal)} ₮`}
