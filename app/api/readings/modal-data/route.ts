@@ -5,7 +5,7 @@ import { Role } from '@/lib/role'
 import { getScopedOrganizationIds } from '@/lib/org-scope'
 import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/prisma-generated'
 
 function parsePeriods(body: unknown): Array<{ year: number; month: number }> | null {
   if (!body || typeof body !== 'object') return null

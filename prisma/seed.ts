@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from '../lib/prisma-generated'
 import bcrypt from 'bcryptjs'
 import { ensureHeatCategoryTariffsInDb } from '../lib/ensure-heat-category-tariffs'
 

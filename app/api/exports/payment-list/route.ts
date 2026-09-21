@@ -19,7 +19,7 @@ import { getScopedOrganizationIds } from '@/lib/org-scope'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
 import { Role } from '@/lib/role'
 import type { TokenPayload } from '@/lib/auth'
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/prisma-generated'
 
 export const runtime = 'nodejs'
 

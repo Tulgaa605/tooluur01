@@ -1,6 +1,6 @@
 import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
 import { prisma } from '@/lib/prisma'
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/prisma-generated'
 import {
   applyWaterChargeSplitToWaterRates,
   computeReadingMoney,

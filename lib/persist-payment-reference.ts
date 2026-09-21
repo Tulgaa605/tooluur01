@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client'
+import { Prisma } from '@/lib/prisma-generated'
 import { prisma } from '@/lib/prisma'
 
 const OBJECT_ID_RX = /^[a-f0-9]{24}$/i
