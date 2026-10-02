@@ -84,7 +84,7 @@ export default async function PublicBillingBreakdownPage(props: {
           meterNumber: true,
           billingMode: true,
           waterChargeSplit: true,
-          pipeDiameterMm: true,
+          pipeDiameterMm: true, 
           billingCategory: true,
         },
       },

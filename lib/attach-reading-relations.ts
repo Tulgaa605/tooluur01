@@ -17,11 +17,9 @@ export type MeterForReading = {
   waterChargeSplit?: string | null
   organizationId?: string
   pipeDiameterMm?: number | null
-  /** Тоолуур тус бүрийн тарифын ангилал (байгууллагын category-аас давхаргана) */
   billingCategory?: string | null
 }
 
-/** Prisma include ашиглахгүйгээр заалтыг уншиж meter/organization-ийг хавсаргана. */
 export async function findMeterReadingsWithRelations(
   where: Prisma.MeterReadingWhereInput,
   orderBy?: Prisma.MeterReadingOrderByWithRelationInput | Prisma.MeterReadingOrderByWithRelationInput[]
@@ -33,10 +31,6 @@ export async function findMeterReadingsWithRelations(
   return attachOrgsAndMetersToReadings(rows)
 }
 
-/**
- * FK-д таарах organization/meter үгүй (устгагдсан) үед Prisma nested include
- * "Inconsistent query result" өгдөг тул уншилтыг тусад нь нэгтгэнэ.
- */
 export async function attachOrgsAndMetersToReadings<
   T extends { organizationId: string; meterId: string },
 >(rows: T[]): Promise<Array<T & { organization: OrgForReading; meter: MeterForReading }>> {
