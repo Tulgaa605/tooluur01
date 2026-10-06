@@ -4,7 +4,7 @@ const path = require('path')
 /** @type {import('next').NextConfig} */
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true'
 const totalGb = os.totalmem() / 1024 ** 3
-const lowMem = process.env.LOW_MEM_BUILD === '1' || totalGb < 12
+const lowMem = process.env.LOW_MEM_BUILD === '1' || totalGb < 8
 
 const nextConfig = {
   // Олон lockfile (жишээ нь Desktop болон эцэг хавтас) байхад Next.js буруу root сонгохоос сэргийлнэ
