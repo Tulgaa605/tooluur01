@@ -1,5 +1,4 @@
 import { prisma } from '@/lib/prisma'
-import { getScopedOrganizationIds } from '@/lib/org-scope'
 import type { BillingExcelImportRow } from '@/lib/billing-export-excel'
 
 const EPS = 0.009
@@ -42,8 +41,7 @@ type ScopedUser = {
  */
 export async function applyBillingExcelRows(
   rows: BillingExcelImportRow[],
-  user: ScopedUser,
-  officeOrgId: string | null
+  user: ScopedUser
 ): Promise<BillingImportResult> {
   const applied: BillingImportApplied[] = []
   const skipped: BillingImportSkipped[] = []
@@ -52,15 +50,7 @@ export async function applyBillingExcelRows(
     return { rowsParsed: 0, applied, skipped }
   }
 
-  // 1. Хэрэглэгчийн scope нэг удаа
-  const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
-  const scopeIds = new Set(
-    await getScopedOrganizationIds(scopedUser as Parameters<typeof getScopedOrganizationIds>[0])
-  )
-  // Хэрэв scope хоосон бол (USER role officeOrg-гүй г.м.) шалгалтыг алгасахгүй
-  const enforceScope = scopeIds.size > 0
-
-  // 2. Бүх байгууллага нэг удаа
+  // 1. Бүх байгууллага нэг удаа
   const orgs = await prisma.organization.findMany({
     select: { id: true, name: true, code: true },
   })
@@ -198,10 +188,6 @@ export async function applyBillingExcelRows(
     const { br, orgId, meterId, desc, meterHint } = r
     if (!orgId) {
       skipped.push({ rowIndex: br.rowIndex, reason: 'Байгууллага олдсонгүй', description: desc.slice(0, 200) })
-      continue
-    }
-    if (enforceScope && !scopeIds.has(orgId)) {
-      skipped.push({ rowIndex: br.rowIndex, reason: 'Эрхгүй', description: desc.slice(0, 200) })
       continue
     }
     if (!meterId) {

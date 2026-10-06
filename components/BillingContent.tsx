@@ -676,10 +676,9 @@ ${lines ? `Дэлгэрэнгүй:\n${lines}\n` : ''}
         skipped: Array.isArray(data.skipped) ? data.skipped : [],
       })
       const a = data.applied?.length ?? 0
-      const s = data.skipped?.length ?? 0
       setMessage({
         type: a > 0 ? 'success' : 'error',
-        text: `Excel импорт: ${a} мөр шинэчлэгдлээ, ${s} мөр алгасагдлаа.`,
+        text: `Excel импорт: ${a} мөр шинэчлэгдлээ`,
       })
       setBankImportInline(false)
       await reloadReadings()

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { Role } from '@/lib/role'
-import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
 import { applyBillingExcelRows } from '@/lib/billing-import-apply'
 import {
   parseBillingExportExcel,
@@ -12,10 +11,9 @@ export const runtime = 'nodejs'
 
 export async function POST(request: NextRequest) {
   try {
-    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER])
+    const user = requireAuth(request, [Role.ACCOUNTANT, Role.MANAGER, Role.USER])
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const officeOrgId = await ensureOfficeOrganizationId(user)
     const contentType = request.headers.get('content-type') ?? ''
 
     let rows: BillingExcelImportRow[] = []
@@ -71,7 +69,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = await applyBillingExcelRows(rows, user, officeOrgId)
+    const result = await applyBillingExcelRows(rows, user)
 
     return NextResponse.json({
       success: true,

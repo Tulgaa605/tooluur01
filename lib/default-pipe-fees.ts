@@ -23,7 +23,6 @@ export const STANDARD_OFFICE_PIPE_FEES: Array<{
   { diameterMm: 400, baseCleanFee: 76800, baseDirtyFee: 76800 },
 ]
 
-/** Өмнөх хувилбар: Ц=Б нэг baseFee (хуучин автомат seed) */
 const LEGACY_OFFICE_PIPE_FEES: Array<{ diameterMm: number; baseFee: number }> = [
   { diameterMm: 15, baseFee: 1000 },
   { diameterMm: 20, baseFee: 1200 },

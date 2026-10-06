@@ -14,7 +14,6 @@ model User {
   password  String
   name      String
   code      String?
-  /// Утасны дугаар (давхардлыг app түвшинд шалгана — MongoDB @unique олон null-д алдаа өгнө)
   phone     String?
   role      String   @default("USER")
   organizationId String? @db.ObjectId

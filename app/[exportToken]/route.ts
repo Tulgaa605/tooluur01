@@ -2,11 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
 
-/**
- * `https://хост/<PAYMENT_LIST_EXPORT_TOKEN>?year=2026&month=4&format=summary&createdByUserId=...`
- * — токен нь `.env`-ийн `PAYMENT_LIST_EXPORT_TOKEN`-тай яг таарвал `/api/exports/payment-list`-тай ижил JSON буцаана.
- * Токен буруу бол 404 (өөр замуудыг `app/login` гэх мэт static замууд эхэлж сонгоно).
- */
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ exportToken: string }> }
