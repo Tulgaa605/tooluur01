@@ -95,7 +95,10 @@ async function readImportInput(request: NextRequest): Promise<{
         endValue: Number.isFinite(endNum) && endNum >= 0 ? Math.round(endNum * 100) / 100 : null,
       }
     })
-    .filter((r) => r.phone && Number.isFinite(r.startValue))
+    .filter(
+      (r: { phone: string; startValue: number; endValue: number | null; rowIndex: number }) =>
+        Boolean(r.phone) && Number.isFinite(r.startValue)
+    )
   return { year, month, rows }
 }
 
