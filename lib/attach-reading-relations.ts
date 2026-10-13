@@ -1,5 +1,4 @@
 import { prisma } from '@/lib/prisma'
-import type { Prisma } from '@/lib/prisma-generated'
 
 export type OrgForReading = {
   id: string
@@ -18,17 +17,6 @@ export type MeterForReading = {
   organizationId?: string
   pipeDiameterMm?: number | null
   billingCategory?: string | null
-}
-
-export async function findMeterReadingsWithRelations(
-  where: Prisma.MeterReadingWhereInput,
-  orderBy?: Prisma.MeterReadingOrderByWithRelationInput | Prisma.MeterReadingOrderByWithRelationInput[]
-) {
-  const rows = await prisma.meterReading.findMany({
-    where,
-    ...(orderBy ? { orderBy } : {}),
-  })
-  return attachOrgsAndMetersToReadings(rows)
 }
 
 export async function attachOrgsAndMetersToReadings<

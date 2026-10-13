@@ -218,10 +218,18 @@ export function normalizeApiReadings(data: unknown[]): MonthlyReadingRow[] {
   const toNum = (v: unknown): number => {
     if (v == null || v === '') return 0
     if (typeof v === 'number') return Number.isFinite(v) ? v : 0
-    if (typeof v === 'object' && v && '$numberDecimal' in v) {
-      const s = String((v as { $numberDecimal?: string }).$numberDecimal ?? '').trim()
-      const n = parseFloat(s.replace(',', '.'))
-      return Number.isFinite(n) ? n : 0
+    if (typeof v === 'object' && v) {
+      const o = v as Record<string, unknown>
+      const boxed =
+        o.$numberDecimal ?? o.$numberDouble ?? o.$numberInt ?? o.$numberLong
+      if (boxed != null) {
+        const n = parseFloat(String(boxed).replace(',', '.'))
+        return Number.isFinite(n) ? n : 0
+      }
+      if (typeof o.toNumber === 'function') {
+        const n = (o as { toNumber: () => number }).toNumber()
+        return Number.isFinite(n) ? n : 0
+      }
     }
     const n = parseFloat(String(v).replace(',', '.').trim())
     return Number.isFinite(n) ? n : 0

@@ -6,7 +6,7 @@ import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
-import { PlusIcon } from '@heroicons/react/24/outline'
+import { DocumentArrowUpIcon, PlusIcon } from '@heroicons/react/24/outline'
 import * as XLSX from 'xlsx'
 import {
   applyWaterChargeSplitToWaterRates,
@@ -142,10 +142,18 @@ function normalizeApiReadingRow(r: Record<string, unknown>): Reading {
   const toNum = (v: unknown): number => {
     if (v == null || v === '') return 0
     if (typeof v === 'number') return Number.isFinite(v) ? v : 0
-    if (typeof v === 'object' && v && '$numberDecimal' in (v as object)) {
-      const s = String((v as { $numberDecimal?: string }).$numberDecimal ?? '').trim()
-      const n = parseFloat(s.replace(',', '.'))
-      return Number.isFinite(n) ? n : 0
+    if (typeof v === 'object' && v) {
+      const o = v as Record<string, unknown>
+      const boxed =
+        o.$numberDecimal ?? o.$numberDouble ?? o.$numberInt ?? o.$numberLong
+      if (boxed != null) {
+        const n = parseFloat(String(boxed).replace(',', '.'))
+        return Number.isFinite(n) ? n : 0
+      }
+      if (typeof o.toNumber === 'function') {
+        const n = (o as { toNumber: () => number }).toNumber()
+        return Number.isFinite(n) ? n : 0
+      }
     }
     const n = parseFloat(String(v).replace(',', '.').trim())
     return Number.isFinite(n) ? n : 0
@@ -173,6 +181,17 @@ function normalizeApiReadingRow(r: Record<string, unknown>): Reading {
     additionalFeesAmount: toNum(raw.additionalFeesAmount ?? raw.additional_fees_amount),
     heatClosed: parseHeatClosedFromApi(raw),
   } as unknown as Reading
+}
+
+function collectCustomerPhones(org: Reading['organization']): string {
+  const set = new Set<string>()
+  const p = org?.phone?.trim()
+  if (p) set.add(p)
+  org?.users?.forEach((u) => {
+    const up = u?.phone?.trim()
+    if (up) set.add(up)
+  })
+  return Array.from(set).join(', ') || '—'
 }
 
 function parseHeatClosedFromApi(raw: Record<string, unknown>): boolean | null | undefined {
@@ -449,6 +468,8 @@ interface Reading {
     id: string
     code: string | null
     category?: string
+    phone?: string | null
+    users?: { phone: string | null }[]
   }
   /** Зөвхөн pinned «Нийт дүн» мөр */
   usageWaterDiffSum?: number
@@ -533,6 +554,8 @@ export default function ReadingsContent() {
   const [readings, setReadings] = useState<Reading[]>([])
   const [readingsLoading, setReadingsLoading] = useState(false)
   const [recalculating, setRecalculating] = useState(false)
+  const [startImporting, setStartImporting] = useState(false)
+  const startImportInputRef = useRef<HTMLInputElement>(null)
   const [filterMonth, setFilterMonth] = useState(() => String(new Date().getMonth() + 1))
   const [filterYear, setFilterYear] = useState(() => String(new Date().getFullYear()))
   // “Бодолт” товч дарсан үед л тарифаар дахин тооцсон дүнг харуулна (recalculate=1).
@@ -1000,6 +1023,97 @@ export default function ReadingsContent() {
     }
   }, [recalculating, readingsLoading, filterMonth, filterYear])
 
+  const handleStartValueExcelImport = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file) return
+      if (!filterMonth.trim() || !filterYear.trim()) {
+        setMessage({ type: 'error', text: 'Эхлээд он, сарыг сонгоно уу' })
+        setTimeout(() => setMessage(null), 4000)
+        return
+      }
+      const year = parseInt(filterYear, 10)
+      const month = parseInt(filterMonth, 10)
+      if (!Number.isInteger(year) || !Number.isInteger(month)) return
+
+      setStartImporting(true)
+      setMessage(null)
+      try {
+        const form = new FormData()
+        form.append('year', String(year))
+        form.append('month', String(month))
+        form.append('file', file)
+        const res = await fetchWithAuth('/api/readings/start-import', {
+          method: 'POST',
+          body: form,
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Импорт амжилтгүй')
+        const a = Number(data.applied ?? 0) || 0
+        const s = Number(data.skippedCount ?? (Array.isArray(data.skipped) ? data.skipped.length : 0)) || 0
+        const skipHint =
+          s > 0 && Array.isArray(data.skipped)
+            ? ` Алгассан: ${data.skipped
+                .slice(0, 3)
+                .map((x: { phone?: string; organizationName?: string; reason?: string }) =>
+                  `${x.phone || x.organizationName || ''} (${x.reason ?? ''})`.trim()
+                )
+                .join('; ')}${s > 3 ? '…' : ''}`
+            : ''
+        const startByOrgId =
+          data.startByOrgId && typeof data.startByOrgId === 'object'
+            ? (data.startByOrgId as Record<string, number>)
+            : {}
+        const endByOrgId =
+          data.endByOrgId && typeof data.endByOrgId === 'object'
+            ? (data.endByOrgId as Record<string, number>)
+            : {}
+        if (Object.keys(startByOrgId).length > 0 || Object.keys(endByOrgId).length > 0) {
+          startTransition(() => {
+            setReadings((prev) =>
+              prev.map((r) => {
+                const orgId = r.organizationId || r.organization?.id
+                if (!orgId) return r
+                const sv = startByOrgId[orgId]
+                const ev = endByOrgId[orgId]
+                const hasStart = sv != null && Number.isFinite(Number(sv))
+                const hasEnd = ev != null && Number.isFinite(Number(ev))
+                if (!hasStart && !hasEnd) return r
+                const startValue = hasStart
+                  ? Math.round(Number(sv) * 100) / 100
+                  : Number(r.startValue ?? 0) || 0
+                const endValue = hasEnd
+                  ? Math.round(Number(ev) * 100) / 100
+                  : Number(r.endValue ?? 0) || 0
+                const mode = normalizeBillingMode(r.billingMode ?? r.meter?.billingMode)
+                const usage =
+                  mode === 'HEAT'
+                    ? Number(r.usage ?? 0) || 0
+                    : Math.max(0, Math.round((endValue - startValue) * 100) / 100)
+                return { ...r, startValue, endValue, usage }
+              })
+            )
+          })
+        }
+        const endN = Number(data.endUpdated ?? 0) || 0
+        setMessage({
+          type: a > 0 ? 'success' : 'error',
+          text: `Импорт: ${a} эхний заалт, ${endN} эцсийн заалт шинэчлэгдлээ, ${s} мөр алгасагдлаа.${skipHint}`,
+        })
+      } catch (err: unknown) {
+        setMessage({
+          type: 'error',
+          text: err instanceof Error ? err.message : 'Excel импорт амжилтгүй',
+        })
+      } finally {
+        setStartImporting(false)
+        setTimeout(() => setMessage(null), 8000)
+      }
+    },
+    [filterMonth, filterYear]
+  )
+
   const exportReadingsGrid = useCallback(() => {
     const api = gridRef.current?.api as any
     if (!api) {
@@ -1150,7 +1264,8 @@ export default function ReadingsContent() {
           const prevEnd = Number(nextRow.endValue || 0)
           const onlyUpdateStart = prevEnd !== prevStart
           nextRow.startValue = carried
-          nextRow._modalStartLocked = true
+          // ТҮР: 4-р сарын эхний заалтыг түгжихгүй.
+          nextRow._modalStartLocked = Number(nextMonth) !== 4
 
           if (!onlyUpdateStart) {
             nextRow.endValue = carried
@@ -1357,6 +1472,7 @@ export default function ReadingsContent() {
       'Сар': r.month ?? '',
       'Тоолуур': r.meter?.meterNumber ?? '',
       'Хэрэглэгч': r.organization?.name ?? '',
+      'Утас': collectCustomerPhones(r.organization) === '—' ? '' : collectCustomerPhones(r.organization),
       'Эхний заалт': Number(r.startValue ?? 0) || 0,
       'Эцсийн заалт': Number(r.endValue ?? 0) || 0,
       'Зөрүү': (Number(r.endValue ?? 0) || 0) - (Number(r.startValue ?? 0) || 0),
@@ -1382,6 +1498,7 @@ export default function ReadingsContent() {
       'Сар': r.month ?? '',
       'Тоолуур': r.meter?.meterNumber ?? '',
       'Хэрэглэгч': r.organization?.name ?? '',
+      'Утас': collectCustomerPhones(r.organization) === '—' ? '' : collectCustomerPhones(r.organization),
       'Эхний заалт': Number(r.startValue ?? 0) || 0,
       'Эцсийн заалт': Number(r.endValue ?? 0) || 0,
       'Зөрүү': (Number(r.endValue ?? 0) || 0) - (Number(r.startValue ?? 0) || 0),
@@ -1579,7 +1696,8 @@ export default function ReadingsContent() {
           const key = `${prevYear}-${prevMonth}`
           const prevList = prevReadingsByKey[key] ?? []
           const prevForMeter = meter ? prevList.find((r) => r.meterId === meter.id) : undefined
-          const modalStartLocked = !!(meter && prevForMeter)
+          // ТҮР: 4-р сарын эхний заалтыг модалд засахыг зөвшөөрнө.
+          const modalStartLocked = !!(meter && prevForMeter) && Number(period.month) !== 4
 
           const existingForMeter = meter
             ? currentList.find((r) => r.meterId === meter.id)
@@ -2345,6 +2463,17 @@ export default function ReadingsContent() {
       },
     },
     {
+      headerName: 'Утас',
+      width: 150,
+      colId: 'customerPhones',
+      editable: false,
+      valueGetter: (params: any) => {
+        const d = params.data as Reading | undefined
+        if (!d || d.organization?.name === 'Нийт дүн') return ''
+        return collectCustomerPhones(d.organization)
+      },
+    },
+    {
       headerName: 'Огноо',
       width: 140,
       editable: false,
@@ -2362,24 +2491,35 @@ export default function ReadingsContent() {
       colId: 'startValue',
       field: 'startValue',
       ...numberColStyle,
-      suppressNavigable: (params: any) =>
-        !readingRowUsesWater(params.data) || !!(showAddModal && params.data?._modalStartLocked),
+      suppressNavigable: (params: any) => {
+        if (!readingRowUsesWater(params.data)) return true
+        const aprilUnlock = showAddModal && Number(params.data?.month) === 4
+        return !!(showAddModal && params.data?._modalStartLocked && !aprilUnlock)
+      },
       cellClass: (params: any) => {
+        const aprilUnlock = showAddModal && Number(params.data?.month) === 4
         const waterOff = !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : ''
         const modalLocked =
-          showAddModal && readingRowUsesWater(params.data) && params.data?._modalStartLocked
+          showAddModal &&
+          readingRowUsesWater(params.data) &&
+          params.data?._modalStartLocked &&
+          !aprilUnlock
             ? 'reading-billing-cell-disabled'
             : ''
-        const smsLocked = params.data?.smsSentAt ? 'reading-billing-cell-disabled' : ''
+        const smsLocked =
+          params.data?.smsSentAt && !aprilUnlock ? 'reading-billing-cell-disabled' : ''
         const centered = showAddModal ? 'reading-modal-center' : ''
         return [waterOff, modalLocked, smsLocked, centered].filter(Boolean).join(' ')
       },
       headerClass: showAddModal ? 'reading-modal-center' : numberColStyle.headerClass,
-      editable: (params: any) =>
-        modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
-        readingRowUsesWater(params.data) &&
-        !params.data?._modalStartLocked &&
-        !params.data?.smsSentAt,
+      editable: (params: any) => {
+        const aprilUnlock = showAddModal && Number(params.data?.month) === 4
+        return (
+          modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
+          readingRowUsesWater(params.data) &&
+          (aprilUnlock || (!params.data?._modalStartLocked && !params.data?.smsSentAt))
+        )
+      },
       cellEditor: NumberCellEditorSelectAll,
       valueParser: (params: any) => {
         const raw = params.newValue
@@ -2894,16 +3034,35 @@ export default function ReadingsContent() {
         </div>
       )}
 
-      <div className="mb-8 flex justify-between items-center">
+      <div className="mb-8 flex justify-between items-center gap-3">
         <h2 className="text-2xl font-semibold text-gray-900">Заалтын мэдээлэл</h2>
-        <button
-          type="button"
-          onClick={handleOpenAddModal}
-          className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 flex items-center gap-2"
-        >
-          <PlusIcon className="h-5 w-5" />
-          Заалт оруулах
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={startImportInputRef}
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            onChange={(ev) => void handleStartValueExcelImport(ev)}
+          />
+          <button
+            type="button"
+            disabled={startImporting || readingsLoading}
+            onClick={() => startImportInputRef.current?.click()}
+            title="Excel-ээс хэрэглэгчийн нэрээр тулгаж зөвхөн эхний заалт оруулна"
+            className="px-4 py-2 border border-gray-300 bg-white text-gray-800 rounded-md hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
+          >
+            <DocumentArrowUpIcon className="h-5 w-5" />
+            {startImporting ? 'Импортлож байна...' : 'Excel импорт'}
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenAddModal}
+            className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 flex items-center gap-2"
+          >
+            <PlusIcon className="h-5 w-5" />
+            Заалт оруулах
+          </button>
+        </div>
       </div>
 
       {message && !showAddModal && (

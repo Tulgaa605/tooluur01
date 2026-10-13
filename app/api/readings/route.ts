@@ -34,6 +34,7 @@ function parseClientHeatUsage(
   return Math.round(n * 100) / 100
 }
 import { attachOrgsAndMetersToReadings } from '@/lib/attach-reading-relations'
+import { fillZeroStartFromPreviousEnd } from '@/lib/reading-start-value'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
 import {
@@ -457,7 +458,12 @@ export async function GET(request: NextRequest) {
       ])
 
       const periodOverrides = allBillingPeriods
-        .filter((bp) => bp.previousRemainingOverride != null && bp.month === 4)
+        .filter(
+          (bp) =>
+            bp.previousRemainingManual &&
+            bp.previousRemainingOverride != null &&
+            bp.month === 4
+        )
         .map((bp) => ({
           organizationId: bp.organizationId,
           year: bp.year,
@@ -512,7 +518,9 @@ export async function GET(request: NextRequest) {
       }),
       carryPromise ?? Promise.resolve(null),
     ])
-    const readings = await attachOrgsAndMetersToReadings(rawReadings)
+    const readings = await fillZeroStartFromPreviousEnd(
+      await attachOrgsAndMetersToReadings(rawReadings)
+    )
 
     function attachCarry<T extends { organizationId: string; year: number; month: number }>(
       rows: T[],

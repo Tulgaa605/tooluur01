@@ -22,7 +22,8 @@
     "db:generate": "node scripts/prisma-generate.js",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:seed": "ts-node --compiler-options {\"module\":\"commonjs\",\"esModuleInterop\":true} prisma/seed.ts"
+    "db:seed": "ts-node --compiler-options {\"module\":\"commonjs\",\"esModuleInterop\":true} prisma/seed.ts",
+    "db:repair-start": "ts-node --compiler-options {\"module\":\"commonjs\",\"esModuleInterop\":true} scripts/repair-start-values.ts"
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"commonjs\",\"esModuleInterop\":true} prisma/seed.ts"
