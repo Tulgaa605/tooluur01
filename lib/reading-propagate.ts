@@ -99,5 +99,5 @@ export async function propagateLaterReadingsAfterEndChange(opts: {
     update: 'meter_readings',
     updates: mongoUpdates,
     ordered: true,
-  })
+  } as never)
 }
