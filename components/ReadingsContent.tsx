@@ -183,6 +183,11 @@ function normalizeApiReadingRow(r: Record<string, unknown>): Reading {
   } as unknown as Reading
 }
 
+function startExceedsEnd(d?: Reading | null): boolean {
+  if (!d || d.organization?.name === 'Нийт дүн') return false
+  return Number(d.startValue ?? 0) > Number(d.endValue ?? 0) + 0.005
+}
+
 function collectCustomerPhones(org: Reading['organization']): string {
   const set = new Set<string>()
   const p = org?.phone?.trim()
@@ -1260,19 +1265,16 @@ export default function ReadingsContent() {
           const nextRow = newReadings.find((r) => r.meterId === meterId && r.month === nextMonth && r.year === nextYear)
           if (!nextRow) break
 
-          const prevStart = Number(nextRow.startValue || 0)
           const prevEnd = Number(nextRow.endValue || 0)
-          const onlyUpdateStart = prevEnd !== prevStart
-          nextRow.startValue = carried
-          // ТҮР: 4-р сарын эхний заалтыг түгжихгүй.
-          nextRow._modalStartLocked = Number(nextMonth) !== 4
-
-          if (!onlyUpdateStart) {
+          // Хойшхи сарын эцэс > өмнөх сарын эцэс бол эцсийг үлдээнэ; үгүй бол эх=эцэс.
+          if (prevEnd > carried + 0.005) {
+            nextRow.startValue = carried
+          } else {
+            nextRow.startValue = carried
             nextRow.endValue = carried
           }
-
-          // start-оос бага end болохоос сэргийлнэ.
-          if (Number(nextRow.endValue || 0) < carried) nextRow.endValue = carried
+          // ТҮР: 4-р сарын эхний заалтыг түгжихгүй.
+          nextRow._modalStartLocked = Number(nextMonth) !== 4
 
           applyReadingTotals(nextRow)
 
@@ -1309,6 +1311,7 @@ export default function ReadingsContent() {
                 'total',
               ],
             })
+            api.redrawRows?.({ rowNodes: rowNodesToRefresh })
           }
         } catch {
           /* ignore */
@@ -1917,11 +1920,9 @@ export default function ReadingsContent() {
 
       if (readingRowUsesHeat(r) && h !== 0) return true
 
-      if (e < s) return false
-
-      // Эхний = эцсийн (зөрүү 0, хэрэглээ 0) байсан ч тухайн сарын заалт болгон хадгална.
+      // Эхний заалт эцсээсээ их байсан ч хадгална (улаанаар харагдана).
+      if (s > 0 || e > 0) return true
       if (e === s) return true
-
       return e > s
     }
     const isDirty = (r: Reading) => {
@@ -1971,7 +1972,7 @@ export default function ReadingsContent() {
     if (rowsToSave.length === 0) {
       setMessage({
         type: 'error',
-        text: 'Хадгалах мөр олдсонгүй. Эцсийн заалт эхний заалтаас бага байж болохгүй.',
+        text: 'Хадгалах мөр олдсонгүй. Эхний эсвэл эцсийн заалт оруулна уу.',
       })
       setTimeout(() => setMessage(null), 3000)
       return
@@ -2067,6 +2068,31 @@ export default function ReadingsContent() {
               total: saved.total,
             }
           })
+          for (const saved of enriched) {
+            if (!saved.meterId) continue
+            let carried = Number(saved.endValue ?? 0) || 0
+            let curYear = Number(saved.year)
+            let curMonth = Number(saved.month)
+            while (true) {
+              const nextMonth = curMonth === 12 ? 1 : curMonth + 1
+              const nextYear = curMonth === 12 ? curYear + 1 : curYear
+              const idx = next.findIndex(
+                (r) => r.meterId === saved.meterId && Number(r.month) === nextMonth && Number(r.year) === nextYear
+              )
+              if (idx < 0) break
+              const row = next[idx]
+              const existingEnd = Number(row.endValue ?? 0) || 0
+              if (existingEnd > carried + 0.005) {
+                next[idx] = { ...row, startValue: carried }
+                carried = existingEnd
+              } else {
+                next[idx] = { ...row, startValue: carried, endValue: carried }
+              }
+              applyReadingTotals(next[idx])
+              curYear = nextYear
+              curMonth = nextMonth
+            }
+          }
           snapshotRows(next)
           return next
         })
@@ -2509,8 +2535,11 @@ export default function ReadingsContent() {
         const smsLocked =
           params.data?.smsSentAt && !aprilUnlock ? 'reading-billing-cell-disabled' : ''
         const centered = showAddModal ? 'reading-modal-center' : ''
-        return [waterOff, modalLocked, smsLocked, centered].filter(Boolean).join(' ')
+        const invalid = startExceedsEnd(params.data) ? 'reading-start-gt-end' : ''
+        return [waterOff, modalLocked, smsLocked, centered, invalid].filter(Boolean).join(' ')
       },
+      tooltipValueGetter: (params: any) =>
+        startExceedsEnd(params.data) ? 'Эхний заалт эцсийн заалтаас их байна' : undefined,
       headerClass: showAddModal ? 'reading-modal-center' : numberColStyle.headerClass,
       editable: (params: any) => {
         const aprilUnlock = showAddModal && Number(params.data?.month) === 4
@@ -2552,8 +2581,11 @@ export default function ReadingsContent() {
         const disabled = !readingRowUsesWater(params.data) ? 'reading-billing-cell-disabled' : ''
         const locked = params.data?.smsSentAt ? 'reading-billing-cell-disabled' : ''
         const centered = showAddModal ? 'reading-modal-center' : ''
-        return [disabled, locked, centered].filter(Boolean).join(' ')
+        const invalid = startExceedsEnd(params.data) ? 'reading-start-gt-end' : ''
+        return [disabled, locked, centered, invalid].filter(Boolean).join(' ')
       },
+      tooltipValueGetter: (params: any) =>
+        startExceedsEnd(params.data) ? 'Эхний заалт эцсийн заалтаас их байна' : undefined,
       headerClass: showAddModal ? 'reading-modal-center' : numberColStyle.headerClass,
       editable: (params: any) =>
         modalRowIsActivePeriod(params, showAddModal, addModalYear, addModalMonth) &&
@@ -2591,10 +2623,14 @@ export default function ReadingsContent() {
         if (d?.organization?.name === 'Нийт дүн') {
           return Number(d.usageWaterDiffSum ?? 0)
         }
-        const start = d?.startValue || 0
-        const end = d?.endValue || 0
-        return end > start ? end - start : 0
+        const start = Number(d?.startValue ?? 0) || 0
+        const end = Number(d?.endValue ?? 0) || 0
+        return Math.round((end - start) * 100) / 100
       },
+      cellClass: (params: any) =>
+        startExceedsEnd(params.data) ? 'reading-start-gt-end' : undefined,
+      tooltipValueGetter: (params: any) =>
+        startExceedsEnd(params.data) ? 'Эхний заалт эцсийн заалтаас их байна' : undefined,
       valueFormatter: (params: any) => {
         if (params.value == null) return '0.00'
         return formatMoney(params.value)
@@ -2812,6 +2848,11 @@ export default function ReadingsContent() {
     }
     return rows
   }, [readings, filterYear, filterMonth])
+
+  const modalStartGtEndCount = useMemo(
+    () => searchedModalRows.filter((r) => startExceedsEnd(r)).length,
+    [searchedModalRows]
+  )
 
   const gridNeedsWater = useMemo(
     () => mainGridReadings.length === 0 || mainGridReadings.some(readingRowUsesWater),
@@ -3182,6 +3223,11 @@ export default function ReadingsContent() {
                       {!modalSaving && loading && (
                         <span className="text-sm text-gray-500 whitespace-nowrap">Бэлтгэж байна...</span>
                       )}
+                      {modalStartGtEndCount > 0 && (
+                        <span className="text-sm font-medium text-red-700 whitespace-nowrap">
+                          {modalStartGtEndCount} мөр: эхний заалт эцсээсээ их
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3217,6 +3263,10 @@ export default function ReadingsContent() {
                         resizable: true,
                         lockPinned: false,
                       }}
+                      enableBrowserTooltips={true}
+                      getRowClass={(params: any) =>
+                        startExceedsEnd(params.data) ? 'reading-row-start-gt-end' : undefined
+                      }
                       localeText={AG_GRID_LOCALE_MN}
                       onGridReady={(e) => e.api.sizeColumnsToFit()}
                       onCellValueChanged={handleCellValueChanged}
@@ -3371,6 +3421,14 @@ export default function ReadingsContent() {
                   resizable: true,
                   lockPinned: false,
                 }}
+                enableBrowserTooltips={true}
+                getRowClass={(params: any) =>
+                  params.node.rowPinned
+                    ? undefined
+                    : startExceedsEnd(params.data)
+                      ? 'reading-row-start-gt-end'
+                      : undefined
+                }
                 localeText={AG_GRID_LOCALE_MN}
                 onCellValueChanged={handleCellValueChanged}
                 pagination={true}

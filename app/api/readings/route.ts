@@ -80,7 +80,6 @@ export async function POST(request: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-    const officeOrgId = await ensureOfficeOrganizationId(user)
     const data = await request.json()
 
     // Get meter to find organization
@@ -101,32 +100,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Тоолуур олдсонгүй' }, { status: 404 })
     }
 
-    // Нягтлан: зөвхөн өөрийн алба + өөрийн бүртгэсэн харилцагч (managedByOrganizationId)-ын дээр заалт оруулна.
-    const office = officeOrgId ?? user.organizationId
-    if (!office) {
-      return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
-    }
-    if (meter.organizationId !== office) {
-      const org = await prisma.organization.findUnique({
-        where: { id: meter.organizationId },
-        select: { id: true, managedByOrganizationId: true },
-      })
-      if (!org) {
-        return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
-      }
-      if (org.managedByOrganizationId == null) {
-        // Эзэнгүй байгууллагыг тухайн алба анх удаа заалт оруулах үед claim хийнэ.
-        await prisma.organization.update({
-          where: { id: org.id },
-          data: { managedByOrganizationId: office },
-        })
-      } else if (org.managedByOrganizationId !== office) {
-        return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
-      }
-    }
-
     const billingMode = normalizeBillingMode(meter.billingMode)
-    const waterUsage = data.endValue - data.startValue
+    const waterUsage = Math.max(0, data.endValue - data.startValue)
     // Дулааны хэрэглээ:
     // - Клиентээс heatUsage ирвэл түүнийг ашиглана
     // - Ирэхгүй бол тоолуурын defaultHeatUsage (м³/м²)-ийг ашиглана
@@ -141,12 +116,6 @@ export async function POST(request: NextRequest) {
         ? (clientHeat ?? (meterDefaultHeat > 0 ? meterDefaultHeat : waterUsage > 0 ? waterUsage : 0))
         : (clientHeat ?? (meterDefaultHeat > 0 ? meterDefaultHeat : 0))
     const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
-    if (waterUsage < 0) {
-      return NextResponse.json(
-        { error: 'Эцсийн заалт эхний заалтаас их байх ёстой' },
-        { status: 400 }
-      )
-    }
 
     const orgForCategory = await prisma.organization.findUnique({
       where: { id: meter.organizationId },
@@ -885,7 +854,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const billingMode = normalizeBillingMode(meterForBilling?.billingMode)
-    const waterUsage = data.endValue - data.startValue
+    const waterUsage = Math.max(0, data.endValue - data.startValue)
     const meterDefaultHeat =
       Number.isFinite(Number((meterForBilling as any)?.defaultHeatUsage)) &&
       Number((meterForBilling as any)?.defaultHeatUsage) > 0
@@ -899,12 +868,6 @@ export async function PUT(request: NextRequest) {
         ? (clientHeat ?? (fallbackHeat > 0 ? fallbackHeat : waterUsage > 0 ? waterUsage : 0))
         : (clientHeat ?? fallbackHeat)
     const usage = billingMode === 'HEAT' ? heatUsage : waterUsage
-    if (waterUsage < 0) {
-      return NextResponse.json(
-        { error: 'Эцсийн заалт эхний заалтаас их байх ёстой' },
-        { status: 400 }
-      )
-    }
 
     const orgForCategory = await prisma.organization.findUnique({
       where: { id: existingReading.organizationId },

@@ -16,3 +16,13 @@
 .ag-header-cell.reading-modal-center .ag-header-cell-label {
   justify-content: center;
 }
+
+/* Эхний заалт > эцсийн заалт */
+.ag-cell.reading-start-gt-end {
+  background-color: #fee2e2 !important;
+  color: #991b1b !important;
+  font-weight: 600;
+}
+.ag-row.reading-row-start-gt-end {
+  background-color: #fef2f2;
+}

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse, after } from 'next/server'
 import { requireAuth } from '@/lib/middleware'
 import { prisma } from '@/lib/prisma'
 import { Role } from '@/lib/role'
-import { getScopedOrganizationIds } from '@/lib/org-scope'
 import { type BillingMode, normalizeBillingMode } from '@/lib/meter-reading-calc'
 import { propagateLaterReadingsAfterEndChange } from '@/lib/reading-propagate'
 import { ensureOfficeOrganizationId } from '@/lib/readings-office-org'
@@ -100,25 +99,6 @@ function isValidObjectId(id: string): boolean {
   return OBJECT_ID_RE.test(id)
 }
 
-async function claimCustomerOrgIfNeeded(office: string, customerOrgId: string): Promise<void> {
-  if (customerOrgId === office) return
-  const org = await prisma.organization.findUnique({
-    where: { id: customerOrgId },
-    select: { id: true, managedByOrganizationId: true },
-  })
-  if (!org) {
-    throw new Error('ORG_NOT_FOUND')
-  }
-  if (org.managedByOrganizationId == null) {
-    await prisma.organization.update({
-      where: { id: org.id },
-      data: { managedByOrganizationId: office },
-    })
-  } else if (org.managedByOrganizationId !== office) {
-    throw new Error('Энэ байгууллагын заалт оруулах эрхгүй')
-  }
-}
-
 /**
  * Заалт оруулах modal-оос олон мөрийг нэг HTTP + нэг сервер ачаалалтай хадгална.
  * Тоолуур бүрийн дагуулалтыг төгсгөлд нь зэрэгцээ ажиллуулна.
@@ -156,18 +136,8 @@ export async function POST(request: NextRequest) {
     if (!office) {
       return NextResponse.json({ error: 'Энэ байгууллагын заалт оруулах эрхгүй' }, { status: 403 })
     }
-    const scopedUser = { ...user, organizationId: officeOrgId ?? user.organizationId }
 
-    const [meters, scopedOrgList] = await Promise.all([
-      metersPromise,
-      roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER
-        ? getScopedOrganizationIds(scopedUser as Parameters<typeof getScopedOrganizationIds>[0])
-        : Promise.resolve([] as string[]),
-    ])
-    let scopedOrgIdSet: Set<string> | null = null
-    if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-      scopedOrgIdSet = new Set(scopedOrgList)
-    }
+    const meters = await metersPromise
     const meterById = new Map(meters.map((m) => [m.id, m]))
     for (const id of meterIds) {
       if (!meterById.has(id)) {
@@ -251,11 +221,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Тоолуурын organization-ийг урьдчилаад зэрэгцүүлэн "claim" хийнэ.
-    if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-      await Promise.all(customerOrgIds.map((orgId) => claimCustomerOrgIfNeeded(office, orgId)))
-    }
-
     const readingsById = new Map<string, Awaited<ReturnType<typeof prisma.meterReading.findUnique>> & object>()
     for (const r of byIdRows) readingsById.set(r.id, r)
     for (const id of readingIds) {
@@ -320,13 +285,7 @@ export async function POST(request: NextRequest) {
     for (const item of orderedItems) {
       const meter = meterById.get(item.meterId)!
       const billingMode = normalizeBillingMode(meter.billingMode)
-      const waterUsage = item.endValue - item.startValue
-      if (waterUsage < 0) {
-        return NextResponse.json(
-          { error: 'Эцсийн заалт эхний заалтаас их байх ёстой' },
-          { status: 400 }
-        )
-      }
+      const waterUsage = Math.max(0, item.endValue - item.startValue)
 
       const meterDefaultHeat =
         Number.isFinite(Number((meter as { defaultHeatUsage?: unknown }).defaultHeatUsage)) &&
@@ -342,15 +301,6 @@ export async function POST(request: NextRequest) {
         }
         if (existingById.meterId !== item.meterId) {
           return NextResponse.json({ error: 'Тоолуур таарахгүй байна' }, { status: 400 })
-        }
-        if (roleStr === Role.ACCOUNTANT || roleStr === Role.MANAGER) {
-          const createdByMe =
-            (existingById as { createdByUserId?: string | null }).createdByUserId != null &&
-            String((existingById as { createdByUserId?: string | null }).createdByUserId) === String(user.userId)
-          const inScope = scopedOrgIdSet?.has(existingById.organizationId) ?? false
-          if (!createdByMe && !inScope) {
-            return NextResponse.json({ error: 'Энэ заалтыг засах эрхгүй' }, { status: 403 })
-          }
         }
       }
 
